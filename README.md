@@ -183,6 +183,9 @@ Existing IDs with the older placeholder sequence keep their original sequence
 and records. They are not silently restarted or assigned retrospective baseline
 ratings. Use a **new Study ID** to try the complete questionnaire sequence.
 
+For measured processing latency and the proposed overlap with these questionnaires,
+see [Processing time and planned background processing](#processing-time-and-planned-background-processing).
+
 The Event-based step uses the same video-left, feedback-right layout and key-frame
 controls as the standalone feedback page. It has no additional coaching-moment
 entry form or audio recording controls. The two columns stack on narrow screens.
@@ -439,6 +442,137 @@ side. Playback context can overlap between clips; analysis windows do not.
 Original source files must remain readable for exact-frame display. The resampled
 review video can omit source frames, so timeline seeking alone does not guarantee
 the original image. Length anchors use an eligible completed stroke in the interval.
+
+## Processing time and planned background processing
+
+### Measured processing time
+
+On **2026-11-04**, one fresh-output CPU run processed the George recording
+`2026-06-25_13_51_34`: six HDF5 chunks, **371 MB**, **266.05 seconds of recorded
+activity**, and 2,565 native image frames. The machine used Windows 11, 32 logical
+processors, Python 3.12.7 and CPU PyTorch 2.11.0. The existing frozen MS-TCN++, EDT
+grids and saved expert distributions were reused.
+
+| Processing component | Measured wall time |
+| --- | ---: |
+| Input preparation, alignment, geometry checks and anatomy distances | 15.38 s |
+| Phase detection, including feature preparation and model-worker startup/loading | 4.49 s |
+| Visibility features, stroke/motion metrics, event detection and relations | 28.24 s |
+| Review video generation and validation, at 10 fps | 92.30 s |
+| Final Event feedback and whole-phase Summary preparation | 1.13 s |
+| Artifact/database writes, application startup and other orchestration | 6.52 s |
+| **Total: HDF5 input to video and both feedback payloads ready** | **148.06 s (2 min 28 s)** |
+
+Video accounts for approximately **62%** of the total. Subtracting that measured
+step leaves **55.76 s**; this is an accounting estimate, not a separately benchmarked
+no-video or concurrent implementation. The visibility/analysis row includes
+25.68 s of RGB/depth supporting features and 2.30 s of Ray-based drill-visibility
+detection. The phase time is not pure neural-network forward-pass latency.
+
+This is **one local measurement**, not a cohort average or a Windows/Linux
+performance guarantee. Filesystem cache was uncontrolled and the timing wrapper
+adds small logging overhead. Installation, model training, EDT/reference generation,
+interpreter startup before the timer, browser rendering and questionnaire time are
+excluded. All stages completed, video validation and database integrity passed,
+and phase inputs/probabilities matched the earlier George result exactly.
+The local receipt is `.local/validation/pipeline_timing_20261104/timing_receipt.json`;
+that local benchmark directory is not included in Git. The measurement above is
+recorded here for migration and planning.
+
+### Planned overlap with questionnaires — not implemented
+
+**Target behavior:** participants can fill in the initial questionnaires while
+processing continues in the background. Entering the first feedback view requires
+**both the prerequisite questionnaires to be saved and all required results to be
+ready**. A completed questionnaire must not be discarded or require resubmission
+because processing is still running.
+
+The proposed sequence is:
+
+1. When a completed recording is assigned to a study session, start or attach to
+   its background processing job immediately. Show the background questionnaire
+   without waiting for the evidence database or coaching plan.
+2. Once the original review video and its alignment are validated, allow the
+   baseline self-assessment. Other analysis can continue during this assessment.
+   Show only the recording; do not expose feedback, predicted phases or comparison
+   results before the baseline is submitted.
+3. Save the completed background questionnaire and baseline independently of job
+   progress. If processing is unfinished, show a waiting state with its actual
+   stage. If processing finished first, continue showing the unfinished survey.
+4. Enable entry to the chosen first feedback view only when both conditions are
+   satisfied. Keep the existing first-view/second-view order and later surveys.
+
+Use separate readiness conditions:
+
+| Condition | Meaning |
+| --- | --- |
+| `media_ready` | The finalized video and native-frame/time alignment are validated for this recording; sufficient to show the baseline recording. |
+| `results_ready` | Required source/geometry checks, phase prediction, event/motion/visibility analysis, database, video/alignment, Event feedback and Summary outputs have completed and passed their applicable integrity checks for the same recording/configuration. |
+| `prerequisites_complete` | The participant's background questionnaire and this case's baseline self-assessment are saved. |
+| Feedback entry allowed | `results_ready AND prerequisites_complete`, enforced by the server as well as the interface. |
+
+Readiness is an execution/integrity condition, not a declaration of clinical
+validity. A valid zero-event result is ready; an unfinished or failed required
+detector is not. Preserve existing legitimate unavailable/missing metric values
+and their reasons rather than requiring every phase to have a numeric score.
+Preparing results early must not reveal them through study feedback APIs or a
+direct Summary link before the prerequisite surveys are complete.
+
+The current implementation does **not** run this background workflow:
+`process-hdf5 --serve` finishes the build before starting the feedback server.
+The study's **Start automatic session analysis** action retrieves and assembles
+already processed evidence; its progress animation is not an HDF5 job monitor.
+The existing serial study sequence documented above remains the implemented one.
+
+### Implementation approach to evaluate
+
+| Area | Proposed change |
+| --- | --- |
+| `cli.py` and `directory_pipeline.py` | Start a lightweight study entry service before processing finishes; run the existing HDF5 build in a separate worker process. Publish persisted job stages and final readiness. |
+| `web.py` | Allow study/survey initialization without a completed database. Load the result-backed feedback service only when ready; provide job status and media metadata independently of feedback. Separate questionnaire progression from processing completion, and enforce the feedback-entry gate. |
+| `apps/expert_study/app.js` | Keep forms usable while polling real job status. Save answers immediately, restore progress after refresh, and show a waiting state only when the participant reaches an unmet readiness condition. |
+| Video preparation | Initially overlap processing with the background questionnaire. For earlier baseline access, move video production earlier or encode it during recording in a separate background process, retaining the native time/frame mapping. |
+
+Persist one job per recording and processing configuration, associated with the
+study case. Reopening a tab or submitting a survey must reuse that job rather than
+launch duplicate builds. A browser disconnect must not cancel processing. Failed
+or interrupted jobs retain survey answers and report a recoverable status; only
+validated, completed outputs may be published as ready. Preserve existing saved
+sessions and the current ability to open prebuilt recordings.
+
+If encoding during recording is tested, keep encoding off the simulator's main
+loop. An alternative is to process HDF5 chunks only after the recorder explicitly
+closes them. Preserve the original timestamps, cross-chunk frame mapping, source
+gaps and final frame. Offline MS-TCN++ still runs on the completed signal sequence.
+If most video work finishes during recording, the measured 55.76 s of other work
+provides an initial estimate of post-recording computation, plus remaining video
+work and validation; it is not a promised wait time. Survey overlap reduces the
+participant's exposed waiting time, not the amount of computation performed.
+
+### Tests required before enabling this workflow
+
+- **Both completion orders:** processing finishes before surveys, or surveys finish
+  before processing. Neither path skips the baseline or reveals partial feedback;
+  submitted answers remain saved while waiting. Test both feedback-view orders.
+- **Media and baseline:** a late video delays only video-dependent self-assessment;
+  no predicted phase/coaching content is delivered before baseline completion.
+- **Server readiness:** direct links/API requests, failed stages and incomplete
+  files cannot bypass the gate. Valid zero-event and legitimately unavailable
+  metrics retain their existing meaning.
+- **Recovery and identity:** refresh, browser disconnect, duplicate tabs, job retry
+  and server restart preserve answers/order, avoid duplicate jobs, and never attach
+  another recording's or an outdated configuration's results. Legacy/prebuilt
+  sessions continue to work.
+- **Timing and recording quality:** measure simulator frame rate, dropped frames,
+  encoding backlog and CPU/disk contention during recording. Validate source-to-
+  video alignment, native key frames, cross-chunk boundaries, gaps and the final frame.
+- **Result equivalence and latency:** compare phase inputs/probabilities, events,
+  motion metrics and feedback against the serial pipeline on the same input.
+  Benchmark repeated short/long recordings and target Windows/Linux machines.
+  Record processing start/ready, video-ready, prerequisite-survey completion and
+  feedback-entry times separately. Residual wait after the prerequisites are saved
+  is `max(0, results_ready_time - prerequisites_completed_time)`; also report any
+  earlier wait for the baseline video.
 
 ## Current pipeline
 
