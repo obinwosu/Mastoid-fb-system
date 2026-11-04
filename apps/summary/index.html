@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Session Summary · Mastoid Feedback</title>
+  <meta name="description" content="Whole-phase measurements compared with expert recordings" />
+  <link rel="stylesheet" href="/review-styles.css" />
+  <link rel="stylesheet" href="/summary/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">M</span>
+      <div><p>Post-session coaching</p><h1>Your Simulator Session Review</h1></div>
+    </div>
+    <div class="run-control">
+      <label for="runSelect">Session</label>
+      <select id="runSelect" disabled><option>Loading…</option></select>
+    </div>
+  </header>
+
+  <main>
+    <nav class="review-navigation" aria-label="Review view">
+      <a href="/">Event-based review</a>
+      <a href="/summary/" aria-current="page">Summary</a>
+    </nav>
+
+    <p id="pageStatus" class="page-status" role="status" aria-live="polite">Loading session measurements…</p>
+    <section id="summaryWorkspace" class="review-workspace hidden" aria-label="Video and phase comparisons">
+      <aside class="video-card" aria-labelledby="videoHeading">
+        <div class="section-title video-title">
+          <div><p class="eyebrow">Linked session video</p><h2 id="videoHeading">Session video</h2></div>
+          <span id="videoWindow">Full session</span>
+        </div>
+        <div class="media-stage">
+          <video id="sessionVideo" controls preload="metadata" playsinline>Your browser does not support the local review video.</video>
+          <div id="videoUnavailable" class="video-unavailable hidden">A review video is not available for this session.</div>
+        </div>
+        <div id="phaseIntervals" class="phase-intervals" aria-label="Selected phase in the video"></div>
+        <p id="videoStatus" class="video-status" role="status" aria-live="polite"></p>
+      </aside>
+
+      <section class="summary-panel" aria-label="Whole-phase measurements">
+        <div id="phaseTabs" class="summary-tabs" role="tablist" aria-label="Select phase"></div>
+        <p class="summary-scope">Entire phase · compared with experts in the same phase</p>
+        <div id="phaseMeasures" role="tabpanel" aria-live="polite">
+          <div class="summary-section"><h2>Safety / Exposure</h2></div>
+          <div id="safetyMetrics"></div>
+          <div class="summary-section motion-heading">
+            <h2>Motion</h2>
+            <div class="distribution-legend" aria-label="Distribution legend"><span><i class="expert-key" aria-hidden="true"></i>Expert recordings</span><span><i class="current-key" aria-hidden="true"></i>This recording</span></div>
+          </div>
+          <div id="motionMetrics"></div>
+        </div>
+        <details class="comparison-help">
+          <summary>How to read these comparisons</summary>
+          <p>Each grey dot represents one expert recording in the selected phase. The shaded band covers the central half of expert values, with a quarter below and a quarter above. The dark line marks the median; the blue diamond shows this recording.</p>
+          <p>These measurements describe differences from the expert recordings. They are not a skill score or a target range.</p>
+          <p>Extreme expert values are hidden from the plot but remain included in the calculations. A current value outside the displayed scale is shown with an arrow and its actual number.</p>
+          <p>Measurements cover the entire selected phase. Stroke length averages eligible complete strokes. Tool speed uses valid recorded movement and time. Removal rate and stroke frequency use the full phase duration.</p>
+          <p>Drill Visibility shows the estimated total time with poor drill visibility during the selected phase.</p>
+          <p id="referenceDescription"></p>
+        </details>
+      </section>
+    </section>
+  </main>
+  <script src="/summary/app.js" defer></script>
+</body>
+</html>

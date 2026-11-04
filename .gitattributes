@@ -29,4 +29,5 @@
 /references/r4_motion_windows_v3.json -text whitespace=cr-at-eol
 /references/r4_motion_windows_v4.json -text whitespace=cr-at-eol
 /references/r4_motion_windows_v6.json -text whitespace=cr-at-eol
+/references/r4_phase_summary_v1.json -text whitespace=cr-at-eol
 

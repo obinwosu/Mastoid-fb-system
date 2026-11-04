@@ -32,13 +32,48 @@ frame evidence -> events -> relations -> evidence store
 
 ## Official applications
 
-The repository contains two official static applications over the same local
-service and validated evidence contract:
+The repository contains two application modes over the same local service and
+validated evidence contract, with two read-only recommendation views:
 
 - `apps/expert_study/` provides the complete expert-study journey and stores
   its study inputs separately from canonical evidence.
 - `apps/recommendations/` presents recommendation-only feedback and does not
   expose expert annotation or item-level review controls.
+- `apps/summary/`, served at `/summary/` in recommendations mode, compares whole-phase
+  measurements with the saved recording-level expert reference. It shares the
+  video endpoint and event-view layout and adds no study data collection.
+
+The expert-study ID form also selects the initial Event-based/Summary view. After
+analysis, the sequence is first view, questionnaire placeholder, second view,
+questionnaire placeholder, then completion. The same summary assets are embedded
+at the summary step with the Study ID; there are no free-switching study tabs.
+The API requires completed analysis. `review_flow` persists order and current
+step, with atomic expected-view/stage checks on Next to reject stale requests.
+Questionnaire continuations contain no answers; earlier reflection records remain
+unchanged. Only the second placeholder continuation completes the new flow.
+Reviewer identity stays distinct from performer identity for cohort exclusion.
+
+The Event-based study step reuses `/review-styles.css` and the recommendations
+workspace: video on the left, feedback on the right, with native key-frame and
+context playback controls. It does not render the legacy expert-moment capture
+form; historical saved contributions remain untouched. Study clip serialization
+retains verified key-frame bindings and per-clip phases from the same review plan.
+
+`apps/recommendations/event-review.js`, served as `/event-review.js`, owns the
+shared Event card, moment-list and timeline rendering for both entry modes.
+Topic colors and ordering are display rules. Each existing clip remains present;
+marker positions use bound key-frame times when available and interval starts
+otherwise. Per-page media handling and study progression remain separate from
+this renderer. The player stays outside the independently scrolling moment list.
+Summary phase selection shares neutral phase colors; reference statistics and
+their current-recording markers are unchanged.
+
+`GET /api/phase-summary` reads source-bound database observations, recomputes only
+the current recording's whole-phase metrics and loads the bundled reference.
+`phase_summary.py` owns native-time aggregation and participant-balanced reference
+statistics; `phase_summary_safety.py` combines existing qualified detections within
+phase intervals. No expert source files, model fit or detector rerun is needed to
+open the page. The original five-second coaching comparison remains separate.
 
 Keeping these interfaces separate prevents study data-collection behavior from
 silently entering the recommendation-only experience.

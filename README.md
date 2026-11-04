@@ -41,6 +41,7 @@ root**. Copy `config.example.json` if it does not exist.
 | `phase_model_bundle` | Included: `models/e71_full_recording_holdout/` (0.92 MB total). Keep this relative path; the frozen offline MS-TCN++ is ready for inference. |
 | `video_fps` | Output video frame rate, default 10; does not change native timestamps or signal sampling |
 | `motion_reference` | Saved expert distribution: `references/r4_motion_windows_v6.json`, included with the project. Keep this relative path when migrating; `null` disables expert motion comparisons. |
+| `phase_summary_reference` | Included whole-phase distribution: `references/r4_phase_summary_v1.json` (0.43 MB). Keep this relative path when migrating; `null` disables the Summary page's expert comparisons. |
 
 For a new batch, change `--input-dir`; alignment and per-recording configuration
 are generated automatically. New recordings with `volume_adf` in `metadata.json`
@@ -127,6 +128,46 @@ To reopen completed feedback without rebuilding:
 python run.py serve-batch --manifest <batch-directory>/recommendations_manifest.json
 ```
 
+Select **Summary** on the feedback page, or append `/summary/` to the same server
+address. Both views use the same recording and video; no new processing command
+is needed. Restart an already running server after updating the application.
+
+In the existing **Study ID** entry (`expert-study` mode), **Show first** selects
+**Event-based** or **Summary**. After automatic analysis, **Next** follows this
+fixed order for the same ID and recording:
+
+**First view → Questionnaire placeholder → Second view → Questionnaire placeholder → Complete.**
+
+There are no free-switching tabs during the study. Each questionnaire is a blank
+placeholder awaiting design; it collects no answers. The initial order and current
+step are saved per Study ID/case and restored after refresh. Advancing pauses
+hidden playback. Only continuing past the second questionnaire completes the case;
+the next configured case, if any, follows afterward. The selected order is carried
+to that case and is not a randomized assignment.
+
+The Event-based step uses the same video-left, feedback-right layout and key-frame
+controls as the standalone feedback page. It has no additional coaching-moment
+entry form or audio recording controls. The two columns stack on narrow screens.
+
+Coaching cards expand in place, one at a time. **Safety & visibility** contains
+Drill visibility (orange) and Critical Structure Violation (red), followed by
+**Motion**: Low tool movement speed (blue) and Short drill strokes (dark blue).
+Colors identify topics, not priority levels. Cards show the observation and action;
+priority badges and the separate "Why it matters" section are not displayed.
+These presentation labels do not change event qualification or establish injury.
+
+The compact procedure map contains one marker per review moment. Selecting a
+marker opens its coaching card and corresponding moment. A verified native frame
+opens as a key frame; otherwise the video pauses at the interval start without
+claiming an exact source frame. All moments remain available in a separate
+scrolling list showing about three single-line rows; moving through this list does
+not scroll the player. Number, phase, time and actions share each row. Narrow
+layouts shorten action labels while retaining full accessible names and times.
+Phase bands and Summary phase controls use neutral grays, with the
+selected Summary phase underlined. Both Event entry modes share this presentation.
+The supporting explanation is a small, collapsed footer at the bottom of the
+Event view, after the Next section in study mode.
+
 Generated video, phase and events use native HDF5 elapsed time, so their seconds
 can differ from older videos. Both legacy `data/*` and v3 `vision_data/*` /
 `physics_data/*` layouts are supported. V3 camera poses are aligned by timestamp
@@ -138,7 +179,7 @@ geometry or clinical validation. No model training or remote inference is used.
 
 - `src/evidence_system/`: HDF5 processing, geometry, frozen phase inference, Ray
   events, storage and service.
-- `apps/`: the existing recommendations and expert-study applications.
+- `apps/`: event-based recommendations, whole-phase summary and expert-study pages.
 - `run.py`: the shared Windows/Linux entry.
 - `config/rules/`: internal rules/source metadata; not machine-path settings.
 - `models/`: the frozen three-file offline phase inference bundle.
@@ -177,6 +218,86 @@ eligible recordings receive equal weight, then windows within a recording receiv
 equal weight. A known participant's own recordings are excluded before weighting.
 At least three eligible reference participants are required for a comparison.
 
+## Whole-phase Summary page
+
+`/summary/` places the existing video player beside **Safety / Exposure** and
+compact **Motion** rows. Select Early drilling, Antrum or Incus. **Go to start**
+pauses the video at that phase interval; repeated intervals remain separate in
+the video controls and are combined only for the phase's measurements.
+
+[`references/r4_phase_summary_v1.json`](references/r4_phase_summary_v1.json) is
+already generated from the **same 39 recordings / five experts**, by re-reading
+their hash-verified original R4 signals and manual phase alignment. It contains
+117 recording-phase summaries, not averages of the five-second windows. Eligible
+phase totals are 86 for speed/removal, 76 for Length and 77 for frequency.
+The saved JSON travels with the project; reviewing a new case never reads expert
+CSV/HDF5 files or regenerates the reference. Reference phases are manual and case
+phases are model predictions; anatomy/assistance conditions remain pooled.
+
+| Summary metric | Calculation for the selected whole phase |
+| --- | --- |
+| Tool speed (mm/s) | Total valid adjacent path / total valid observed time |
+| Stroke length (mm) | Mean full path of eligible completed strokes in the phase |
+| Removal rate (mm3/s) | Supported removed volume / full observed phase duration |
+| Stroke frequency (strokes/s) | Recorded stroke endpoints / full observed phase duration |
+| Critical Structure Violation | Distinct canonical events with a safety-qualified segment in the phase; details show each structure and maximum supported boundary intrusion |
+| Drill Visibility (s) | Union of qualified visibility detections, clipped to the phase and mapped to native elapsed seconds; an estimated poor-visibility duration |
+
+Each contiguous phase spans its first through last observed row. Repeated spans
+are summed without bridging intervening phases. The final partial interval is
+included even if shorter than five seconds. Speed does not bridge gaps over
+0.25 seconds. Removal and endpoint counts use `(start, end]`; first-row removal
+has no within-phase predecessor and is recorded as excluded, as is removal on
+unsupported long gaps. At least 80% valid coverage is required; the existing
+stroke completeness and invalid-segmentation exclusions also apply. Missing or
+ineligible values display **Unavailable**, not zero. Frequency is descriptive and
+adds no coaching trigger. The alternative drilling-time frequency remains saved
+in the window reference; it is not the Summary page's denominator.
+
+Each grey dot is one eligible expert recording. Experts are weighted equally,
+then their recordings equally; a known participant's own recordings are excluded.
+The band and median use those weights and require at least three experts. Expert
+dots outside `Q1 - 1.5 * IQR` through `Q3 + 1.5 * IQR` are hidden only from drawing;
+all values remain in the statistics. The current recording always retains its
+number and marker (an edge arrow if outside the plotted scale). There is no
+percentile score column or new coaching rule.
+
+Safety measurements retain the current event thresholds. Qualified event counts
+can differ from raw zero-crossing event counts. Max. intrusion uses actual
+phase-local removed-point distances inside the named structure. Visibility sums
+first-to-last supporting spans, which can contain gaps; it is not a continuous
+occlusion measurement. **Expert safety distributions are unavailable:** the saved
+expert CSVs lack the per-structure voxel counts needed to reproduce the current
+safety gate and do not contain the current visibility detector's results. Legacy
+overshoot/visibility values are not substituted. The page shows current-case
+values and explains the missing expert comparison in the expanded details.
+
+Implementation: [phase_summary.py](src/evidence_system/phase_summary.py) measures
+signals and loads the frozen reference; [phase_summary_safety.py](src/evidence_system/phase_summary_safety.py)
+aggregates existing detections; [web.py](src/evidence_system/web.py) exposes
+`GET /api/phase-summary` after the existing source/clock checks. The page reuses
+the event view's video layout and `/api/media/video`. The existing event coaching
+rules and original results are unchanged. In study mode, the same Summary page
+is embedded at its assigned review step; its API requires a started Study ID session
+and completed automatic analysis. The reviewer ID never replaces the recorded
+performer ID used for expert self-exclusion. No additional questions or coaching
+entry features are added. Existing study responses remain in the separate study
+state file. The versioned `review_flow` records order, current step and placeholder
+continuations (`answers: null`). Earlier reflection answers and completion timestamps
+remain preserved; they do not mark the new sequence complete. The old reflection
+submission endpoint cannot complete or overwrite a session using this sequence.
+`POST /api/expert-study/review-next` checks the expected view and stage before
+advancing, so a repeated or stale Next request cannot skip a step.
+
+Optional maintainer-only regeneration, requiring the original sources named in
+the saved cohort reference, with a new output filename:
+
+```text
+python run.py build-phase-reference --motion-reference references/r4_motion_windows_v6.json --output references/r4_phase_summary_new.json
+```
+
+Normal installation and migration do not run this command.
+
 ## Window timing and coaching rules
 
 **One valid five-second window can trigger coaching. There is no three-window
@@ -199,7 +320,7 @@ thresholds or skill scores.
 | **Safety-boundary / overshoot** | Within one structure and one frame: at least 10 removed voxels have EDT <= 0 and the minimum EDT is <= -0.1 mm, **or** minimum EDT is < -1.0 mm. No minimum duration applies. The weaker raw signal (any removed voxel with EDT <= 0) alone does not necessarily produce coaching. |
 | **Under-ledge / working-corridor exposure (Ray-v3)** | Episode span >= 0.3 s, at least 5 positive frames, mean blocked-contact ray fraction >= 70%, median registered contact count >= 20, and recording-level registered/raw contact-frame fraction >= 80%. Usable contacts and verified source binding are required. |
 | **Removal rate** | Compared with the same-phase reference for description; it does not independently trigger coaching. |
-| **Stroke frequency** | Both denominator definitions are saved in the reference; neither currently triggers coaching or participates in live expert comparisons. |
+| **Stroke frequency** | Both denominator definitions are saved in the window reference; neither triggers coaching. The Summary page compares whole-phase endpoint frequency. |
 
 Ray-v3 marks a candidate frame when at least 50% of its sampled camera-to-contact
 rays are blocked. It samples at most 20 rays per frame after burr-radius + 1 mm
@@ -311,6 +432,10 @@ flowchart TD
     Coaching --> Website["Existing feedback website<br/>Phase-labelled clips, Go to key frame, Play context"]
     Video --> Website
     Read -->|Original source image for exact key frame| Website
+    Saved --> WholePhase["Whole-phase measurements<br/>Include partial tails; retain separate phase intervals"]
+    PhaseExperts["Included phase reference<br/>references/r4_phase_summary_v1.json<br/>Same 39 recordings, reaggregated once"] --> WholePhase
+    WholePhase --> Summary["Summary page: /summary/<br/>Safety values and motion distributions"]
+    Video --> Summary
 ```
 
 Phase detection consumes removal/anatomy signals; video appearance and motion
@@ -321,7 +446,9 @@ using the R4 model resources does not certify a new recording's calibration.
 The expert JSON is loaded directly when serving feedback; the 39 expert recordings
 are not reprocessed. Speed and Length use the same-phase distribution, and one
 valid qualifying window can trigger coaching. Removal rate remains descriptive;
-frequency remains saved-only. The trigger details are listed above.
+whole-phase frequency is compared descriptively on the Summary page. The trigger
+details are listed above. The Summary reference is loaded separately and does not
+change the event view's five-second coaching rules.
 
 Each case is saved under `results/hdf5_batches/<batch>/<recording>/`, with its
 generated configuration, clock, analysis stages, database and video. The batch's

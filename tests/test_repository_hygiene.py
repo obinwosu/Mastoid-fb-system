@@ -13,6 +13,9 @@ MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 # Explicit user authorization (2026-11-04): carry these frozen runtime resources
 # with the project for migration. No other data or changed bytes are exempt.
 AUTHORIZED_RESOURCE_HASHES = {
+    "references/r4_phase_summary_v1.json": (
+        "ba091b3489acf7432c9c335d435f6ceae2574f9865c55806e0f99023fc2f1c47"
+    ),
     "references/r4_motion_windows_v2.json": (
         "5291f70328806f5899c21bc6bf61e9c509c70d98069c99502df405c94c3664b9"
     ),

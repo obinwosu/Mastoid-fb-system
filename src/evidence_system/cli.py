@@ -41,6 +41,19 @@ def _configured_motion_reference() -> Path | None:
     return reference
 
 
+def _configured_phase_reference() -> Path | None:
+    """The bundled whole-phase reference needs no expert source data at serve time."""
+    config = PROJECT_ROOT / "config.local.json"
+    values = json.loads(config.read_text(encoding="utf-8-sig")) if config.is_file() else {}
+    value = values.get("phase_summary_reference", "references/r4_phase_summary_v1.json")
+    if not value:
+        return None
+    reference = _path(value)
+    if not reference.is_file():
+        raise FileNotFoundError(f"Configured phase_summary_reference is unavailable: {reference}")
+    return reference
+
+
 TRUSTED_R4_CATALOG_SHA256 = "99fc284bef5e3cbf843be99da1ce5678df735a20257adbf89f02103f04304e7a"
 
 
@@ -194,6 +207,16 @@ def build_motion_reference(catalog: Path, output: Path) -> dict[str, Any]:
 
 def motion_reference_command(args: argparse.Namespace) -> int:
     print(json.dumps(build_motion_reference(_path(args.catalog), _path(args.output)), indent=2))
+    return 0
+
+
+def phase_reference_command(args: argparse.Namespace) -> int:
+    from .phase_summary import build_phase_reference_from_motion_reference
+
+    result = build_phase_reference_from_motion_reference(
+        _path(args.motion_reference), _path(args.output)
+    )
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -358,6 +381,7 @@ def _manifest_serve_options(
         "video_manifest_path": _path(str(selected["review_video_manifest"])),
         "ray_v3_dir": ray_v3 if ray_v3.is_dir() else None,
         "cohort_benchmark_path": cohort if cohort.is_file() else _configured_motion_reference(),
+        "phase_reference_path": _configured_phase_reference(),
         "study_state_path": (
             _path(str(selected["study_state"])) if mode == "expert-study" else None
         ),
@@ -403,6 +427,7 @@ def _direct_serve_options(args: argparse.Namespace) -> dict[str, Any]:
             if args.cohort_benchmark
             else _configured_motion_reference()
         ),
+        "phase_reference_path": _configured_phase_reference(),
         "study_state_path": state,
         "available_runs": [{"run_id": str(args.run_id), "url": ""}],
         "display_name": args.display_name or "Case 01",
@@ -580,6 +605,16 @@ def build_parser() -> argparse.ArgumentParser:
     reference.add_argument("--catalog", type=Path, required=True)
     reference.add_argument("--output", type=Path, required=True)
     reference.set_defaults(handler=motion_reference_command)
+
+    phase_reference = subparsers.add_parser(
+        "build-phase-reference",
+        help="Build a whole-phase reference from the saved cohort's verified original signals",
+    )
+    phase_reference.add_argument(
+        "--motion-reference", type=Path, default=Path("references/r4_motion_windows_v6.json")
+    )
+    phase_reference.add_argument("--output", type=Path, required=True)
+    phase_reference.set_defaults(handler=phase_reference_command)
 
     serve = subparsers.add_parser(
         "serve", help="Serve the read-only recommendations or expert-study app"

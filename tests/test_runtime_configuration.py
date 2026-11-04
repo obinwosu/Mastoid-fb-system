@@ -73,7 +73,12 @@ class ApplicationBoundaryTests(unittest.TestCase):
             "<audio",
         ):
             self.assertNotIn(forbidden, recommendation_source)
-            self.assertIn(forbidden, expert_source)
+        for study_only in ("/api/expert-study/", "study id"):
+            self.assertIn(study_only, expert_source)
+        # The sequential study retains its ID and progress API, but the user
+        # explicitly removed the legacy additional-coaching capture controls.
+        for removed in ("expert contribution", "start recording", "<audio"):
+            self.assertNotIn(removed, expert_source)
 
     def test_recommendations_manifest_rejects_study_state(self) -> None:
         source = REPOSITORY_ROOT / "config" / "examples" / "recommendations_manifest.example.json"

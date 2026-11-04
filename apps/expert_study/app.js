@@ -6,17 +6,53 @@ const state = {
   stopAt: null,
   currentClipIndex: null,
   videoBound: false,
-  expertMoments: [],
-  momentTime: 0,
-  mediaRecorder: null,
-  audioChunks: [],
-  audioBlob: null,
-  audioDuration: 0,
-  audioStartedAt: null,
-  audioTimer: null,
-  audioPreviewUrl: null,
-  referenceStopAt: null,
+  mediaAction: 0,
+  metadataHandler: null,
+  keyframeIntent: false,
+  keyframeSeek: null,
+  firstReviewView: "event-based",
+  reviewView: "event-based",
+  summaryResizeObserver: null,
+  summaryPendingTime: null,
+  reviewFlow: null,
+  reviewNextPending: false,
 };
+
+const eventReview = EventReview.create({
+  getItems: feedbackItems,
+  getPhases: () => state.experience?.phases || [],
+  getDuration: () => state.experience?.session?.duration_s || 0,
+  hasMedia: () => Boolean(state.experience?.media?.available),
+  onSelect(item, source) {
+    beginMediaAction();
+    document.getElementById("sessionVideo").pause();
+    state.stopAt = null;
+    state.selectedId = item.feedback_id;
+    document.getElementById("videoWindow").textContent = "Choose a review moment";
+    state.currentClipIndex = null;
+    if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
+      logEvent("feedback_item_opened", { source, title: eventReview.titleFor(item) }, item.feedback_id);
+    }
+  },
+  onOpen: openReviewMoment,
+});
+
+function reviewViewName(value) {
+  return value === "summary" ? "summary" : "event-based";
+}
+
+function reviewViewLabel(value) {
+  return value === "summary" ? "Summary" : "Event-based";
+}
+
+function setReviewFlow(flow) {
+  if (flow?.schema !== "sequential_review_v1" || !Array.isArray(flow.order)
+      || !["review", "questionnaire", "complete"].includes(flow.stage)) {
+    throw new Error("The study progress could not be loaded. Reload the page to try again.");
+  }
+  state.reviewFlow = flow;
+  state.start.review_flow = flow;
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
@@ -44,7 +80,7 @@ async function api(path, body) {
   return value;
 }
 
-async function firstCaseUrlForAccess(participantId) {
+async function firstCaseUrlForAccess(participantId, firstReviewView) {
   const response = await fetch("/api/health");
   const value = await response.json();
   if (!response.ok) throw new Error(value.error || "Unable to verify the study entry point");
@@ -52,6 +88,7 @@ async function firstCaseUrlForAccess(participantId) {
   if (!firstCase?.url || firstCase.run_id === value.run_id) return null;
   const firstUrl = new URL(firstCase.url, window.location.href);
   firstUrl.searchParams.set("participant_id", participantId);
+  firstUrl.searchParams.set("first_review_view", reviewViewName(firstReviewView));
   return firstUrl.toString();
 }
 
@@ -81,23 +118,40 @@ function caseHeader() {
   document.getElementById("caseLabel").textContent = `${value.alias} of ${value.total}`;
 }
 
-async function enterStudy(participantId) {
-  const value = await api("/api/expert-study/start", { participant_id: participantId });
+async function enterStudy(participantId, firstReviewView) {
+  const value = await api("/api/expert-study/start", {
+    participant_id: participantId,
+    first_review_view: reviewViewName(firstReviewView),
+  });
   state.participantId = value.participant_id;
   state.start = value;
-  state.expertMoments = value.expert_proposed_moments || [];
+  state.firstReviewView = reviewViewName(value.first_review_view);
+  setReviewFlow(value.review_flow);
+  state.reviewView = state.reviewFlow.current_view || state.firstReviewView;
   document.getElementById("interfaceVersion").textContent = String(
     value.interface_version || "pilot-ui-v1.4.1"
   ).replaceAll("-", " ");
   const currentUrl = new URL(window.location.href);
   currentUrl.searchParams.set("participant_id", state.participantId);
+  currentUrl.searchParams.set("first_review_view", state.firstReviewView);
   window.history.replaceState({}, "", currentUrl);
   document.getElementById("accessPanel").classList.add("hidden");
   document.getElementById("headerStatus").classList.remove("hidden");
   caseHeader();
-  if (value.case_completed) {
+  if (state.reviewFlow.stage === "complete") {
     showCompletion();
     return;
+  }
+  if (value.analysis_completed) {
+    setHeaderStatus("Restoring review");
+    try {
+      const experience = await api("/api/expert-study/analyze", { participant_id: state.participantId });
+      prepareExperience(experience);
+      return;
+    } catch (error) {
+      document.getElementById("accessPanel").classList.remove("hidden");
+      throw error;
+    }
   }
   setHeaderStatus("Session ready");
   document.getElementById("workflowDisclosure").textContent = value.workflow.disclosure;
@@ -142,12 +196,8 @@ async function startAnalysis() {
       api("/api/expert-study/analyze", { participant_id: state.participantId }),
       animateProcessing(stages),
     ]);
-    state.experience = experience;
-    state.expertMoments = experience.expert_proposed_moments || [];
     document.getElementById("processingPanel").classList.add("hidden");
-    document.getElementById("experiencePanel").classList.remove("hidden");
-    setHeaderStatus("Feedback ready");
-    renderExperience();
+    prepareExperience(experience);
   } catch (error) {
     document.getElementById("processingPanel").classList.add("hidden");
     document.getElementById("readyPanel").classList.remove("hidden");
@@ -161,216 +211,205 @@ function feedbackItems() {
   return state.experience?.feedback || [];
 }
 
-function renderProcedureMap() {
-  const duration = Number(state.experience.session.duration_s || 1);
-  document.getElementById("durationLabel").textContent = `${fmtTime(duration)} total`;
-  document.getElementById("timelineEnd").textContent = fmtTime(duration);
-  document.getElementById("phaseMap").innerHTML = state.experience.phases.map(phase => {
-    const left = 100 * Number(phase.t_start_s) / duration;
-    const width = 100 * (Number(phase.t_end_s) - Number(phase.t_start_s)) / duration;
-    const name = String(phase.phase_name || "").replaceAll("_", " ");
-    const rule = phase.phase_name === "pre_drilling";
-    const predicted = !rule && phase.phase_source_kind === "model_phase_prediction";
-    const source = rule ? "Predrilling rule" : predicted ? "Model-predicted phase" : "Manual phase annotation";
-    const label = predicted ? `${name} · Predicted` : name;
-    return `<div class="phase-segment ${escapeHtml(phase.phase_name)}" data-phase-id="${escapeHtml(phase.phase_id || "")}" style="left:${left}%;width:${width}%" title="${escapeHtml(name)} · ${escapeHtml(source)} · ${fmtTime(phase.t_start_s)}–${fmtTime(phase.t_end_s)}">${escapeHtml(label)}</div>`;
-  }).join("");
-  const automaticMarkers = feedbackItems().map(item => {
-    const left = 100 * Number(item.t_start_s) / duration;
-    return `<button class="map-marker ${escapeHtml(item.priority)}" style="left:${left}%" data-map-id="${escapeHtml(item.feedback_id)}" aria-label="Open coaching moment at ${fmtTime(item.t_start_s)}"></button>`;
-  }).join("");
-  const expertMarkers = state.expertMoments.map(item => {
-    const left = 100 * Number(item.t_video_s) / duration;
-    return `<button class="map-marker expert" style="left:${left}%" data-expert-time="${Number(item.t_video_s)}" aria-label="Open expert-added coaching moment at ${fmtTime(item.t_video_s)}"></button>`;
-  }).join("");
-  document.getElementById("coachingMap").innerHTML = automaticMarkers + expertMarkers;
-  document.querySelectorAll("[data-map-id]").forEach(button => button.addEventListener("click", () => {
-    selectFeedback(button.dataset.mapId, true, "procedure_map");
-  }));
-  document.querySelectorAll("[data-expert-time]").forEach(button => button.addEventListener("click", () => {
-    const video = document.getElementById("sessionVideo");
-    video.pause();
-    video.currentTime = Number(button.dataset.expertTime);
-    document.getElementById("videoCard").scrollIntoView({ behavior: "smooth", block: "start" });
-  }));
+function prepareExperience(experience) {
+  state.experience = experience;
+  setReviewFlow(experience.review_flow || state.reviewFlow);
+  state.reviewView = state.reviewFlow.current_view || state.firstReviewView;
+  renderExperience();
+  renderReviewFlow();
 }
 
-function renderFocusList() {
-  const root = document.getElementById("focusList");
-  const items = feedbackItems();
-  if (!items.length) {
-    root.innerHTML = `<div class="empty-state"><p>No automatic coaching priority was generated for this session.</p></div>`;
-    return;
-  }
-  root.innerHTML = items.map((item, index) => `
-    <button class="focus-button ${escapeHtml(item.priority)} ${item.feedback_id === state.selectedId ? "active" : ""}" data-focus-id="${escapeHtml(item.feedback_id)}">
-      <span class="meta"><span>${index === 0 ? "Start here" : `Focus ${index + 1}`}</span><span>${escapeHtml(String(item.phase || "session").replaceAll("_", " "))}</span></span>
-      <h3>${escapeHtml(item.title)}</h3>
-      <p>${escapeHtml(item.message || item.recommended_action || "Review the linked evidence.")}</p>
-    </button>`).join("");
-  root.querySelectorAll("[data-focus-id]").forEach(button => button.addEventListener("click", () => {
-    selectFeedback(button.dataset.focusId, false, "feedback_list");
-  }));
+function pauseReviewMedia() {
+  state.stopAt = null;
+  beginMediaAction();
+  document.querySelectorAll("#eventBasedReview video, #eventBasedReview audio").forEach(media => media.pause());
+  const frame = document.getElementById("summaryReviewFrame");
+  if (frame.hasAttribute("src")) frame.contentWindow?.postMessage({ type: "study-review-visibility", active: false, viewport_height: window.innerHeight }, window.location.origin);
 }
 
-function renderDetail(item) {
-  const method = item.method_details || {};
-  document.getElementById("feedbackDetail").innerHTML = `
-    <div class="detail-head">
-      <div><p class="eyebrow">${escapeHtml(String(item.category || "coaching").replaceAll("_", " "))}</p><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.message || "")}</p></div>
-      <span class="priority ${escapeHtml(item.priority)}">${escapeHtml(item.priority)} priority</span>
-    </div>
-    <div class="action-callout"><small>Try this next</small><p>${escapeHtml(item.recommended_action || item.message || "Review the linked interval before the next attempt.")}</p></div>
-    <div class="story-grid">
-      <div class="story-block"><h3>What happened</h3><p>${escapeHtml(item.observed_issue || item.evidence_summary || "A time-linked coaching moment was identified.")}</p></div>
-      <div class="story-block"><h3>Why it matters</h3><p>${escapeHtml(item.why_it_matters || "Review the linked evidence in the context of the next practice attempt.")}</p></div>
-    </div>
-    <details class="item-method">
-      <summary>Why this feedback is shown</summary>
-      <div class="method-grid">
-        <div><strong>What the system reviewed</strong><p>${escapeHtml(method.data_used || "Time-aligned simulator evidence.")}</p></div>
-        <div><strong>What it looked for</strong><p>${escapeHtml(method.trigger || item.evidence_summary || "A predefined evidence rule was met.")}</p></div>
-        <div><strong>Why these examples</strong><p>${escapeHtml(method.selection || "Representative review locations are shown first.")}</p></div>
-        <div><strong>Interpretation boundary</strong><p>${escapeHtml(method.limitation || item.claim_boundary || "Review support only.")}</p></div>
-      </div>
-    </details>
-    <button class="watch-button" id="watchSelected">Watch the linked moment</button>`;
-  document.getElementById("watchSelected").addEventListener("click", () => playClip(0, true));
-  renderClips(item);
+function resizeSummaryFrame() {
+  const frame = document.getElementById("summaryReviewFrame");
+  if (document.getElementById("summaryReview").classList.contains("hidden")) return;
+  const content = frame.contentDocument?.querySelector("main");
+  if (content) frame.style.height = `${Math.max(420, Math.ceil(content.getBoundingClientRect().height) + 2)}px`;
 }
 
-function anatomyLabel(value) {
-  return {
-    FacialNerve: "Facial nerve",
-    SigSinus: "Sigmoid sinus",
-    BonyLabyrinth: "Bony labyrinth",
-  }[String(value || "")] || String(value || "Other review moments").replaceAll("_", " ");
+function loadSummaryFrame() {
+  const frame = document.getElementById("summaryReviewFrame");
+  if (frame.hasAttribute("src")) return;
+  const url = new URL("/summary/", window.location.href);
+  url.searchParams.set("embedded", "1");
+  url.searchParams.set("participant_id", state.participantId);
+  frame.src = url.toString();
 }
 
-function clipRowHtml(entry, label) {
-  const clip = entry.clip;
-  const signalLabel = clip.exact_signal_frame
-    ? `Key frame · ${fmtTime(clip.signal_time_s)}`
-    : `Review interval ${fmtTime(clip.t_start_s)}–${fmtTime(clip.t_end_s)}`;
-  return `<div class="clip-row">
-    <div class="clip-copy"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(signalLabel)}</span></div>
-    <div class="clip-actions">
-      ${clip.exact_signal_frame ? `<button data-signal-index="${entry.index}">Go to key frame</button>` : ""}
-      <button data-clip-index="${entry.index}">Play context</button>
-    </div>
-  </div>`;
-}
-
-function renderClips(item) {
-  const clips = item.clips || [];
-  const root = document.getElementById("clipList");
-  const indexed = clips.map((clip, index) => ({ clip, index }));
-  if (item.category === "safety") {
-    const grouped = new Map();
-    indexed.forEach(entry => {
-      const key = entry.clip.anatomy || "Other";
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(entry);
-    });
-    const groups = [...grouped.entries()].map(([anatomy, entries]) => ({ anatomy, entries }));
-    root.innerHTML = groups.map(group => {
-      const first = group.entries[0];
-      const rest = group.entries.slice(1);
-      return `<section class="clip-group">
-        <div class="clip-group-head"><strong>${escapeHtml(anatomyLabel(group.anatomy))}</strong><span>${group.entries.length} ${group.entries.length === 1 ? "moment" : "moments"}</span></div>
-        ${clipRowHtml(first, "Representative moment")}
-        ${rest.length ? `<details class="additional-moments"><summary>Show ${rest.length} similar ${rest.length === 1 ? "moment" : "moments"}</summary>${rest.map((entry, index) => clipRowHtml(entry, `Additional moment ${index + 1}`)).join("")}</details>` : ""}
-      </section>`;
-    }).join("");
-  } else if (item.category === "exposure") {
-    const grouped = new Map();
-    indexed.forEach(entry => {
-      const key = entry.clip.phase || "Other";
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(entry);
-    });
-    root.innerHTML = [...grouped.entries()].map(([phase, entries]) => {
-      const first = entries[0];
-      const rest = entries.slice(1);
-      const phaseLabel = String(phase || "Procedure").replaceAll("_", " ");
-      return `<section class="clip-group">
-        <div class="clip-group-head"><strong>${escapeHtml(phaseLabel)}</strong><span>${entries.length} ${entries.length === 1 ? "example" : "examples"}</span></div>
-        ${clipRowHtml(first, "Start with this example")}
-        ${rest.length ? `<details class="additional-moments"><summary>Show ${rest.length} more from this phase</summary>${rest.map((entry, index) => clipRowHtml(entry, `Additional example ${index + 1}`)).join("")}</details>` : ""}
-      </section>`;
-    }).join("");
-  } else {
-    root.innerHTML = `<section class="clip-group">${indexed.map((entry, index) => clipRowHtml(entry, clips.length > 1 ? `Review moment ${index + 1}` : "Review moment")).join("")}</section>`;
-  }
-  document.querySelectorAll("[data-clip-index]").forEach(button => button.addEventListener("click", () => {
-    playClip(Number(button.dataset.clipIndex), false);
-  }));
-  document.querySelectorAll("[data-signal-index]").forEach(button => button.addEventListener("click", () => {
-    jumpToSignal(Number(button.dataset.signalIndex), true);
-  }));
-}
-
-function selectFeedback(feedbackId, play, source) {
-  const item = feedbackItems().find(row => row.feedback_id === feedbackId);
-  if (!item) return;
-  state.selectedId = feedbackId;
-  state.currentClipIndex = null;
-  renderFocusList();
-  renderDetail(item);
-  logEvent("feedback_item_opened", { source, title: item.title }, feedbackId);
-  if (play) playClip(0, true);
-}
-
-function playClip(index, scrollToVideo) {
-  const item = feedbackItems().find(row => row.feedback_id === state.selectedId);
-  const clip = item?.clips?.[index];
-  const video = document.getElementById("sessionVideo");
-  if (!item || !clip || !state.experience.media?.available) return;
-  const mediaEnd = Number(state.experience.media.duration_s || clip.playback_end_s);
-  const start = Math.max(0, Number(clip.playback_start_s));
-  const stop = Math.min(mediaEnd, Number(clip.playback_end_s));
-  state.currentClipIndex = index;
-  state.stopAt = stop;
-  document.getElementById("videoHeading").textContent = item.title;
-  document.getElementById("videoWindow").textContent = `${fmtTime(start)}–${fmtTime(stop)}`;
-  document.querySelectorAll("[data-clip-index], [data-signal-index]").forEach(button => {
-    const buttonIndex = button.dataset.clipIndex ?? button.dataset.signalIndex;
-    button.classList.toggle("active", Number(buttonIndex) === index);
-  });
+function syncReviewVideo(video, time) {
+  if (!video || !Number.isFinite(time)) return;
   const seek = () => {
-    video.currentTime = start;
-    video.play().catch(() => {});
-    if (scrollToVideo) document.getElementById("videoCard").scrollIntoView({ behavior: "smooth", block: "start" });
+    video.pause();
+    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
   };
   if (video.readyState >= 1) seek();
   else video.addEventListener("loadedmetadata", seek, { once: true });
+}
+
+function selectReviewView(value, log = true) {
+  const view = reviewViewName(value);
+  const frame = document.getElementById("summaryReviewFrame");
+  const sourceVideo = state.reviewView === "summary"
+    ? frame.contentDocument?.getElementById("sessionVideo") : document.getElementById("sessionVideo");
+  const currentTime = view !== state.reviewView && sourceVideo?.readyState >= 1 ? sourceVideo.currentTime : null;
+  pauseReviewMedia();
+  state.reviewView = view;
+  document.getElementById("eventBasedReview").classList.toggle("hidden", view !== "event-based");
+  document.getElementById("supportDetails").classList.toggle("hidden", view !== "event-based");
+  document.getElementById("summaryReview").classList.toggle("hidden", view !== "summary");
+  if (view === "summary") {
+    if (Number.isFinite(currentTime)) state.summaryPendingTime = currentTime;
+    loadSummaryFrame();
+    frame.contentWindow?.postMessage({ type: "study-review-visibility", active: true, viewport_height: window.innerHeight }, window.location.origin);
+    if (frame.contentDocument?.getElementById("sessionVideo")) {
+      syncReviewVideo(frame.contentDocument.getElementById("sessionVideo"), state.summaryPendingTime);
+      state.summaryPendingTime = null;
+    }
+    window.requestAnimationFrame(resizeSummaryFrame);
+  } else syncReviewVideo(document.getElementById("sessionVideo"), currentTime);
+  if (log) logEvent("review_view_opened", { view, review_index: state.reviewFlow.index }, null);
+}
+
+function keyframeFor(clip) {
+  return EventReview.keyframeFor(clip);
+}
+
+function clearKeyframe() {
+  state.keyframeIntent = false;
+  state.keyframeSeek = null;
+  const image = document.getElementById("keyframeImage");
+  image.onload = null;
+  image.onerror = null;
+  image.removeAttribute("src");
+  document.getElementById("keyframeOverlay").classList.add("hidden");
+  document.getElementById("keyframeStatus").classList.add("hidden");
+  document.getElementById("sessionVideo").removeAttribute("aria-hidden");
+  document.getElementById("sessionVideo").removeAttribute("tabindex");
+}
+
+function beginMediaAction() {
+  state.mediaAction += 1;
+  const video = document.getElementById("sessionVideo");
+  if (state.metadataHandler) video.removeEventListener("loadedmetadata", state.metadataHandler);
+  state.metadataHandler = null;
+  clearKeyframe();
+  return state.mediaAction;
+}
+
+function afterMetadata(action, callback) {
+  const video = document.getElementById("sessionVideo");
+  const ready = () => {
+    if (action !== state.mediaAction) return;
+    state.metadataHandler = null;
+    callback();
+  };
+  if (video.readyState >= 1) ready();
+  else {
+    state.metadataHandler = ready;
+    video.addEventListener("loadedmetadata", ready, { once: true });
+  }
+}
+
+function markClip(index, action) {
+  eventReview.mark(index, action);
+}
+
+function returnToVideo() {
+  if (!state.keyframeIntent) return;
+  beginMediaAction();
+  markClip(-1, "context");
+  const video = document.getElementById("sessionVideo");
+  document.getElementById("videoWindow").textContent = `Video · ${fmtTime(video.currentTime)}`;
+}
+
+function openReviewMoment(item, clip, index, mode) {
+  const title = eventReview.titleFor(item);
+  if (mode === "context") { playClip(clip, title, index); return; }
+  if (keyframeFor(clip)) { jumpToKeyframe(clip, title, index); return; }
+  if (!state.experience.media?.available || clip.t_start_s == null || !Number.isFinite(Number(clip.t_start_s))) return;
+  const action = beginMediaAction();
+  const video = document.getElementById("sessionVideo");
+  video.pause();
+  state.stopAt = null;
+  state.currentClipIndex = index;
+  const time = Math.max(0, Number(clip.t_start_s));
+  document.getElementById("videoWindow").textContent = `Interval start · ${fmtTime(time)}`;
+  markClip(index, "review");
+  afterMetadata(action, () => {
+    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
+  });
+  logEvent("feedback_interval_opened", { clip_index: index, interval_start_s: time });
+}
+
+function playClip(clip, title, index) {
+  const video = document.getElementById("sessionVideo");
+  if (!state.experience.media?.available) return;
+  const action = beginMediaAction();
+  state.currentClipIndex = index;
+  state.stopAt = null;
+  video.pause();
+  const start = Math.max(0, Number(clip.t_start_s) - 5);
+  const stop = Math.min(Number(state.experience.session.duration_s), Number(clip.t_end_s) + 5);
+  document.getElementById("videoHeading").textContent = "Session video";
+  document.getElementById("videoWindow").textContent = `${fmtTime(start)}–${fmtTime(stop)}`;
+  markClip(index, "context");
+  afterMetadata(action, () => {
+    video.currentTime = start;
+    state.stopAt = stop;
+    video.play().catch(() => {});
+  });
   logEvent("feedback_clip_played", { clip_index: index, playback_start_s: start, playback_end_s: stop });
 }
 
-function jumpToSignal(index, scrollToVideo) {
-  const item = feedbackItems().find(row => row.feedback_id === state.selectedId);
-  const clip = item?.clips?.[index];
+function jumpToKeyframe(clip, title, index) {
+  const keyframe = keyframeFor(clip);
+  if (!keyframe) return;
+  const action = beginMediaAction();
   const video = document.getElementById("sessionVideo");
-  if (!item || !clip || !clip.exact_signal_frame || !state.experience.media?.available) return;
-  const signalTime = Number(clip.signal_time_s);
+  const image = document.getElementById("keyframeImage");
+  const status = document.getElementById("keyframeStatus");
+  video.pause();
   state.currentClipIndex = index;
   state.stopAt = null;
-  document.getElementById("videoHeading").textContent = `${anatomyLabel(clip.anatomy)} review frame`;
-  document.getElementById("videoWindow").textContent = `Key frame · ${fmtTime(signalTime)}`;
-  document.querySelectorAll("[data-clip-index], [data-signal-index]").forEach(button => {
-    const buttonIndex = button.dataset.clipIndex ?? button.dataset.signalIndex;
-    button.classList.toggle("active", Number(buttonIndex) === index);
-  });
-  const seek = () => {
-    video.pause();
-    video.currentTime = signalTime;
-    if (scrollToVideo) document.getElementById("videoCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  state.keyframeIntent = true;
+  document.getElementById("videoHeading").textContent = "Session video";
+  document.getElementById("videoWindow").textContent = `Key frame · ${fmtTime(keyframe.time)}`;
+  document.getElementById("keyframeCaption").textContent = `Paused · ${fmtTime(keyframe.time)}`;
+  document.getElementById("returnToVideo").classList.toggle("hidden", !state.experience.media?.available);
+  markClip(index, "keyframe");
+  status.textContent = "Loading key frame…";
+  status.classList.remove("hidden");
+  image.alt = `${title} — key frame at ${fmtTime(keyframe.time)}`;
+  image.onload = () => {
+    if (action !== state.mediaAction) return;
+    document.getElementById("keyframeOverlay").classList.remove("hidden");
+    status.classList.add("hidden");
+    video.setAttribute("aria-hidden", "true");
+    video.setAttribute("tabindex", "-1");
   };
-  if (video.readyState >= 1) seek();
-  else video.addEventListener("loadedmetadata", seek, { once: true });
+  image.onerror = () => {
+    if (action !== state.mediaAction) return;
+    status.textContent = state.experience.media?.available
+      ? "This key frame could not be loaded. You can still play the surrounding video."
+      : "This key frame could not be loaded.";
+    document.getElementById("videoWindow").textContent = `Review moment · ${fmtTime(keyframe.time)}`;
+  };
+  image.src = keyframe.url;
+  if (state.experience.media?.available) afterMetadata(action, () => {
+    const time = Number.isFinite(video.duration) ? Math.min(keyframe.time, video.duration) : keyframe.time;
+    state.keyframeSeek = time;
+    video.currentTime = time;
+  });
   logEvent("feedback_signal_frame_opened", {
     clip_index: index,
-    signal_time_s: signalTime,
+    signal_time_s: keyframe.time,
     signal_frame_idx: clip.signal_frame_idx,
     anatomy: clip.anatomy,
   });
@@ -380,16 +419,32 @@ function bindVideo() {
   if (state.videoBound) return;
   state.videoBound = true;
   const video = document.getElementById("sessionVideo");
-  video.addEventListener("play", () => logEvent("video_play", {
-    current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
-  }));
+  video.addEventListener("play", () => {
+    if (state.reviewView !== "event-based" || document.getElementById("experiencePanel").classList.contains("hidden")) {
+      video.pause();
+      return;
+    }
+    returnToVideo();
+    logEvent("video_play", {
+      current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
+    });
+  });
   video.addEventListener("pause", () => logEvent("video_pause", {
     current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
   }));
-  video.addEventListener("seeked", () => logEvent("video_seek", {
-    current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
-  }));
+  document.getElementById("returnToVideo").addEventListener("click", returnToVideo);
+  video.addEventListener("seeking", () => {
+    if (state.keyframeSeek != null && Math.abs(video.currentTime - state.keyframeSeek) < .001) return;
+    returnToVideo();
+  });
+  video.addEventListener("seeked", () => {
+    state.keyframeSeek = null;
+    logEvent("video_seek", {
+      current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
+    });
+  });
   video.addEventListener("timeupdate", () => {
+    eventReview.setTime(video.currentTime);
     if (state.stopAt != null && video.currentTime >= state.stopAt) {
       state.stopAt = null;
       video.pause();
@@ -398,335 +453,80 @@ function bindVideo() {
 }
 
 function renderExperience() {
-  renderProcedureMap();
-  renderFocusList();
   const video = document.getElementById("sessionVideo");
-  const referenceVideo = document.getElementById("referenceVideo");
   if (state.experience.media?.available) {
     video.src = state.experience.media.url;
-    referenceVideo.src = state.experience.media.url;
     video.classList.remove("hidden");
-    referenceVideo.classList.remove("hidden");
     document.getElementById("videoUnavailable").classList.add("hidden");
   } else {
     video.classList.add("hidden");
-    referenceVideo.classList.add("hidden");
     document.getElementById("videoUnavailable").classList.remove("hidden");
   }
   bindVideo();
-  renderExpertMoments();
-  const first = feedbackItems()[0];
-  if (first) selectFeedback(first.feedback_id, false, "automatic_first_item");
+  eventReview.render();
 }
 
-function coverageLabel(value) {
-  return {
-    missed: "Missed by the automated feedback",
-    partial: "Partly addressed",
-    addressed: "Already addressed",
-    unsure: "Coverage unsure",
-  }[value] || value;
-}
-
-function renderExpertMoments() {
-  const root = document.getElementById("expertMomentList");
-  if (!state.expertMoments.length) {
-    root.innerHTML = `<p class="no-expert-moments">No additional expert coaching moments marked yet.</p>`;
-    return;
-  }
-  root.innerHTML = `
-    <h4>Expert-added moments (${state.expertMoments.length})</h4>
-    ${state.expertMoments.map(moment => `
-      <article class="expert-moment-row">
-        <button class="moment-time-button" type="button" data-saved-moment-time="${Number(moment.t_video_s)}">${fmtTime(moment.t_video_s)}</button>
-        <div class="expert-moment-content">
-          <div class="moment-tags"><span>${escapeHtml(moment.category)}</span><span>${escapeHtml(moment.importance)} priority</span><span>${escapeHtml(coverageLabel(moment.system_coverage))}</span></div>
-          ${moment.observation ? `<p><strong>Observation:</strong> ${escapeHtml(moment.observation)}</p>` : ""}
-          ${moment.coaching_message ? `<p><strong>Coaching:</strong> ${escapeHtml(moment.coaching_message)}</p>` : ""}
-          ${moment.audio?.url ? `<audio controls preload="metadata" src="${escapeHtml(moment.audio.url)}"></audio>` : ""}
-        </div>
-        <button class="text-button delete-moment-button" type="button" data-delete-moment="${escapeHtml(moment.moment_id)}">Remove</button>
-      </article>
-    `).join("")}`;
-  root.querySelectorAll("[data-saved-moment-time]").forEach(button => button.addEventListener("click", () => {
-    const video = document.getElementById("sessionVideo");
-    video.pause();
-    video.currentTime = Number(button.dataset.savedMomentTime);
-    video.scrollIntoView({ behavior: "smooth", block: "center" });
-  }));
-  root.querySelectorAll("[data-delete-moment]").forEach(button => button.addEventListener("click", async () => {
-    if (!window.confirm("Remove this expert-added coaching moment and its local audio recording?")) return;
-    button.disabled = true;
-    try {
-      await api("/api/expert-study/delete-coaching-moment", {
-        participant_id: state.participantId,
-        moment_id: button.dataset.deleteMoment,
-      });
-      state.expertMoments = state.expertMoments.filter(row => row.moment_id !== button.dataset.deleteMoment);
-      renderExpertMoments();
-      renderProcedureMap();
-      showToast("Coaching moment removed");
-    } catch (error) {
-      button.disabled = false;
-      showToast(error.message);
-    }
-  }));
-}
-
-function preferredAudioMimeType() {
-  if (!window.MediaRecorder) return "";
-  return ["audio/webm;codecs=opus", "audio/mp4", "audio/ogg;codecs=opus", "audio/webm"]
-    .find(type => MediaRecorder.isTypeSupported(type)) || "";
-}
-
-function releaseRecorderStream() {
-  const stream = state.mediaRecorder?.stream;
-  if (stream) stream.getTracks().forEach(track => track.stop());
-}
-
-function resetRecording() {
-  if (state.mediaRecorder?.state === "recording") {
-    state.mediaRecorder.ondataavailable = null;
-    state.mediaRecorder.onstop = null;
-    state.mediaRecorder.stop();
-  }
-  releaseRecorderStream();
-  state.mediaRecorder = null;
-  state.audioChunks = [];
-  state.audioBlob = null;
-  state.audioDuration = 0;
-  state.audioStartedAt = null;
-  if (state.audioTimer) window.clearInterval(state.audioTimer);
-  state.audioTimer = null;
-  if (state.audioPreviewUrl) URL.revokeObjectURL(state.audioPreviewUrl);
-  state.audioPreviewUrl = null;
-  const preview = document.getElementById("recordingPreview");
-  preview.removeAttribute("src");
-  preview.classList.add("hidden");
-  document.getElementById("recordingStatus").textContent = "Optional · stored only in this local study folder";
-  document.getElementById("startRecordingButton").classList.remove("hidden");
-  document.getElementById("stopRecordingButton").classList.add("hidden");
-  document.getElementById("discardRecordingButton").classList.add("hidden");
-}
-
-function openExpertMomentForm() {
-  const video = document.getElementById("sessionVideo");
-  video.pause();
-  state.stopAt = null;
-  state.momentTime = Number((video.currentTime || 0).toFixed(3));
-  const form = document.getElementById("expertMomentForm");
-  form.reset();
-  document.getElementById("momentImportance").value = "medium";
-  document.getElementById("momentTimeLabel").textContent = fmtTime(state.momentTime);
-  document.getElementById("referenceMomentTime").textContent = fmtTime(state.momentTime);
-  document.getElementById("momentFormError").classList.add("hidden");
-  resetRecording();
-  document.getElementById("expertMomentWorkspace").classList.remove("hidden");
-  seekReferenceToMarkedFrame();
-  document.getElementById("expertMomentWorkspace").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function closeExpertMomentForm() {
-  resetRecording();
-  const referenceVideo = document.getElementById("referenceVideo");
-  referenceVideo.pause();
-  state.referenceStopAt = null;
-  document.getElementById("expertMomentWorkspace").classList.add("hidden");
-}
-
-function seekReferenceToMarkedFrame() {
-  const video = document.getElementById("referenceVideo");
-  state.referenceStopAt = null;
-  const seek = () => {
-    video.pause();
-    const duration = Number.isFinite(video.duration) ? video.duration : state.momentTime;
-    video.currentTime = Math.min(Math.max(0, state.momentTime), duration || state.momentTime);
-  };
-  if (video.readyState >= 1) seek();
-  else video.addEventListener("loadedmetadata", seek, { once: true });
-}
-
-function replayReferenceMoment() {
-  const video = document.getElementById("referenceVideo");
-  const duration = Number.isFinite(video.duration)
-    ? video.duration
-    : Number(state.experience?.media?.duration_s || state.momentTime + 4);
-  const start = Math.max(0, state.momentTime - 4);
-  state.referenceStopAt = Math.min(duration, state.momentTime + 4);
-  const play = () => {
-    video.currentTime = start;
-    video.play().catch(() => {});
-  };
-  if (video.readyState >= 1) play();
-  else video.addEventListener("loadedmetadata", play, { once: true });
-}
-
-async function startRecording() {
-  const error = document.getElementById("momentFormError");
-  error.classList.add("hidden");
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    error.textContent = "This embedded browser does not provide microphone recording. Open the same local study page in Chrome, Edge, or Safari and allow microphone access; typing remains available here.";
-    error.classList.remove("hidden");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = preferredAudioMimeType();
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    state.mediaRecorder = recorder;
-    state.audioChunks = [];
-    state.audioBlob = null;
-    state.audioStartedAt = Date.now();
-    recorder.addEventListener("dataavailable", event => {
-      if (event.data.size) state.audioChunks.push(event.data);
-    });
-    recorder.addEventListener("stop", () => {
-      state.audioDuration = Math.min(300, (Date.now() - state.audioStartedAt) / 1000);
-      state.audioBlob = new Blob(state.audioChunks, { type: recorder.mimeType || mimeType || "audio/webm" });
-      releaseRecorderStream();
-      if (state.audioTimer) window.clearInterval(state.audioTimer);
-      state.audioTimer = null;
-      state.audioPreviewUrl = URL.createObjectURL(state.audioBlob);
-      const preview = document.getElementById("recordingPreview");
-      preview.src = state.audioPreviewUrl;
-      preview.classList.remove("hidden");
-      document.getElementById("recordingStatus").textContent = `Recorded ${state.audioDuration.toFixed(1)} seconds · ready to save`;
-      document.getElementById("startRecordingButton").classList.add("hidden");
-      document.getElementById("stopRecordingButton").classList.add("hidden");
-      document.getElementById("discardRecordingButton").classList.remove("hidden");
-    }, { once: true });
-    recorder.start(1000);
-    logEvent("audio_recording_started", { t_video_s: state.momentTime }, null);
-    document.getElementById("startRecordingButton").classList.add("hidden");
-    document.getElementById("stopRecordingButton").classList.remove("hidden");
-    document.getElementById("recordingStatus").textContent = "Recording… 0:00";
-    state.audioTimer = window.setInterval(() => {
-      const elapsed = (Date.now() - state.audioStartedAt) / 1000;
-      document.getElementById("recordingStatus").textContent = `Recording… ${fmtTime(elapsed)}`;
-      if (elapsed >= 180 && recorder.state === "recording") recorder.stop();
-    }, 250);
-  } catch (err) {
-    const reason = String(err?.name || "");
-    error.textContent = {
-      NotAllowedError: "Microphone permission was blocked. Allow microphone access for this localhost page, or open it from the desktop shortcut in Chrome, Edge, or Safari.",
-      NotFoundError: "No microphone was detected. Connect or enable a microphone, or continue by typing.",
-      NotReadableError: "The microphone is currently unavailable or in use by another application. Close the other application and try again.",
-      SecurityError: "This browser blocked microphone access. Open the study from the desktop shortcut in Chrome, Edge, or Safari.",
-    }[reason] || "Microphone recording is not available in this browser. Open the study from the desktop shortcut in Chrome, Edge, or Safari, or continue by typing.";
-    error.classList.remove("hidden");
-  }
-}
-
-function stopRecording() {
-  if (state.mediaRecorder?.state === "recording") state.mediaRecorder.stop();
-}
-
-function blobToBase64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => resolve(String(reader.result).split(",", 2)[1] || ""), { once: true });
-    reader.addEventListener("error", () => reject(new Error("Unable to read the audio recording")), { once: true });
-    reader.readAsDataURL(blob);
-  });
-}
-
-async function saveExpertMoment(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const button = form.querySelector("button[type=submit]");
-  const error = document.getElementById("momentFormError");
-  const data = new FormData(form);
-  const observation = String(data.get("observation") || "").trim();
-  const coachingMessage = String(data.get("coaching_message") || "").trim();
-  if (!observation && !coachingMessage && !state.audioBlob) {
-    error.textContent = "Type an observation, coaching message, or record a voice note.";
-    error.classList.remove("hidden");
-    return;
-  }
-  if (state.mediaRecorder?.state === "recording") {
-    error.textContent = "Stop the recording before saving this coaching moment.";
-    error.classList.remove("hidden");
-    return;
-  }
-  button.disabled = true;
-  error.classList.add("hidden");
-  try {
-    const audioBase64 = state.audioBlob ? await blobToBase64(state.audioBlob) : "";
-    const result = await api("/api/expert-study/coaching-moment", {
-      participant_id: state.participantId,
-      t_video_s: state.momentTime,
-      category: data.get("category"),
-      importance: data.get("importance"),
-      system_coverage: data.get("system_coverage"),
-      observation,
-      coaching_message: coachingMessage,
-      audio_base64: audioBase64,
-      audio_mime_type: state.audioBlob?.type || "",
-      audio_duration_s: state.audioBlob ? state.audioDuration : null,
-    });
-    state.expertMoments.push(result.moment);
-    state.expertMoments.sort((a, b) => Number(a.t_video_s) - Number(b.t_video_s));
-    closeExpertMomentForm();
-    renderExpertMoments();
-    renderProcedureMap();
-    showToast("Expert coaching moment saved locally");
-  } catch (err) {
-    error.textContent = err.message;
-    error.classList.remove("hidden");
-    button.disabled = false;
-  }
-}
-
-function scaleQuestion(name, title) {
-  return `<div class="question-block"><p class="question-title">${escapeHtml(title)}</p><div class="choice-row scale-row">
-    ${[1, 2, 3, 4, 5].map((value, index) => `<label><input type="radio" name="${name}" value="${value}" ${index === 0 ? "required" : ""} /><span>${value}</span></label>`).join("")}
-  </div><div class="scale-anchors"><span>Low</span><span>High</span></div></div>`;
-}
-
-function openReflection() {
+function renderReviewFlow() {
+  const flow = state.reviewFlow;
+  pauseReviewMedia();
   document.getElementById("experiencePanel").classList.add("hidden");
-  document.getElementById("reflectionPanel").classList.remove("hidden");
-  setHeaderStatus("Overall reflection");
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  document.getElementById("questionnairePanel").classList.add("hidden");
+  document.getElementById("readyPanel").classList.add("hidden");
+  if (flow.stage === "complete") {
+    showCompletion();
+    return;
+  }
+  document.getElementById("reviewProgress").classList.remove("hidden");
+  document.getElementById("reviewOrder").innerHTML = flow.order.map((view, index) =>
+    `<li${index === flow.index ? ' aria-current="step"' : ""}><span>${index + 1}</span>${escapeHtml(reviewViewLabel(view))}</li>`
+  ).join("");
+  const label = reviewViewLabel(flow.current_view);
+  const step = `${flow.index + 1} of ${flow.order.length}`;
+  document.getElementById("reviewProgressLabel").textContent = `${flow.stage === "questionnaire" ? "Questionnaire" : "Review"} ${step} · ${label}`;
+  if (flow.stage === "questionnaire") {
+    document.getElementById("questionnaireStep").textContent = `Questionnaire ${step}`;
+    document.getElementById("questionnaireTitle").textContent = `Questionnaire · ${label}`;
+    document.getElementById("questionnairePanel").classList.remove("hidden");
+    setHeaderStatus(`Questionnaire ${flow.index + 1} of ${flow.order.length}`);
+  } else {
+    document.getElementById("experiencePanel").classList.remove("hidden");
+    setHeaderStatus(`Review ${step} · ${label}`);
+    selectReviewView(flow.current_view);
+  }
 }
 
-function returnToExperience() {
-  document.getElementById("reflectionPanel").classList.add("hidden");
-  document.getElementById("experiencePanel").classList.remove("hidden");
-  setHeaderStatus("Feedback ready");
-}
-
-async function submitReflection(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const button = form.querySelector("button[type=submit]");
-  const error = document.getElementById("reflectionError");
-  button.disabled = true;
+async function advanceReviewFlow() {
+  if (state.reviewNextPending || !state.reviewFlow || state.reviewFlow.stage === "complete") return;
+  const previous = state.reviewFlow;
+  const error = document.getElementById(previous.stage === "questionnaire" ? "questionnaireError" : "reviewNextError");
+  const buttons = [document.getElementById("finishExperienceButton"), document.getElementById("questionnaireNextButton")];
+  state.reviewNextPending = true;
+  buttons.forEach(button => { button.disabled = true; });
   error.classList.add("hidden");
   try {
-    const data = new FormData(form);
-    const answers = Object.fromEntries([
-      "workflow_clarity", "feedback_usefulness", "debrief_fit", "would_use",
-      "most_useful", "missing_or_concerning",
-    ].map(field => [field, data.get(field) || ""]));
-    const result = await api("/api/expert-study/complete-experience", {
+    const result = await api("/api/expert-study/review-next", {
       participant_id: state.participantId,
-      answers,
+      view: previous.current_view,
+      stage: previous.stage,
     });
-    state.start.case_completed = true;
+    setReviewFlow(result.review_flow);
+    state.start.case_completed = result.case_completed;
     state.start.case.next_case_url = result.next_case_url;
     state.start.completion_code = result.completion_code;
-    document.getElementById("reflectionPanel").classList.add("hidden");
-    showCompletion();
+    renderReviewFlow();
+    window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
     error.textContent = err.message;
     error.classList.remove("hidden");
-    button.disabled = false;
+  } finally {
+    state.reviewNextPending = false;
+    buttons.forEach(button => { button.disabled = false; });
   }
 }
 
 function showCompletion() {
-  ["accessPanel", "readyPanel", "processingPanel", "experiencePanel", "reflectionPanel"].forEach(id => {
+  pauseReviewMedia();
+  ["accessPanel", "readyPanel", "processingPanel", "experiencePanel", "questionnairePanel", "reviewProgress"].forEach(id => {
     document.getElementById(id).classList.add("hidden");
   });
   document.getElementById("completionPanel").classList.remove("hidden");
@@ -734,7 +534,7 @@ function showCompletion() {
   const nextButton = document.getElementById("nextCaseButton");
   const codeBlock = document.getElementById("completionCodeBlock");
   if (state.start.case.next_case_url) {
-    document.getElementById("completionMessage").textContent = "Your workflow reflection was saved. Continue when you are ready to experience the next recorded session.";
+    document.getElementById("completionMessage").textContent = "Both review views are complete. Continue when you are ready to review the next recorded session.";
     nextButton.classList.remove("hidden");
     codeBlock.classList.add("hidden");
   } else {
@@ -749,15 +549,10 @@ function showCompletion() {
 function goToNextCase() {
   const next = new URL(state.start.case.next_case_url, window.location.href);
   next.searchParams.set("participant_id", state.participantId);
+  next.searchParams.set("first_review_view", state.firstReviewView);
   logEvent("next_case_opened", { next_case_index: state.start.case.index + 1 }, null);
   window.location.assign(next.toString());
 }
-
-document.getElementById("reflectionScales").innerHTML = [
-  scaleQuestion("workflow_clarity", "How clear was the end-to-end workflow?"),
-  scaleQuestion("feedback_usefulness", "How useful was the resulting feedback?"),
-  scaleQuestion("debrief_fit", "How well could this fit a simulator debrief?")
-].join("");
 
 document.getElementById("accessForm").addEventListener("submit", async event => {
   event.preventDefault();
@@ -767,12 +562,13 @@ document.getElementById("accessForm").addEventListener("submit", async event => 
   error.classList.add("hidden");
   try {
     const participantId = document.getElementById("participantId").value.trim();
-    const firstCaseUrl = await firstCaseUrlForAccess(participantId);
+    const firstReviewView = new FormData(event.currentTarget).get("first_review_view");
+    const firstCaseUrl = await firstCaseUrlForAccess(participantId, firstReviewView);
     if (firstCaseUrl) {
       window.location.assign(firstCaseUrl);
       return;
     }
-    await enterStudy(participantId);
+    await enterStudy(participantId, firstReviewView);
   } catch (err) {
     error.textContent = err.message;
     error.classList.remove("hidden");
@@ -780,34 +576,38 @@ document.getElementById("accessForm").addEventListener("submit", async event => 
   }
 });
 document.getElementById("startAnalysisButton").addEventListener("click", startAnalysis);
-document.getElementById("finishExperienceButton").addEventListener("click", openReflection);
-document.getElementById("returnToExperienceButton").addEventListener("click", returnToExperience);
-document.getElementById("reflectionForm").addEventListener("submit", submitReflection);
+document.getElementById("finishExperienceButton").addEventListener("click", advanceReviewFlow);
+document.getElementById("questionnaireNextButton").addEventListener("click", advanceReviewFlow);
 document.getElementById("nextCaseButton").addEventListener("click", goToNextCase);
-document.getElementById("openMomentButton").addEventListener("click", openExpertMomentForm);
-document.getElementById("cancelMomentButton").addEventListener("click", closeExpertMomentForm);
-document.getElementById("startRecordingButton").addEventListener("click", startRecording);
-document.getElementById("stopRecordingButton").addEventListener("click", stopRecording);
-document.getElementById("discardRecordingButton").addEventListener("click", resetRecording);
-document.getElementById("expertMomentForm").addEventListener("submit", saveExpertMoment);
-document.getElementById("replayReferenceButton").addEventListener("click", replayReferenceMoment);
-document.getElementById("returnToMarkedFrameButton").addEventListener("click", seekReferenceToMarkedFrame);
-document.getElementById("referenceVideo").addEventListener("timeupdate", event => {
-  if (state.referenceStopAt != null && event.currentTarget.currentTime >= state.referenceStopAt) {
-    state.referenceStopAt = null;
-    event.currentTarget.pause();
-    event.currentTarget.currentTime = state.momentTime;
+document.getElementById("summaryReviewFrame").addEventListener("load", event => {
+  state.summaryResizeObserver?.disconnect();
+  const content = event.currentTarget.contentDocument?.querySelector("main");
+  if (content) {
+    state.summaryResizeObserver = new ResizeObserver(resizeSummaryFrame);
+    state.summaryResizeObserver.observe(content);
   }
+  const active = state.reviewView === "summary" && !document.getElementById("experiencePanel").classList.contains("hidden");
+  event.currentTarget.contentWindow?.postMessage({ type: "study-review-visibility", active, viewport_height: window.innerHeight }, window.location.origin);
+  syncReviewVideo(event.currentTarget.contentDocument?.getElementById("sessionVideo"), state.summaryPendingTime);
+  state.summaryPendingTime = null;
+  resizeSummaryFrame();
+});
+window.addEventListener("resize", () => {
+  const frame = document.getElementById("summaryReviewFrame");
+  const active = state.reviewView === "summary" && !document.getElementById("experiencePanel").classList.contains("hidden");
+  if (frame.hasAttribute("src")) frame.contentWindow?.postMessage({ type: "study-review-visibility", active, viewport_height: window.innerHeight }, window.location.origin);
 });
 document.getElementById("supportDetails").addEventListener("toggle", event => {
   if (event.currentTarget.open) logEvent("support_details_opened");
 });
 
 const participantFromUrl = new URL(window.location.href).searchParams.get("participant_id");
+const firstReviewFromUrl = reviewViewName(new URL(window.location.href).searchParams.get("first_review_view"));
+document.querySelector(`input[name="first_review_view"][value="${firstReviewFromUrl}"]`).checked = true;
 if (participantFromUrl) {
   document.getElementById("participantId").value = participantFromUrl;
   document.getElementById("studyReady").checked = true;
-  enterStudy(participantFromUrl).catch(err => {
+  enterStudy(participantFromUrl, firstReviewFromUrl).catch(err => {
     const error = document.getElementById("accessError");
     error.textContent = err.message;
     error.classList.remove("hidden");

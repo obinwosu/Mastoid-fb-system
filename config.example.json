@@ -5,5 +5,6 @@
   "correction_table": "references/geometry_corrections_v3.csv",
   "phase_model_bundle": "models/e71_full_recording_holdout",
   "video_fps": 10.0,
-  "motion_reference": "references/r4_motion_windows_v6.json"
+  "motion_reference": "references/r4_motion_windows_v6.json",
+  "phase_summary_reference": "references/r4_phase_summary_v1.json"
 }

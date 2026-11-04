@@ -23,7 +23,7 @@ from evidence_system.motion_comparison import (
     build_expert_reference,
     build_motion_windows,
 )
-from evidence_system.web import _handler
+from evidence_system.web import FeedbackService, _handler
 
 
 def sha(path):
@@ -35,9 +35,9 @@ def dump(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def bound_case(tmp_path, *, schema="legacy", seconds=8):
+def bound_case(tmp_path, *, schema="legacy", seconds=8, mode="recommendations"):
     root = tmp_path / "run"
-    service = make_service(root)
+    service = make_service(root, mode=mode)
     raw = tmp_path / "raw"
     raw.mkdir()
     source = raw / "chunk.hdf5"
@@ -234,6 +234,35 @@ def test_old_archive_coaching_remains_without_fabricated_native_image(tmp_path):
     clip = first_clip(service)
     assert clip["anchor_t_s"] == 1.5 and not clip["keyframe_available"]
     assert "keyframe_url" not in clip
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_study_analysis_preserves_native_keyframe_availability(tmp_path, bound):
+    service, _, source, _ = bound_case(tmp_path, mode="expert-study")
+    if not bound:
+        with h5py.File(source, "r+") as handle:
+            handle["data/l_img"][15] = 0
+    service.start_study("Layout-check")
+    clip = service.analyze_study("Layout-check")["feedback"][0]["clips"][0]
+    assert clip["keyframe_available"] is bound
+    if bound:
+        assert clip["keyframe_time_s"] == 1.5
+        assert clip["keyframe_frame_idx_global"] == 15
+        token = parse_qs(urlparse(clip["keyframe_url"]).query)["clip_id"][0]
+        assert service.original_review_frame(token).startswith(b"\x89PNG")
+    else:
+        assert "keyframe_url" not in clip
+        assert clip["keyframe_reason"] == "original_source_unavailable_or_unbound"
+
+
+def test_study_clips_preserve_cross_phase_labels_without_fabricating_keyframes():
+    clip = FeedbackService._study_clips({
+        "phase": "session",
+        "review_clips": [{"t_start_s": 2, "t_end_s": 4, "phases": ["antrum", "incus"]}],
+    })[0]
+    assert clip["phases"] == ["antrum", "incus"]
+    assert "keyframe_url" not in clip
+    assert "keyframe_time_s" not in clip
 
 
 def test_endpoint_cannot_accept_file_or_arbitrary_index(tmp_path):

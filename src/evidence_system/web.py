@@ -49,6 +49,8 @@ EXPERT_STUDY_EVENT_TYPES = {
     "next_case_opened",
     "analysis_started",
     "analysis_completed",
+    "review_view_opened",
+    "review_step_advanced",
     "feedback_item_opened",
     "feedback_clip_played",
     "feedback_signal_frame_opened",
@@ -153,7 +155,10 @@ class ExpertStudyStore:
         participant_id: str,
         run_id: str,
         stimulus_ids: Sequence[str],
+        first_review_view: str = "event-based",
     ) -> dict[str, Any]:
+        if first_review_view not in {"event-based", "summary"}:
+            raise ValueError("First review view must be event-based or summary")
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
         now = datetime.now(UTC).isoformat()
@@ -168,15 +173,69 @@ class ExpertStudyStore:
                 "stimulus_ids": list(stimulus_ids),
                 "started_at": existing.get("started_at") or now,
                 "last_opened_at": now,
+                "first_review_view": existing.get("first_review_view") or first_review_view,
                 "case_completed_at": existing.get("case_completed_at"),
                 "interface_version_at_start": (
                     existing.get("interface_version_at_start") or self.interface_version
                 ),
                 "interface_version_last_opened": self.interface_version,
             }
+            if "review_flow" not in row:
+                first = row["first_review_view"]
+                row["review_flow"] = {
+                    "schema": "sequential_review_v1",
+                    "order": [first, "summary" if first == "event-based" else "event-based"],
+                    "stage": "review",
+                    "index": 0,
+                    "current_view": first,
+                    "questionnaires": {},
+                    "transitions": [],
+                    "created_at": now,
+                    "completed_at": None,
+                }
             sessions[key] = row
             self._write_unlocked(payload)
         return row
+
+    def advance_review(
+        self, *, participant_id: str, run_id: str, view: str, stage: str
+    ) -> dict[str, Any]:
+        """Advance one acknowledged step; placeholder continuation supplies no answers."""
+        participant_id = normalize_participant_id(participant_id)
+        if view not in {"event-based", "summary"} or stage not in {"review", "questionnaire"}:
+            raise ValueError("Invalid review step")
+        with self._lock:
+            payload = self._read_unlocked()
+            session = payload["expert_study"]["sessions"].get(
+                self._session_key(participant_id, run_id)
+            )
+            if not session or not session.get("analysis_completed_at"):
+                raise ValueError("Complete automatic analysis before continuing the review")
+            flow = session.get("review_flow")
+            if not flow or flow.get("current_view") != view or flow.get("stage") != stage:
+                raise ValueError("The review step has changed; reload to resume the current step")
+            now = datetime.now(UTC).isoformat()
+            if stage == "review":
+                flow["stage"] = "questionnaire"
+            else:
+                flow["questionnaires"][view] = {
+                    "status": "placeholder_continued",
+                    "continued_at": now,
+                    "answers": None,
+                }
+                flow["index"] += 1
+                if flow["index"] < len(flow["order"]):
+                    flow["stage"] = "review"
+                    flow["current_view"] = flow["order"][flow["index"]]
+                else:
+                    flow.update(stage="complete", current_view=None, completed_at=now)
+                    # Keep legacy completion/response history when introducing this flow.
+                    session["case_completed_at"] = session.get("case_completed_at") or now
+            flow["transitions"].append(
+                {"view": view, "from_stage": stage, "to_stage": flow["stage"], "at": now}
+            )
+            self._write_unlocked(payload)
+        return flow
 
     def add_event(
         self,
@@ -206,6 +265,12 @@ class ExpertStudyStore:
         with self._lock:
             payload = self._read_unlocked()
             payload["expert_study"]["events"].append(row)
+            if event_type == "analysis_completed":
+                session = payload["expert_study"]["sessions"].get(
+                    self._session_key(participant_id, run_id)
+                )
+                if session is not None:
+                    session["analysis_completed_at"] = row["recorded_at"]
             self._write_unlocked(payload)
         return row
 
@@ -389,6 +454,7 @@ class FeedbackService:
         display_name: str,
         interface_version: str,
         study_state_path: Path | None = None,
+        phase_reference_path: Path | None = None,
     ) -> None:
         if mode not in APP_MODES:
             raise ValueError(f"Unsupported app mode: {mode}")
@@ -410,6 +476,7 @@ class FeedbackService:
         self._review_lock = threading.RLock()
         self._motion_cache: tuple | None = None
         self.cohort_benchmark_path = cohort_benchmark_path
+        self.phase_reference_path = phase_reference_path
         self.available_runs = [dict(row) for row in available_runs]
         self.display_name = display_name
         self.interface_version = interface_version
@@ -445,35 +512,7 @@ class FeedbackService:
             max((float(row["t_end_s"]) for row in events), default=0.0),
             float(media.get("duration_s") or 0.0),
         )
-        ray_dir = self.ray_v3_dir
-        ray_source = "explicit" if ray_dir is not None else "not_configured"
-        if ray_dir is None:
-            candidate = (self.artifact_root / "stages" / "08_under_ledge_ray").resolve()
-            if candidate.is_relative_to(self.artifact_root) and candidate.is_dir():
-                ray_dir = candidate
-                ray_source = "generated_sibling"
-        ray_v3 = build_ray_v3_view(self.run_id, ray_dir)
-        if ray_v3.get("available"):
-            try:
-                strict_binding = self._validate_ray_binding(ray_v3, summary["run"])
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                ray_v3 = build_ray_v3_view(self.run_id, None)
-                ray_v3["reason"] = "strict_ray_binding_mismatch"
-                ray_v3["binding_validation"] = {"status": "rejected", "reason": str(exc)}
-                ray_v3["detection_status"].update(
-                    status="unavailable",
-                    reason="strict_ray_binding_mismatch",
-                    message=(
-                        "Exposure screening is unavailable because its evidence "
-                        "does not match this recording."
-                    ),
-                )
-            else:
-                if strict_binding:
-                    ray_v3["binding_validation"] = {
-                        "status": "verified",
-                        "authority": "database_source_manifest_hash",
-                    }
+        ray_v3, ray_source = self._current_visibility(summary["run"])
         benchmark = load_cohort_benchmark(self.cohort_benchmark_path)
         motion = None
         if benchmark and benchmark.get("schema") == "motion_expert_reference_v1":
@@ -508,6 +547,207 @@ class FeedbackService:
             "under_ledge_screening": ray_v3,
             "review_candidates": ray_v3["review_candidates"],
             "media": media,
+        }
+
+    def _current_visibility(self, run: Mapping[str, Any]) -> tuple[dict, str]:
+        """Share the existing verified detector across both read-only review pages."""
+        ray_dir = self.ray_v3_dir
+        ray_source = "explicit" if ray_dir is not None else "not_configured"
+        if ray_dir is None:
+            candidate = (self.artifact_root / "stages" / "08_under_ledge_ray").resolve()
+            if candidate.is_relative_to(self.artifact_root) and candidate.is_dir():
+                ray_dir = candidate
+                ray_source = "generated_sibling"
+        ray_v3 = build_ray_v3_view(self.run_id, ray_dir)
+        if ray_v3.get("available"):
+            try:
+                strict_binding = self._validate_ray_binding(ray_v3, run)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                ray_v3 = build_ray_v3_view(self.run_id, None)
+                ray_v3["reason"] = "strict_ray_binding_mismatch"
+                ray_v3["binding_validation"] = {"status": "rejected", "reason": str(exc)}
+                ray_v3["detection_status"].update(
+                    status="unavailable",
+                    reason="strict_ray_binding_mismatch",
+                    message=(
+                        "Exposure screening is unavailable because its evidence "
+                        "does not match this recording."
+                    ),
+                )
+            else:
+                if strict_binding:
+                    ray_v3["binding_validation"] = {
+                        "status": "verified",
+                        "authority": "database_source_manifest_hash",
+                    }
+        return ray_v3, ray_source
+
+    def _summary_safety_available(self, run: Mapping, context: Mapping) -> bool:
+        """Require the completed, source-bound geometry/event build before reporting zero."""
+        authority = context["audit"].get("geometry_provenance") or {}
+        historical = (
+            authority.get("status") == "verified_R4_v3_sources"
+            and authority.get("real_R4_validated") is True
+        )
+        current_model = (
+            authority.get("status") == "verified_anatomy_model_sources"
+            and authority.get("model_parameter_sources_verified") is True
+            and authority.get("real_R4_validated") is False
+            and authority.get("recording_geometry_verified") is False
+            and authority.get("geometry_quality") == "unverified_new_recording"
+        )
+        if not (historical or current_model):
+            return False
+        stages = context["stages"]
+        edt = json.loads((stages / "02_edt_enrichment/edt_manifest.json").read_text("utf-8"))
+        core = json.loads(context["core_path"].read_text("utf-8"))
+        if (
+            edt.get("geometry_provenance") != authority
+            or core.get("geometry_provenance") != authority
+            or edt.get("global_run_id") != run["global_run_id"]
+            or edt.get("ready_for_visibility_enrichment") is not True
+        ):
+            return False
+        with self.retriever._connect() as connection:
+            source = connection.execute(
+                "SELECT path,sha256 FROM generated_artifacts "
+                "WHERE global_run_id=? AND artifact_type='event_inventory'",
+                (run["global_run_id"],),
+            ).fetchone()
+        expected = (stages / "06_events/events.jsonl").resolve()
+        return bool(
+            source
+            and Path(source["path"]).resolve() == expected
+            and self._binding_sha256(expected) == source["sha256"]
+        )
+
+    def phase_summary(self, participant_id: str | None = None) -> dict[str, Any]:
+        """A whole-phase read-only view; no expert-source reads or new coaching rules."""
+        from .phase_summary import (
+            METRICS,
+            build_phase_motion,
+            compare_phase_motion,
+            load_phase_reference,
+        )
+        from .phase_summary_safety import build_phase_safety
+
+        study = None
+        if self.mode == "expert-study":
+            participant_id = normalize_participant_id(participant_id or "")
+            session = self._study().progress(participant_id, self.run_id)
+            if not session.get("analysis_completed_at"):
+                raise ValueError("Start the study and complete automatic analysis before review")
+            study = {
+                "participant_id": participant_id,
+                "first_review_view": session.get("first_review_view", "event-based"),
+            }
+        summary = self.retriever.get_run_summary(self.run_id)
+        run = summary["run"]
+        labels = {"early_surface": "Early drilling", "antrum": "Antrum", "incus": "Incus"}
+        aliases = {"speed_mm_s": "tool_speed_mm_s", "mean_stroke_length_mm": "stroke_length_mm"}
+        phases = []
+        for name, label in labels.items():
+            intervals = [
+                {key: row[key] for key in ("phase_id", "t_start_s", "t_end_s")}
+                for row in summary["phases"]
+                if row["phase_name"] == name
+            ]
+            phases.append(
+                {
+                    "phase_name": name,
+                    "label": label,
+                    "intervals": intervals,
+                    "duration_s": sum(row["t_end_s"] - row["t_start_s"] for row in intervals),
+                    "metrics": [
+                        {
+                            "key": aliases.get(key, key), "label": title, "unit": unit,
+                            "value": None, "available": False, "reason": "source_unavailable",
+                            "reference": {"available": False, "points": []},
+                        }
+                        for key, (title, unit) in METRICS.items()
+                    ],
+                }
+            )
+        diagnostics: dict[str, Any] = {}
+        reference = None
+        if self.phase_reference_path is not None:
+            try:
+                reference = load_phase_reference(self.phase_reference_path)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                diagnostics["reference_error"] = str(exc)
+        frames, context = [], None
+        comparison = None
+        try:
+            context = self._bound_review_context(run)
+            frames, provenance = self._motion_source_frames(run, context)
+            provenance["recording_id"] = self.run_id
+            current = build_phase_motion(
+                frames,
+                global_run_id=run["global_run_id"],
+                participant_id=run.get("participant_id") or None,
+                provenance=provenance,
+            )
+            comparison = compare_phase_motion(current, reference)
+            indexed = {row["phase_name"]: row for row in comparison["phases"]}
+            for phase in phases:
+                result = indexed.get(phase["phase_name"])
+                if result is not None:
+                    phase.update(
+                        intervals=result["intervals"],
+                        duration_s=result["duration_s"],
+                        coverage_fraction=result["coverage_fraction"],
+                        metrics=[
+                            {**item, "key": aliases.get(key, key)}
+                            for key, item in result["metrics"].items()
+                        ],
+                    )
+            diagnostics["motion_input_sha256"] = current["input_rows_sha256"]
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            diagnostics["motion_error"] = str(exc)
+        safety_available = False
+        if context is not None:
+            try:
+                safety_available = self._summary_safety_available(run, context)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                diagnostics["safety_error"] = str(exc)
+        # Summary totals must include all canonical events, without the coaching API's limit.
+        with self.retriever._connect() as connection:
+            records = connection.execute(
+                "SELECT e.*,p.phase_name FROM events e "
+                "LEFT JOIN phases p ON p.phase_id=e.phase_id WHERE e.global_run_id=? "
+                "ORDER BY e.t_start_s,e.event_id",
+                (run["global_run_id"],),
+            ).fetchall()
+            events = [self.retriever._event_row(connection, row) for row in records]
+        visibility, _ = self._current_visibility(run)
+        if (visibility.get("binding_validation") or {}).get("status") != "verified":
+            visibility = {"available": False}
+        safety = build_phase_safety(
+            phases, events, visibility, frames=frames, safety_available=safety_available
+        )
+        for phase in phases:
+            phase["safety"] = safety[phase["phase_name"]]
+        media = self.media_summary()
+        return {
+            "schema": "phase_summary_v1",
+            "study": study,
+            "run": {
+                "run_id": self.run_id, "display_name": self.display_name,
+                "duration_s": max(
+                    float(media.get("duration_s") or 0),
+                    max((row["t_end_s"] for row in summary["phases"]), default=0),
+                ),
+            },
+            "available_runs": self.available_runs,
+            "media": media,
+            "phases": phases,
+            "reference": {
+                "available": reference is not None,
+                "sha256": reference.get("artifact_sha256") if reference else None,
+                **(comparison["reference_summary"] if comparison is not None else {}),
+                "safety_available": False,
+            },
+            "diagnostics": diagnostics,
         }
 
     def _binding_sha256(self, path: Path) -> str:
@@ -839,6 +1079,55 @@ class FeedbackService:
                 raise ValueError("Original review frame is unavailable")
             return self._review_images[clip_id]
 
+    def _motion_source_frames(
+        self, run: Mapping[str, Any], context: Mapping[str, Any]
+    ) -> tuple[list[dict], dict]:
+        """Read canonical recorded signals with the existing DB/clock identity checks."""
+        with self.retriever._connect() as connection:
+            records = connection.execute(
+                "SELECT frame_idx,t_video_s,phase_id,observation_json FROM frames "
+                "WHERE global_run_id=? ORDER BY frame_idx",
+                (run["global_run_id"],),
+            ).fetchall()
+        frames = []
+        for index, record in enumerate(records):
+            row = json.loads(record["observation_json"])
+            if (
+                record["frame_idx"] != index
+                or row.get("frame_idx_global") != index
+                or row.get("t_video_s") != record["t_video_s"]
+                or row.get("phase_id") != record["phase_id"]
+            ):
+                raise ValueError("Current database observation identity differs")
+            frames.append(row)
+        if len(frames) != context["clock"].get("frame_count"):
+            raise ValueError("Motion frame count differs from the bound recording clock")
+        provenance = {
+            "pose_source": "canonical_vision_pose",
+            "position_unit": "m",
+            "phase_source_kind": "model_phase_prediction",
+            "phase_model_sha256": context["phase"].get("checkpoint_sha256"),
+            "clock_source": context["clock"]["source"],
+            "source_artifacts": [
+                {
+                    "kind": "frames",
+                    "path": str(self.retriever.db_path.resolve()),
+                    "sha256": self._binding_sha256(self.retriever.db_path),
+                },
+                {
+                    "kind": "phases",
+                    "path": str(context["phase_path"]),
+                    "sha256": context["phase_sha256"],
+                },
+                {
+                    "kind": "clock",
+                    "path": str(context["core_path"]),
+                    "sha256": self._binding_sha256(context["core_path"]),
+                },
+            ],
+        }
+        return frames, provenance
+
     def _current_motion_comparison(
         self, run: Mapping[str, Any], reference: Mapping[str, Any]
     ) -> dict:
@@ -884,49 +1173,7 @@ class FeedbackService:
             cache_key = tuple(identities)
             if self._motion_cache is not None and self._motion_cache[0] == cache_key:
                 return self._motion_cache[1]
-            with self.retriever._connect() as connection:
-                records = connection.execute(
-                    "SELECT frame_idx,t_video_s,phase_id,observation_json FROM frames "
-                    "WHERE global_run_id=? ORDER BY frame_idx",
-                    (run["global_run_id"],),
-                ).fetchall()
-            frames = []
-            for index, record in enumerate(records):
-                row = json.loads(record["observation_json"])
-                if (
-                    record["frame_idx"] != index
-                    or row.get("frame_idx_global") != index
-                    or row.get("t_video_s") != record["t_video_s"]
-                    or row.get("phase_id") != record["phase_id"]
-                ):
-                    raise ValueError("Current database observation identity differs")
-                frames.append(row)
-            if len(frames) != context["clock"].get("frame_count"):
-                raise ValueError("Motion frame count differs from the bound recording clock")
-            provenance = {
-                "pose_source": "canonical_vision_pose",
-                "position_unit": "m",
-                "phase_source_kind": "model_phase_prediction",
-                "phase_model_sha256": context["phase"].get("checkpoint_sha256"),
-                "clock_source": context["clock"]["source"],
-                "source_artifacts": [
-                    {
-                        "kind": "frames",
-                        "path": str(self.retriever.db_path.resolve()),
-                        "sha256": self._binding_sha256(self.retriever.db_path),
-                    },
-                    {
-                        "kind": "phases",
-                        "path": str(context["phase_path"]),
-                        "sha256": context["phase_sha256"],
-                    },
-                    {
-                        "kind": "clock",
-                        "path": str(context["core_path"]),
-                        "sha256": self._binding_sha256(context["core_path"]),
-                    },
-                ],
-            }
+            frames, provenance = self._motion_source_frames(run, context)
             current = build_motion_windows(
                 frames,
                 global_run_id=run["global_run_id"],
@@ -1238,6 +1485,18 @@ class FeedbackService:
                     "signal_frame_idx": row.get("anchor_frame_idx_global"),
                     "anatomy": row.get("anatomy") or item.get("anatomy"),
                     "phase": row.get("phase") or item.get("phase"),
+                    **{
+                        key: row[key]
+                        for key in (
+                            "phases",
+                            "keyframe_available",
+                            "keyframe_url",
+                            "keyframe_time_s",
+                            "keyframe_frame_idx_global",
+                            "keyframe_reason",
+                        )
+                        if key in row
+                    },
                 }
             )
         return clips
@@ -1295,8 +1554,12 @@ class FeedbackService:
             raise ValueError(f"{label} must be an integer from 1 to 5")
         return rating
 
-    def start_study(self, participant_id: str) -> dict[str, Any]:
+    def start_study(
+        self, participant_id: str, first_review_view: str = "event-based"
+    ) -> dict[str, Any]:
         store = self._study()
+        if first_review_view not in {"event-based", "summary"}:
+            raise ValueError("First review view must be event-based or summary")
         participant_id = normalize_participant_id(participant_id)
         items = self._study_items()
         previous = store.progress(participant_id, self.run_id)
@@ -1304,6 +1567,7 @@ class FeedbackService:
             participant_id=participant_id,
             run_id=self.run_id,
             stimulus_ids=[str(row["feedback_id"]) for row in items],
+            first_review_view=first_review_view,
         )
         store.add_event(
             participant_id=participant_id,
@@ -1317,9 +1581,12 @@ class FeedbackService:
             "schema": "expert_workflow_study_start_v1",
             "interface_version": self.interface_version,
             "participant_id": participant_id,
+            "first_review_view": session["first_review_view"],
+            "review_flow": session["review_flow"],
+            "analysis_completed": bool(session.get("analysis_completed_at")),
             "case": case,
             "media": self.media_summary(),
-            "case_completed": bool(session.get("case_completed_at")),
+            "case_completed": session["review_flow"]["stage"] == "complete",
             "workflow": {
                 "mode": "recorded_session",
                 "disclosure": (
@@ -1387,6 +1654,7 @@ class FeedbackService:
         )
         return {
             "schema": "expert_workflow_experience_v1",
+            "review_flow": store.progress(participant_id, self.run_id).get("review_flow"),
             "interface_version": self.interface_version,
             "case": self._case_context(),
             "session": {
@@ -1411,6 +1679,30 @@ class FeedbackService:
             "review_candidates": bootstrap["review_candidates"],
             "media": bootstrap["media"],
             "expert_proposed_moments": self.public_moments(participant_id),
+        }
+
+    def advance_review(self, participant_id: str, view: str, stage: str) -> dict[str, Any]:
+        participant_id = normalize_participant_id(participant_id)
+        store = self._study()
+        flow = store.advance_review(
+            participant_id=participant_id, run_id=self.run_id, view=view, stage=stage
+        )
+        store.add_event(
+            participant_id=participant_id, run_id=self.run_id,
+            event_type="review_step_advanced",
+            details={"view": view, "from_stage": stage, "to_stage": flow["stage"]},
+        )
+        complete = flow["stage"] == "complete"
+        case = self._case_context()
+        seed = f"{EXPERT_STUDY_SCHEMA}|{participant_id}"
+        return {
+            "review_flow": flow,
+            "case_completed": complete,
+            "next_case_url": case["next_case_url"] if complete else None,
+            "completion_code": (
+                "EXP-" + hashlib.sha256(seed.encode()).hexdigest()[:8].upper()
+                if complete and case["next_case_url"] is None else None
+            ),
         }
 
     def _public_moment(self, participant_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -1514,6 +1806,8 @@ class FeedbackService:
     def complete_study(self, participant_id: str, answers: Mapping[str, Any]) -> dict[str, Any]:
         store = self._study()
         participant_id = normalize_participant_id(participant_id)
+        if store.progress(participant_id, self.run_id).get("review_flow") is not None:
+            raise ValueError("Complete both review views and their questionnaire placeholders")
         use_intent = str(answers.get("would_use") or "")
         if use_intent not in {"yes", "with_changes", "no", "unsure"}:
             raise ValueError("Select whether you would use this workflow")
@@ -1559,6 +1853,8 @@ class FeedbackService:
         details: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
+        if event_type in {"analysis_started", "analysis_completed"}:
+            raise ValueError("Analysis status is recorded by the analysis service")
         if stimulus_id and stimulus_id not in {
             str(row["feedback_id"]) for row in self._study_items()
         }:
@@ -1599,6 +1895,18 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
         "/styles.css": (ui_dir / "styles.css", "text/css; charset=utf-8"),
         "/app.js": (ui_dir / "app.js", "text/javascript; charset=utf-8"),
     }
+    review_ui = _official_ui_directory("recommendations")
+    summary_ui = review_ui.parent / "summary"
+    assets.update(
+        {
+            "/summary": (summary_ui / "index.html", "text/html; charset=utf-8"),
+            "/summary/": (summary_ui / "index.html", "text/html; charset=utf-8"),
+            "/summary/styles.css": (summary_ui / "styles.css", "text/css; charset=utf-8"),
+            "/summary/app.js": (summary_ui / "app.js", "text/javascript; charset=utf-8"),
+            "/review-styles.css": (review_ui / "styles.css", "text/css; charset=utf-8"),
+            "/event-review.js": (review_ui / "event-review.js", "text/javascript; charset=utf-8"),
+        }
+    )
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "MastoidFeedback/1.0"
@@ -1711,6 +2019,13 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                 if parsed.path == "/api/bootstrap" and service.mode == "recommendations":
                     self._json(HTTPStatus.OK, service.bootstrap())
                     return
+                if parsed.path == "/api/phase-summary":
+                    participant = (parse_qs(parsed.query).get("participant_id") or [None])[0]
+                    if service.mode == "expert-study" and participant is None:
+                        self._json(HTTPStatus.NOT_FOUND, {"error": "Study session required"})
+                        return
+                    self._json(HTTPStatus.OK, service.phase_summary(participant))
+                    return
                 if parsed.path == "/api/media/video":
                     self._file(service.video_path, "video/webm")
                     return
@@ -1770,10 +2085,24 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                 )
                 participant_id = str(body.get("participant_id") or "")
                 if parsed.path == "/api/expert-study/start":
-                    self._json(HTTPStatus.OK, service.start_study(participant_id))
+                    self._json(
+                        HTTPStatus.OK,
+                        service.start_study(
+                            participant_id, str(body.get("first_review_view", "event-based"))
+                        ),
+                    )
                     return
                 if parsed.path == "/api/expert-study/analyze":
                     self._json(HTTPStatus.OK, service.analyze_study(participant_id))
+                    return
+                if parsed.path == "/api/expert-study/review-next":
+                    self._json(
+                        HTTPStatus.OK,
+                        service.advance_review(
+                            participant_id, str(body.get("view") or ""),
+                            str(body.get("stage") or ""),
+                        ),
+                    )
                     return
                 if parsed.path == "/api/expert-study/complete-experience":
                     answers = body.get("answers")
@@ -1829,6 +2158,7 @@ def serve_feedback_app(
     video_manifest_path: Path | None = None,
     ray_v3_dir: Path | None = None,
     cohort_benchmark_path: Path | None = None,
+    phase_reference_path: Path | None = None,
     study_state_path: Path | None = None,
     available_runs: Sequence[Mapping[str, str]] = (),
     display_name: str = "",
@@ -1847,6 +2177,7 @@ def serve_feedback_app(
         video_manifest_path=video_manifest_path,
         ray_v3_dir=ray_v3_dir,
         cohort_benchmark_path=cohort_benchmark_path,
+        phase_reference_path=phase_reference_path,
         available_runs=available_runs or [{"run_id": run_id, "url": ""}],
         display_name=display_name,
         interface_version=interface_version,
