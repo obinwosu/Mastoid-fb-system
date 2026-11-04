@@ -146,9 +146,13 @@ def enrich_removed_voxels_with_edt(
     sources: ResolvedRunSources,
     *,
     project_root: Path,
+    anatomy_profile: dict[str, Any] | None = None,
 ) -> EdtFrameBuild:
     _, np = _require_numeric_stack()
-    profile = load_anatomy_profile(project_root, record.anatomy_key)
+    profile = (
+        anatomy_profile if anatomy_profile is not None
+        else load_anatomy_profile(project_root, record.anatomy_key)
+    )
     if profile["edt_profile"] != record.edt_profile:
         raise ValueError("Versioned anatomy profile and run registry disagree")
     grids = _selected_grid_specs(sources.edt_dir)
@@ -381,9 +385,14 @@ def compare_legacy_voxel_edt(build: EdtFrameBuild, legacy_path: Path) -> dict[st
     }
 
 
-def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
+def _write_csv(
+    path: Path, rows: Sequence[dict[str, Any]], *, empty_fields: Sequence[str] = ()
+) -> None:
+    fields = list(rows[0]) if rows else list(empty_fields)
+    if not fields:
+        raise ValueError(f"Required frame artifact is empty: {path.name}")
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -391,7 +400,9 @@ def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 def write_edt_build(output_dir: Path, build: EdtFrameBuild, regression: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "frame_observations_edt.csv", build.frames)
-    _write_csv(output_dir / "removed_voxel_edt.csv", build.removed_voxels)
+    _write_csv(output_dir / "removed_voxel_edt.csv", build.removed_voxels,
+               empty_fields=("removed_voxel_id", "global_run_id", "frame_idx_global", "t_abs",
+                             "t_video_s", "x", "y", "z", "edt_x", "edt_y", "edt_z"))
     (output_dir / "edt_manifest.json").write_text(
         json.dumps(build.manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

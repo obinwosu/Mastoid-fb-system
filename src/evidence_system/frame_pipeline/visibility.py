@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from typing import Any, Sequence
 
-from .core_frames import _git_commit, _require_numeric_stack
+from .core_frames import _git_commit
 from .tip_edt import TipEdtBuild
 from ..registry import RunRecord
 from ..source_config import ResolvedRunSources
@@ -197,7 +197,9 @@ def enrich_visibility(
     *,
     project_root: Path,
 ) -> VisibilityBuild:
-    h5py, _ = _require_numeric_stack()
+    from ..hdf5_reader import RecordingReader
+
+    reader = RecordingReader(sources.raw_run_dir)
     _, np, _ = _require_vision_stack()
     rows = [dict(row) for row in tip.frames]
     # Reuse the exact frame-bearing chunk set accepted by core extraction.
@@ -206,7 +208,7 @@ def enrich_visibility(
     hdf5_paths = [sources.raw_run_dir / name for name in source_names]
     first_removal = np.inf
     for path in hdf5_paths:
-        with h5py.File(path, "r") as handle:
+        with reader.open_chunk(path) as handle:
             timestamps = handle.get("voxels_removed/voxel_time_stamp")
             if timestamps is not None and len(timestamps):
                 first_removal = min(first_removal, float(np.min(timestamps[()])))
@@ -215,14 +217,14 @@ def enrich_visibility(
     previous_pose = None
     global_index = 0
     for path in hdf5_paths:
-        with h5py.File(path, "r") as handle:
+        with reader.open_chunk(path) as handle:
             times = handle["data/time"][()]
             intrinsic = handle["metadata/camera_intrinsic"][()]
             extrinsic = handle["metadata/camera_extrinsic"][()]
             drill_poses = handle["data/pose_mastoidectomy_drill"][()]
             camera_poses = handle["data/pose_main_camera"][()]
-            rgb_frames = handle["data/l_img"][()]
-            depth_frames = handle["data/depth"][()]
+            rgb_frames = handle["data/l_img"]
+            depth_frames = handle["data/depth"]
             for source_index in range(len(times)):
                 if global_index >= len(rows):
                     raise ValueError("Raw HDF5 contains more visibility frames than core frames")
@@ -247,12 +249,19 @@ def enrich_visibility(
                 }
                 row.update(defaults)
                 current_pose = drill_poses[source_index]
+                camera_pose = np.asarray(camera_poses[source_index], dtype=float)
+                if not np.isfinite(camera_pose).all():
+                    row["tip_visibility"] = "not_evaluable_camera_pose_missing"
+                    row["visibility_status"] = "missing_camera_pose"
+                    previous_pose = current_pose
+                    global_index += 1
+                    continue
                 if first_removal_time is not None and times[source_index] >= first_removal_time:
                     rgb = rgb_frames[source_index]
                     result = classify_frame(
                         rgb,
                         current_pose,
-                        camera_poses[source_index],
+                        camera_pose,
                         extrinsic,
                         intrinsic,
                         previous_pose,
@@ -300,6 +309,8 @@ def enrich_visibility(
         "frame_count": len(rows),
         "source_hdf5_file_count": len(hdf5_paths),
         "source_hdf5_files": source_names,
+        "recording_reader": reader.manifest(),
+        "missing_camera_pose_count": sum(row["visibility_status"] == "missing_camera_pose" for row in rows),
         "first_removal_time_abs": first_removal_time,
         "category_counts": category_counts,
         "under_ledge_counts": severity_counts,

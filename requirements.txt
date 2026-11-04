@@ -1,0 +1,10 @@
+# Python 3.12, Windows/Linux x86-64. One environment for the complete pipeline.
+# Use the official CPU build; phase inference does not require CUDA.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+numpy==1.26.4
+scipy==1.13.1
+h5py==3.11.0
+opencv-python-headless==4.10.0.84
+PyYAML==6.0.1
+torch==2.11.0+cpu

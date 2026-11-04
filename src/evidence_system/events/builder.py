@@ -75,15 +75,40 @@ def _split(value: Any) -> list[str]:
     return [part.strip() for part in text.split(",") if part.strip()]
 
 
-def _phase_at(t_s: float, phases: Sequence[Mapping[str, Any]]) -> str:
-    for phase in phases:
-        if phase["phase"] == "pre_drilling":
+def phase_interval_at(
+    t_s: float, phases: Sequence[Mapping[str, Any]], name: str | None = None
+) -> Mapping[str, Any] | None:
+    """Resolve an interval by time; adjacent boundaries belong to the later interval."""
+    ordered = sorted(phases, key=lambda row: float(row["annotation_start_s"]), reverse=True)
+    for phase in ordered:
+        if name is not None and str(phase["phase"]) != name:
             continue
         start = float(phase["annotation_start_s"])
         end = float(phase["annotation_end_s"])
-        if start <= t_s < end or math.isclose(t_s, end, abs_tol=1e-9):
-            return str(phase["phase"])
-    return "outside_annotated_phase"
+        if start <= t_s < end:
+            return phase
+    # Preserve the final observed endpoint in legacy manual intervals.
+    if ordered:
+        final = max(ordered, key=lambda row: float(row["annotation_end_s"]))
+        if (name is None or str(final["phase"]) == name) and math.isclose(
+            t_s, float(final["annotation_end_s"]), rel_tol=0.0, abs_tol=1e-9
+        ):
+            return final
+    return None
+
+
+def phase_id_for(
+    t_s: float, phases: Sequence[Mapping[str, Any]], *, name: str | None = None,
+    explicit_id: Any = None,
+) -> str | None:
+    """Prefer a recorded interval identity and reject dangling references."""
+    if explicit_id is not None:
+        match = next((row for row in phases if row["phase_id"] == explicit_id), None)
+        if match is None or (name is not None and str(match["phase"]) != name):
+            raise ValueError(f"Invalid phase interval reference: {explicit_id}")
+        return str(explicit_id)
+    phase = phase_interval_at(t_s, phases, name)
+    return str(phase["phase_id"]) if phase else None
 
 
 def _chunks(
@@ -94,7 +119,7 @@ def _chunks(
 ) -> list[list[dict[str, Any]]]:
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in rows:
-        key = tuple(row[field] for field in key_fields)
+        key = (*[row[field] for field in key_fields], row.get("phase_id"))
         groups.setdefault(key, []).append(row)
     result: list[list[dict[str, Any]]] = []
     for key in sorted(groups, key=lambda item: tuple(str(value) for value in item)):
@@ -136,7 +161,11 @@ def _frame_event(
         rule_version=RULE_VERSION,
         phase=str(chunk[0]["phase"]),
         anatomy=anatomy,
-        attributes=dict(attributes or {}),
+        attributes={
+            **dict(attributes or {}),
+            **{key: chunk[0][key] for key in ("phase_id", "phase_source", "model_phase")
+               if key in chunk[0]},
+        },
     )
 
 
@@ -390,7 +419,10 @@ def _build_performance_bouts(
         item = dict(row)
         item.update(metrics[int(row["stroke_id"])])
         midpoint = (float(row["start_time_video"]) + float(row["end_time_video"])) / 2
-        item["phase"] = _phase_at(midpoint, phases)
+        interval = phase_interval_at(midpoint, phases)
+        item["phase"] = str(interval["phase"]) if interval else "outside_annotated_phase"
+        item["phase_id"] = str(interval["phase_id"]) if interval else None
+        item["phase_source"] = interval.get("phase_source") if interval else None
         records.append(item)
     chunks: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
@@ -398,7 +430,7 @@ def _build_performance_bouts(
     previous_phase: str | None = None
     for row in sorted(records, key=lambda item: (item["start_time_video"], item["stroke_id"])):
         start = float(row["start_time_video"])
-        phase = str(row["phase"])
+        phase = str(row.get("phase_id") or row["phase"])
         gap = start - previous_end if previous_end is not None else None
         if current and (phase != previous_phase or (gap is not None and gap > PERFORMANCE_BOUT_GAP_S)):
             chunks.append(current)
@@ -429,6 +461,9 @@ def _build_performance_bouts(
                 rule_version=RULE_VERSION,
                 phase=str(chunk[0]["phase"]),
                 attributes={
+                    "phase_id": chunk[0].get("phase_id"),
+                    "phase_source": chunk[0].get("phase_source"),
+                    "phase_assignment": "stroke_midpoint_interval",
                     "label": "descriptive_metrics_only",
                     "n_source_strokes": len(chunk),
                     "active_stroke_time_s": active_time,
@@ -464,6 +499,8 @@ def _build_motion_contexts(events: Sequence[EvidenceEvent], strokes: StrokeBuild
                 "motion_context_id": f"{event.event_id}:motion_context",
                 "event_id": event.event_id,
                 "phase": event.phase,
+                "phase_id": event.attributes.get("phase_id"),
+                "phase_source": event.attributes.get("phase_source"),
                 "t_start_s": event.t_start_s,
                 "t_end_s": event.t_end_s,
                 "n_source_strokes": len(overlapping),
@@ -485,12 +522,20 @@ def build_events(
 ) -> EventBuild:
     if not strokes.manifest.get("ready_for_eventization"):
         raise ValueError("Stroke build is not ready for eventization")
-    phases = [dict(row) for row in phase_intervals if row["phase"] != "pre_drilling"]
+    phases = [dict(row) for row in phase_intervals]
+    frames = []
+    for source_row in strokes.frames:
+        row = dict(source_row)
+        row["phase_id"] = phase_id_for(
+            float(row["t_video_s"]), phases, name=str(row["phase"]),
+            explicit_id=row.get("phase_id"),
+        )
+        frames.append(row)
     events = [
-        *_build_overshoot_events(strokes.frames, record),
-        *_build_boundary_events(strokes.frames, record),
+        *_build_overshoot_events(frames, record),
+        *_build_boundary_events(frames, record),
         *_build_performance_bouts(strokes, phases, record),
-        *_build_visibility_events(strokes.frames, record),
+        *_build_visibility_events(frames, record),
     ]
     events.sort(key=lambda event: (event.t_start_s, event.event_type, event.event_id))
     contexts = _build_motion_contexts(events, strokes)
@@ -541,7 +586,10 @@ def build_events(
             "performance_bout_gap_s": PERFORMANCE_BOUT_GAP_S,
         },
         "threshold_origin": "legacy_pilot_reproduction; not clinically validated",
-        "phase_semantics": "exact human annotation intervals retained; not clipped to last drilling frame",
+        "phase_semantics": (
+            "Source intervals and unique identities retained; predicted intervals are not "
+            "human annotations. No phase-name-only merging or monotonic correction."
+        ),
         "interpretation": {
             "simulator_overshoot": "simulator-supported; does not establish clinical injury",
             "boundary_work": "working-region proximity descriptor, not an error label",

@@ -14,10 +14,15 @@ dependencies = []
 pipeline = [
   "h5py>=3.10,<4",
   "numpy>=1.26,<3",
+  "PyYAML>=6,<7",
 ]
 vision = [
   "opencv-python-headless>=4.8,<5",
   "scipy>=1.11,<2",
+]
+phase = [
+  "torch>=2.2,<3",
+  "numpy>=1.26,<3",
 ]
 dev = [
   "pytest>=8,<9",

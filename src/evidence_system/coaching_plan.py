@@ -13,15 +13,15 @@ def load_cohort_benchmark(path: Path | None) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _phase_bounds(
+def _phase_intervals(
     phases: Sequence[Mapping[str, Any]], name: str
-) -> tuple[float, float] | None:
-    row = next(
-        (item for item in phases if str(item.get("phase_name")) == name), None
-    )
-    if row is None:
-        return None
-    return float(row["t_start_s"]), float(row["t_end_s"])
+) -> list[dict[str, Any]]:
+    """Keep disjoint episodes separate rather than inventing an envelope interval."""
+    return [
+        {**dict(row), "phase": name, "review_clip_id": row.get("phase_id")}
+        for row in sorted(phases, key=lambda item: float(item["t_start_s"]))
+        if str(row.get("phase_name")) == name
+    ]
 
 
 def _merge_review_clips(
@@ -78,6 +78,8 @@ def build_session_coaching_plan(
     phases: Sequence[Mapping[str, Any]],
     under_ledge_screening: Mapping[str, Any],
     cohort_benchmark: Mapping[str, Any] | None = None,
+    *,
+    motion_comparison: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a small prioritized plan; each item keeps its evidence type."""
 
@@ -176,7 +178,7 @@ def build_session_coaching_plan(
     observed = antrum.get("observed") or {}
     q25 = antrum.get("experienced_q25") or {}
     q75 = antrum.get("experienced_q75") or {}
-    bounds = _phase_bounds(phases, "antrum")
+    antrum_intervals = _phase_intervals(phases, "antrum")
     shorter = (
         observed.get("mean_stroke_length") is not None
         and q25.get("mean_stroke_length") is not None
@@ -195,7 +197,7 @@ def build_session_coaching_plan(
         and float(observed["voxel_removal_efficiency"])
         < float(q25["voxel_removal_efficiency"])
     )
-    if bounds and shorter and more_frequent:
+    if antrum_intervals and shorter and more_frequent:
         items.append({
             "feedback_id": "coaching:antrum_stroke_pattern",
             "category": "technique",
@@ -233,15 +235,65 @@ def build_session_coaching_plan(
                 ),
                 "experienced_trial_n": antrum.get("experienced_trial_n"),
             },
-            "t_start_s": bounds[0],
-            "t_end_s": bounds[1],
+            "t_start_s": float(antrum_intervals[0]["t_start_s"]),
+            "t_end_s": float(antrum_intervals[0]["t_end_s"]),
+            "evidence_segments": antrum_intervals,
+            "review_clips": antrum_intervals,
+            "phase_interval_count": len(antrum_intervals),
             "phase": "antrum",
             "anatomy": None,
             "evidence_status": "descriptive_cohort_comparison",
             "source_type": "experienced_group_phase_benchmark",
-            "source_ids": [],
+            "source_ids": [row["phase_id"] for row in antrum_intervals if row.get("phase_id")],
             "claim_boundary": benchmark.get("claim_boundary"),
         })
+
+    if motion_comparison is not None:
+        from .motion_comparison import COMPARISON_SCHEMA, PHASES, artifact_sha256
+
+        if (motion_comparison.get("schema") != COMPARISON_SCHEMA
+                or motion_comparison.get("artifact_sha256") != artifact_sha256(motion_comparison)):
+            raise ValueError("Motion coaching requires an intact window comparison artifact")
+        if motion_comparison.get("available"):
+            for phase in PHASES:
+                episodes = [dict(row) for row in motion_comparison.get("episodes", [])
+                            if row["phase"] == phase]
+                if not episodes:
+                    continue
+                first = episodes[0]
+                label = "early drilling" if phase == "early_phase" else phase
+                clips = [{**row, "review_clip_id": row["episode_id"]} for row in episodes]
+                items.append({
+                    "feedback_id": f"coaching:motion_reference:{phase}",
+                    "category": "technique", "priority": "low",
+                    "title": f"Review lower tool-motion speed during {label}",
+                    "message": "Review the local task and tool movement alongside the same-phase reference.",
+                    "observed_issue": (
+                        "Several overlapping five-second windows had lower observed tool-motion speed "
+                        "than the experienced-participant reference."
+                    ),
+                    "why_it_matters": "The difference identifies a review interval; it does not establish poor technique.",
+                    "recommended_action": "Review the video and task context before interpreting this difference.",
+                    "evidence_summary": (
+                        f"{len(episodes)} review interval(s), using native-time vision poses and "
+                        "coverage-qualified comparisons within this phase."
+                    ),
+                    "technical_facts": {
+                        "protocol": motion_comparison["protocol"],
+                        "reference": motion_comparison["reference_summary"],
+                        "phase_reference": motion_comparison["per_phase"][phase],
+                        "reference_sha256": motion_comparison["reference_sha256"],
+                        "window_build_sha256": motion_comparison["window_build_sha256"],
+                        "overlapping_windows_are_independent": False,
+                    },
+                    "t_start_s": first["t_start_s"], "t_end_s": first["t_end_s"],
+                    "phase": first["phase_name"], "anatomy": None,
+                    "evidence_status": "descriptive_cohort_comparison",
+                    "source_type": "native_vision_motion_windows",
+                    "source_ids": [row["episode_id"] for row in episodes],
+                    "evidence_segments": episodes, "review_clips": clips,
+                    "claim_boundary": motion_comparison["claim_boundary"],
+                })
 
     example = (
         under_ledge_screening.get("coaching_example")
@@ -336,6 +388,17 @@ def build_session_coaching_plan(
         })
 
     order = {"high": 0, "medium": 1, "low": 2}
+    predicted_phases = any(
+        row.get("phase_source_kind") == "model_phase_prediction" for row in phases
+    )
+    if predicted_phases:
+        for item in items:
+            item["phase_context_source"] = "model_phase_prediction"
+            item["phase_context_reviewed"] = False
+            item["claim_boundary"] = (
+                str(item.get("claim_boundary") or "").rstrip()
+                + " Phase context is an offline model prediction, not a reviewed annotation."
+            ).strip()
     return {
         "schema": "concise_session_coaching_plan_v1",
         "style": "one_behavior_or_location_plus_one_direct_action",

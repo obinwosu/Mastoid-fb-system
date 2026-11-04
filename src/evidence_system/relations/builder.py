@@ -10,12 +10,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..events import EventBuild, event_to_dict
+from ..events.builder import phase_id_for
 from ..models import EvidenceEvent, EvidenceRelation
 from ..registry import RunRecord
 
 
 RULE_VERSION = "relation_rules_v1_factual_only"
 SOURCE_MANUAL_PHASE = "human_video_timepoint_annotation"
+SOURCE_MODEL_PHASE = "model_phase_prediction"
 SOURCE_VOXEL_EDT = "simulator_removed_voxel_edt"
 SOURCE_STROKES = "simulator_stroke_table"
 SOURCE_VISIBILITY = "derived_frame_visibility_geometry"
@@ -86,17 +88,19 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
             },
         }
     ]
-    for source in (SOURCE_MANUAL_PHASE, SOURCE_VOXEL_EDT, SOURCE_STROKES, SOURCE_VISIBILITY):
+    model_phases = any(str(row.get("phase_source") or "").startswith("model_")
+                       or row.get("model_phase") is not None for row in events.phases)
+    phase_source = SOURCE_MODEL_PHASE if model_phases else SOURCE_MANUAL_PHASE
+    for source in (phase_source, SOURCE_VOXEL_EDT, SOURCE_STROKES, SOURCE_VISIBILITY):
         nodes.append({"id": f"source:{source}", "type": "evidence_source", "label": source})
 
     collector = _RelationCollector()
-    phase_ids: dict[str, str] = {}
     for phase in events.phases:
         phase_id = str(phase["phase_id"])
-        phase_ids[str(phase["phase"])] = phase_id
         nodes.append({"id": phase_id, "type": "phase", "attributes": dict(phase)})
         collector.add(run_node, "contains", phase_id)
-        collector.add(phase_id, "derived_from", f"source:{SOURCE_MANUAL_PHASE}")
+        collector.add(phase_id, "derived_from", f"source:{phase_source}",
+                      provisional=model_phases)
 
     anatomy_ids: set[str] = set()
     for event in events.events:
@@ -104,8 +108,13 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
         nodes.append({"id": event.event_id, "type": event.event_type, "attributes": value})
         collector.add(run_node, "contains", event.event_id)
         collector.add(event.event_id, "derived_from", f"source:{_source_for(event.event_type)}")
-        if event.phase in phase_ids:
-            collector.add(event.event_id, "occurs_during", phase_ids[str(event.phase)])
+        interval_id = phase_id_for(
+            (event.t_start_s + event.t_end_s) / 2, events.phases,
+            name=event.phase, explicit_id=event.attributes.get("phase_id"),
+        )
+        if interval_id is not None:
+            collector.add(event.event_id, "occurs_during", interval_id,
+                          provisional=model_phases)
         entity = event.anatomy or event.attributes.get("boundary")
         if entity:
             entity_id = f"anatomy:{entity}"
@@ -142,9 +151,13 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
         nodes.append({"id": context_id, "type": "motion_context", "attributes": dict(context)})
         collector.add(str(context["event_id"]), "has_motion_context", context_id)
         collector.add(context_id, "derived_from", f"source:{SOURCE_STROKES}")
-        phase = str(context.get("phase") or "")
-        if phase in phase_ids:
-            collector.add(context_id, "occurs_during", phase_ids[phase])
+        interval_id = phase_id_for(
+            (float(context["t_start_s"]) + float(context["t_end_s"])) / 2,
+            events.phases, name=str(context.get("phase") or ""),
+            explicit_id=context.get("phase_id"),
+        )
+        if interval_id is not None:
+            collector.add(context_id, "occurs_during", interval_id, provisional=model_phases)
 
     relations = collector.values
     graph = {

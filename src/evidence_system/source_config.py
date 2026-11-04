@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 
@@ -15,15 +16,21 @@ from .registry import RunRecord
 class SourceRoots:
     data_root: Path
     edt_root: Path
-    phase_annotation_file: Path
+    phase_annotation_file: Path | None = None
+    phase_model_bundle: Path | None = None
+    frame_alignment_file: Path | None = None
+    phase_duration_s: float | None = None
 
 
 @dataclass(frozen=True)
 class ResolvedRunSources:
     raw_run_dir: Path
     edt_dir: Path
-    phase_annotation_file: Path
+    phase_annotation_file: Path | None
     golden_reference_path: Path
+    phase_model_bundle: Path | None = None
+    frame_alignment_file: Path | None = None
+    phase_duration_s: float | None = None
 
 
 def _resolve(value: str | Path, base: Path) -> Path:
@@ -32,7 +39,8 @@ def _resolve(value: str | Path, base: Path) -> Path:
 
 
 def load_source_roots(
-    path: Path | None = None, *, project_root: Path = PROJECT_ROOT
+    path: Path | None = None, *, project_root: Path = PROJECT_ROOT,
+    phase_model_bundle: Path | None = None,
 ) -> SourceRoots:
     configured = path
     if configured is None:
@@ -51,16 +59,30 @@ def load_source_roots(
     required = {
         "data_root": data_root,
         "edt_root": payload.get("edt_root"),
-        "phase_annotation_file": payload.get("phase_annotation_file"),
     }
+    bundle = phase_model_bundle or payload.get("phase_model_bundle")
+    if not bundle:
+        required["phase_annotation_file"] = payload.get("phase_annotation_file")
     missing = [key for key, value in required.items() if not str(value or "").strip()]
     if missing:
         raise ValueError(f"Missing source path keys: {', '.join(missing)}")
     base = project_root
+    def optional_path(value: str | Path | None) -> Path | None:
+        return _resolve(value, base) if value else None
+
+    duration = payload.get("phase_duration_s")
+    if duration is not None:
+        duration = float(duration)
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError("phase_duration_s must be finite and positive")
+
     return SourceRoots(
         data_root=_resolve(str(data_root), base),
         edt_root=_resolve(str(required["edt_root"]), base),
-        phase_annotation_file=_resolve(str(required["phase_annotation_file"]), base),
+        phase_annotation_file=optional_path(payload.get("phase_annotation_file")),
+        phase_model_bundle=optional_path(bundle),
+        frame_alignment_file=optional_path(payload.get("frame_alignment_file")),
+        phase_duration_s=duration,
     )
 
 
@@ -71,6 +93,9 @@ def resolve_run_sources(
     raw_run_dir: Path | None = None,
     edt_dir: Path | None = None,
     phase_annotation_file: Path | None = None,
+    phase_model_bundle: Path | None = None,
+    frame_alignment_file: Path | None = None,
+    phase_duration_s: float | None = None,
 ) -> ResolvedRunSources:
     raw = raw_run_dir or (
         roots.data_root / Path(record.raw_run_relpath)
@@ -79,11 +104,19 @@ def resolve_run_sources(
     edt = edt_dir or (
         roots.edt_root / record.edt_profile if record.edt_profile else roots.edt_root
     )
+    annotation = phase_annotation_file or roots.phase_annotation_file
+    bundle = phase_model_bundle or roots.phase_model_bundle
+    if annotation is None and bundle is None:
+        raise ValueError("A phase model bundle or manual phase annotation is required")
+    def resolved(value: Path | None) -> Path | None:
+        return value.expanduser().resolve() if value is not None else None
+
     return ResolvedRunSources(
         raw_run_dir=raw.expanduser().resolve(),
         edt_dir=edt.expanduser().resolve(),
-        phase_annotation_file=(
-            phase_annotation_file or roots.phase_annotation_file
-        ).expanduser().resolve(),
+        phase_annotation_file=resolved(annotation),
         golden_reference_path=record.golden_reference_path,
+        phase_model_bundle=resolved(bundle),
+        frame_alignment_file=resolved(frame_alignment_file or roots.frame_alignment_file),
+        phase_duration_s=phase_duration_s if phase_duration_s is not None else roots.phase_duration_s,
     )

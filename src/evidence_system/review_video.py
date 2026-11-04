@@ -6,8 +6,10 @@ from dataclasses import dataclass
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
+from .hdf5_clock import SOURCE, read_hdf5_frame_inventory, validate_generated_alignment
+from .hdf5_reader import RecordingReader
 from .registry import RunRecord
 from .source_config import ResolvedRunSources
 
@@ -33,33 +35,9 @@ def _require_video_dependencies() -> tuple[Any, Any, Any]:
 
 
 def _index_source_frames(raw_run_dir: Path) -> list[FrameReference]:
-    _, h5py, np = _require_video_dependencies()
-    references: list[FrameReference] = []
-    for path in sorted(raw_run_dir.glob("*.hdf5"), key=lambda item: item.name):
-        with h5py.File(path, "r") as handle:
-            time_dataset = handle.get("data/time")
-            frame_dataset = handle.get("data/l_img")
-            if time_dataset is None and frame_dataset is None:
-                # Valid recorder terminal file containing metadata only.
-                continue
-            if time_dataset is None or frame_dataset is None:
-                raise KeyError(
-                    f"Incomplete frame-bearing HDF5 chunk: {path.name}"
-                )
-            times = np.asarray(time_dataset, dtype=float).reshape(-1)
-            frame_count = int(frame_dataset.shape[0])
-            if len(times) != frame_count:
-                raise ValueError(
-                    f"Timestamp/frame mismatch in {path.name}: {len(times)} != {frame_count}"
-                )
-            references.extend(
-                FrameReference(float(timestamp), path, index)
-                for index, timestamp in enumerate(times)
-            )
-    references.sort(key=lambda row: (row.timestamp_s, row.source_path.name, row.source_index))
-    if not references:
-        raise FileNotFoundError(f"No HDF5 RGB frames found under {raw_run_dir}")
-    return references
+    rows, _ = read_hdf5_frame_inventory(raw_run_dir)
+    return [FrameReference(row["t_abs"], raw_run_dir / row["source_hdf5"], row["source_frame_idx"])
+            for row in rows]
 
 
 def _nearest_source_indices(source_times: Any, target_times: Any, np: Any) -> Any:
@@ -78,6 +56,8 @@ def build_review_video(
     output_dir: Path,
     *,
     fps: float = 10.0,
+    frame_times_video: Sequence[float] | None = None,
+    clock_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resample irregular HDF5 frames to a seek-stable WebM timeline.
 
@@ -86,14 +66,43 @@ def build_review_video(
     blue and produces the previously observed false-color video.
     """
 
-    if fps <= 0 or fps > 60:
+    if not math.isfinite(fps) or fps <= 0 or fps > 60:
         raise ValueError("fps must be greater than 0 and no more than 60")
     cv2, h5py, np = _require_video_dependencies()
+    reader = RecordingReader(sources.raw_run_dir)
     references = _index_source_frames(sources.raw_run_dir)
     source_times_abs = np.asarray([row.timestamp_s for row in references], dtype=float)
     zero_time = float(source_times_abs[0])
-    source_times = source_times_abs - zero_time
-    duration_s = float(source_times[-1])
+    source_times = (
+        source_times_abs - zero_time if frame_times_video is None
+        else np.asarray(frame_times_video, dtype=float)
+    )
+    if (clock_manifest or {}).get("source") == SOURCE:
+        clock = dict(clock_manifest or {})
+        if frame_times_video is None or not clock.get("native_correspondence_verified"):
+            raise ValueError("Generated native review-video clock needs verified aligned frame times")
+        checked = validate_generated_alignment(
+            clock["path"],
+            [{"source_hdf5": row.source_path.name, "source_frame_idx": row.source_index,
+              "t_abs": row.timestamp_s} for row in references],
+            sources.raw_run_dir,
+        )
+        if (float(fps) != checked["fps"] or clock.get("duration_s") != checked["duration_s"]
+                or clock.get("generated_manifest_sha256") != checked["generated_manifest_sha256"]
+                or not np.array_equal(source_times, source_times_abs - zero_time)):
+            raise ValueError("Generated native review-video clock or fps differs from its source receipt")
+    if (source_times.shape != source_times_abs.shape
+            or not np.isfinite(source_times).all() or not np.isfinite(source_times_abs).all()
+            or np.any(np.diff(source_times) < 0) or np.any(source_times < 0)):
+        raise ValueError("Review-video clock must provide one finite nondecreasing time per native frame")
+    if frame_times_video is not None and (
+        np.any(np.diff(source_times_abs) <= 0) or np.any(np.diff(source_times) <= 0)
+    ):
+        raise ValueError("Explicit review-video alignment requires strictly increasing frame times")
+    last_source_time = float(source_times[-1])
+    duration_s = float((clock_manifest or {}).get("duration_s", last_source_time))
+    if not math.isfinite(duration_s) or duration_s < last_source_time:
+        raise ValueError("Review-video duration must be finite and cover the last mapped frame")
     output_count = int(math.ceil(duration_s * fps)) + 1
     target_times = np.arange(output_count, dtype=float) / float(fps)
     source_indices = _nearest_source_indices(source_times, target_times, np)
@@ -101,7 +110,7 @@ def build_review_video(
     alignment_error = np.abs(selected_times - target_times)
 
     first = references[int(source_indices[0])]
-    with h5py.File(first.source_path, "r") as handle:
+    with reader.open_chunk(first.source_path) as handle:
         sample = np.asarray(handle["data/l_img"][first.source_index])
     if sample.ndim != 3 or sample.shape[2] != 3 or sample.dtype != np.uint8:
         raise ValueError(f"Unsupported RGB frame shape/dtype: {sample.shape} {sample.dtype}")
@@ -126,7 +135,7 @@ def build_review_video(
             if reference.source_path != current_path:
                 if handle is not None:
                     handle.close()
-                handle = h5py.File(reference.source_path, "r")
+                handle = reader.open_chunk(reference.source_path)
                 current_path = reference.source_path
             frame_bgr = np.asarray(handle["data/l_img"][reference.source_index])
             writer.write(frame_bgr)
@@ -139,7 +148,7 @@ def build_review_video(
     building_path.replace(video_path)
 
     validation = validate_review_video(
-        video_path, references, source_indices, output_count, fps
+        video_path, references, source_indices, output_count, fps, recording_reader=reader
     )
     manifest = {
         "schema": "review_video_manifest_v1",
@@ -155,7 +164,16 @@ def build_review_video(
         "output_frame_count": output_count,
         "source_hdf5_count": len({row.source_path for row in references}),
         "duration_s": duration_s,
-        "timeline_origin": "first_HDF5_data/time_timestamp",
+        "timeline_origin": (
+            "canonical_frame_video_clock" if frame_times_video is not None
+            else "first_HDF5_data/time_timestamp"
+        ),
+        "clock_alignment": dict(clock_manifest or {}),
+        "source_time_bounds_s": [float(source_times[0]), last_source_time],
+        "held_first_frame_before_source_s": float(source_times[0]),
+        "held_last_frame_after_source_s": duration_s - last_source_time,
+        "raw_time_bounds_s": [zero_time, float(source_times_abs[-1])],
+        "frame_order": "raw_timestamp_then_source_filename_then_source_frame_index",
         "resampling": "uniform_timeline_nearest_source_frame",
         "mean_alignment_error_s": float(np.mean(alignment_error)),
         "max_alignment_error_s": float(np.max(alignment_error)),
@@ -165,6 +183,10 @@ def build_review_video(
         "validation": validation,
     }
     manifest_path = output_dir / "review_video_manifest.json"
+    if reader.schema == "v3":
+        manifest["source_image_dataset"] = reader.dataset_path("data/l_img")
+        manifest["color_rule"] = "write vision_data/continuous_data/l_img directly; do not swap red and blue"
+        manifest["hdf5_reader"] = reader.manifest()
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -177,10 +199,13 @@ def validate_review_video(
     source_indices: Any,
     expected_count: int,
     expected_fps: float,
+    *,
+    recording_reader: RecordingReader | None = None,
 ) -> dict[str, Any]:
     """Check decode, timeline metadata, and red/blue channel orientation."""
 
     cv2, h5py, np = _require_video_dependencies()
+    reader = recording_reader or RecordingReader(references[0].source_path.parent)
     capture = cv2.VideoCapture(str(video_path))
     if not capture.isOpened():
         raise RuntimeError(f"Generated review video cannot be decoded: {video_path}")
@@ -196,7 +221,7 @@ def validate_review_video(
             if not ok:
                 raise RuntimeError(f"Could not decode validation frame {output_index}")
             reference = references[int(source_indices[output_index])]
-            with h5py.File(reference.source_path, "r") as handle:
+            with reader.open_chunk(reference.source_path) as handle:
                 source_bgr = np.asarray(handle["data/l_img"][reference.source_index])
             correct_errors.append(float(np.mean(np.abs(
                 decoded_bgr.astype(np.float32) - source_bgr.astype(np.float32)

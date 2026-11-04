@@ -1,0 +1,9 @@
+{
+  "schema": "hdf5_directory_runtime_v1",
+  "simulator_root": "data/simulator",
+  "edt_root": "data/edt",
+  "correction_table": "data/geometry_corrections_v3.csv",
+  "phase_model_bundle": ".local/models/e71_full_recording_holdout",
+  "video_fps": 10.0,
+  "motion_reference": "references/r4_motion_windows_v3.json"
+}

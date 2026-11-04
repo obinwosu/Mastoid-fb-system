@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import csv
+import math
 from datetime import datetime, timezone
 import hashlib
 from http import HTTPStatus
@@ -14,7 +16,7 @@ import re
 import tempfile
 import threading
 from typing import Any, Mapping, Sequence
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
 from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
@@ -409,6 +411,13 @@ class FeedbackService:
         self.video_path = video_path
         self.video_manifest_path = video_manifest_path
         self.ray_v3_dir = ray_v3_dir
+        self.artifact_root = db_path.expanduser().resolve().parent
+        self._binding_hash_cache: dict[tuple, str] = {}
+        self._review_reader_cache: tuple | None = None
+        self._review_png_cache: dict[tuple, bytes] = {}
+        self._review_images: dict[str, bytes] = {}
+        self._review_lock = threading.RLock()
+        self._motion_cache: tuple | None = None
         self.cohort_benchmark_path = cohort_benchmark_path
         self.available_runs = [dict(row) for row in available_runs]
         self.display_name = display_name
@@ -447,11 +456,39 @@ class FeedbackService:
             max((float(row["t_end_s"]) for row in events), default=0.0),
             float(media.get("duration_s") or 0.0),
         )
-        ray_v3 = build_ray_v3_view(self.run_id, self.ray_v3_dir)
+        ray_dir = self.ray_v3_dir
+        ray_source = "explicit" if ray_dir is not None else "not_configured"
+        if ray_dir is None:
+            candidate = (self.artifact_root / "stages" / "08_under_ledge_ray").resolve()
+            if candidate.is_relative_to(self.artifact_root) and candidate.is_dir():
+                ray_dir = candidate
+                ray_source = "generated_sibling"
+        ray_v3 = build_ray_v3_view(self.run_id, ray_dir)
+        if ray_v3.get("available"):
+            try:
+                strict_binding = self._validate_ray_binding(ray_v3, summary["run"])
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                ray_v3 = build_ray_v3_view(self.run_id, None)
+                ray_v3["reason"] = "strict_ray_binding_mismatch"
+                ray_v3["binding_validation"] = {"status": "rejected", "reason": str(exc)}
+                ray_v3["detection_status"].update(
+                    status="unavailable", reason="strict_ray_binding_mismatch",
+                    message="Exposure screening is unavailable because its evidence does not match this recording.",
+                )
+            else:
+                if strict_binding:
+                    ray_v3["binding_validation"] = {
+                        "status": "verified", "authority": "database_source_manifest_hash",
+                    }
         benchmark = load_cohort_benchmark(self.cohort_benchmark_path)
+        motion = None
+        if benchmark and benchmark.get("schema") == "motion_expert_reference_v1":
+            motion = self._current_motion_comparison(summary["run"], benchmark)
+            benchmark = None
         coaching_plan = build_session_coaching_plan(
-            events, phases, ray_v3, benchmark
+            events, phases, ray_v3, benchmark, **({"motion_comparison": motion} if motion is not None else {})
         )
+        self._enrich_review_keyframes(coaching_plan, summary["run"])
         return {
             "schema": "automatic_recommendations_v1",
             "run": {
@@ -466,8 +503,484 @@ class FeedbackService:
             "phases": phases,
             "events": events,
             "coaching_plan": coaching_plan,
+            "motion_comparison": motion,
+            "detection_status": {
+                "under_ledge": {**ray_v3["detection_status"], "source": ray_source},
+            },
+            "under_ledge_screening": ray_v3,
+            "review_candidates": ray_v3["review_candidates"],
             "media": media,
         }
+
+    def _binding_sha256(self, path: Path) -> str:
+        """Hash known artifacts once per stable file identity during serving."""
+        path = path.resolve()
+        stat = path.stat()
+        key = self._file_identity(path, stat)
+        if key not in self._binding_hash_cache:
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                while block := stream.read(1 << 20):
+                    digest.update(block)
+            after = path.stat()
+            if key != self._file_identity(path, after):
+                raise ValueError("A bound artifact changed while it was being checked")
+            self._binding_hash_cache[key] = digest.hexdigest()
+        return self._binding_hash_cache[key]
+
+    @staticmethod
+    def _file_identity(path: Path, stat=None) -> tuple:
+        stat = stat or path.stat()
+        return (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_size,
+                stat.st_mtime_ns, stat.st_ctime_ns)
+
+    def _bound_review_context(self, run: Mapping[str, Any]) -> dict[str, Any]:
+        """Resolve authority from the current database, never a request path."""
+        with self.retriever._connect() as connection:
+            artifact = connection.execute(
+                "SELECT path, sha256 FROM generated_artifacts WHERE global_run_id=? AND artifact_type='stroke_build'",
+                (run["global_run_id"],),
+            ).fetchone()
+            phase_source = connection.execute(
+                "SELECT path, sha256 FROM source_files WHERE global_run_id=? AND source_type='model_phase_prediction'",
+                (run["global_run_id"],),
+            ).fetchone()
+        if artifact is None or phase_source is None or not run.get("source_manifest_hash"):
+            raise ValueError("The archive has no bound model-phase source/clock receipt")
+        artifact_path = Path(artifact["path"]).resolve()
+        if not artifact_path.is_relative_to(self.artifact_root):
+            raise ValueError("Frame artifacts are outside the current database root")
+        if self._binding_sha256(artifact_path) != artifact["sha256"]:
+            raise ValueError("The database-bound stroke artifact changed")
+        stages = artifact_path.parent.parent
+        audit_path = stages / "00_source_audit/source_manifest.json"
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        canonical = json.dumps({k:v for k,v in audit.items() if k != "generated_at"},
+                               ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        if (hashlib.sha256(canonical).hexdigest() != run["source_manifest_hash"]
+                or audit.get("global_run_id") != run["global_run_id"]):
+            raise ValueError("Source audit differs from the database authority")
+        phase_path = Path(phase_source["path"]).resolve()
+        if not phase_path.is_relative_to(self.artifact_root):
+            raise ValueError("Phase authority is outside the current database root")
+        if self._binding_sha256(phase_path) != phase_source["sha256"]:
+            raise ValueError("The database-bound phase manifest changed")
+        phase = json.loads(phase_path.read_text(encoding="utf-8"))
+        clock = phase.get("clock") or {}
+        if (phase.get("global_run_id") != run["global_run_id"]
+                or clock.get("configured_global_run_id") != run["global_run_id"]):
+            raise ValueError("Phase/clock authority belongs to another recording")
+        core_path = stages / "01_core_frames/extraction_manifest.json"
+        core = json.loads(core_path.read_text(encoding="utf-8"))
+        if core.get("global_run_id") != run["global_run_id"] or core.get("clock_alignment") != clock:
+            raise ValueError("Core clock differs from the database-bound phase clock")
+        raw_value = (audit.get("source_classification") or {}).get("primary_raw")
+        if not raw_value:
+            raise ValueError("The original recording directory is not bound")
+        raw = Path(raw_value).resolve()
+        inventory = {row["file_name"]:dict(row) for row in (audit.get("hdf5") or {}).get("chunks", [])}
+        alignment_rows = None
+        if clock.get("source") in {"explicit_frame_alignment", "generated_hdf5_native_alignment"}:
+            alignment = Path(clock["path"]).resolve()
+            if self._binding_sha256(alignment) != clock.get("sha256"):
+                raise ValueError("The bound frame alignment changed")
+            with alignment.open(encoding="utf-8-sig", newline="") as stream:
+                alignment_rows = list(csv.DictReader(stream))
+            if len(alignment_rows) != clock.get("frame_count"):
+                raise ValueError("Frame alignment inventory differs")
+            previous = -math.inf
+            for index, row in enumerate(alignment_rows):
+                value = float(row["video_time_s"])
+                if int(row["frame_idx_global"]) != index or not math.isfinite(value) or value <= previous:
+                    raise ValueError("Frame alignment order is invalid")
+                previous = value
+        elif clock.get("source") != "native_relative_time":
+            raise ValueError("Unsupported original-frame clock")
+        if clock.get("source") == "generated_hdf5_native_alignment":
+            from .hdf5_clock import MANIFEST_NAME, SCHEMA, SOURCE
+            manifest_path = Path(clock["generated_manifest_path"]).resolve()
+            if (manifest_path != Path(clock["path"]).resolve().parent / MANIFEST_NAME
+                    or self._binding_sha256(manifest_path) != clock.get("generated_manifest_sha256")):
+                raise ValueError("Generated-clock receipt changed")
+            generated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            rows = generated.get("source_inventory")
+            inventory_hash = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            if (generated.get("schema") != SCHEMA or generated.get("source") != SOURCE
+                    or generated.get("alignment_sha256") != clock.get("sha256")
+                    or generated.get("frame_count") != clock.get("frame_count")
+                    or generated.get("alignment_file") != Path(clock["path"]).name
+                    or inventory_hash != generated.get("source_inventory_sha256")
+                    or inventory_hash != clock.get("source_inventory_sha256")
+                    or Path(generated["raw_run_dir"]).resolve() != raw
+                    or Path(clock["source_raw_run_dir"]).resolve() != raw
+                    or clock.get("native_correspondence_verified") is not True):
+                raise ValueError("Generated-clock source inventory is not bound")
+            inventory = {row["file_name"]:dict(row) for row in rows}
+        return {"run":dict(run), "stages":stages, "audit":audit, "phase":phase,
+                "phase_path":phase_path, "phase_sha256":phase_source["sha256"],
+                "core_path":core_path, "clock":clock, "raw":raw,
+                "inventory":inventory, "alignment_rows":alignment_rows}
+
+    def _decode_review_frame(self, context: Mapping[str, Any], index: int, anchor: float) -> tuple[bytes, float]:
+        import cv2
+        import numpy as np
+        from .hdf5_reader import RecordingReader, list_hdf5_paths
+
+        with self.retriever._connect() as connection:
+            row = connection.execute(
+                "SELECT f.*, s.path AS source_path, s.sha256 AS source_sha256, s.source_type "
+                "FROM frames f JOIN source_files s ON f.source_file_id=s.source_file_id "
+                "WHERE f.global_run_id=? AND f.frame_idx=?",
+                (context["run"]["global_run_id"], index),
+            ).fetchone()
+        if row is None or row["source_type"] != "raw_hdf5":
+            raise ValueError("The anchored source frame is unavailable")
+        observation = json.loads(row["observation_json"])
+        timestamp = float(row["t_video_s"])
+        if (not math.isfinite(timestamp) or not math.isclose(timestamp, anchor, abs_tol=1e-6, rel_tol=0)
+                or int(observation["frame_idx_global"]) != index
+                or float(observation["t_video_s"]) != timestamp):
+            raise ValueError("The anchor time and database frame do not match")
+        path = Path(row["source_path"]).resolve()
+        if path.parent != context["raw"] or path.name != observation.get("source_hdf5"):
+            raise ValueError("The anchored source path differs from the bound recording")
+        declaration = context["inventory"].get(path.name)
+        if not declaration:
+            raise ValueError("The source chunk is absent from the bound inventory")
+        expected_hash = row["source_sha256"] or declaration.get("sha256")
+        if not expected_hash or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
+            raise ValueError("Original source content has no bound checksum")
+        if (row["source_sha256"] and declaration.get("sha256")
+                and row["source_sha256"] != declaration["sha256"]):
+            raise ValueError("Source checksums disagree")
+        if self._binding_sha256(path) != expected_hash:
+            raise ValueError("The original source chunk changed")
+        local_index = int(observation["source_frame_idx"])
+        if local_index < 0 or row["source_row"] != local_index:
+            raise ValueError("The original frame index is not bound")
+        aligned = context["alignment_rows"]
+        if aligned is not None:
+            mapped = aligned[index]
+            if float(mapped["video_time_s"]) != timestamp:
+                raise ValueError("The anchor differs from the bound video clock")
+            for field in ("source_hdf5", "source_frame_idx", "t_abs"):
+                if field in mapped:
+                    expected = observation[field]
+                    if field == "source_hdf5":
+                        matched = mapped[field] == expected
+                    else:
+                        matched = float(mapped[field]) == float(expected)
+                    if not matched:
+                        raise ValueError("Generated clock and native source identity disagree")
+        elif not math.isclose(float(observation["t_abs"])-float(context["clock"]["raw_time_origin_abs"]),
+                              timestamp, rel_tol=0, abs_tol=1e-6):
+            raise ValueError("The native-relative source clock differs")
+        if {p.name for p in list_hdf5_paths(context["raw"])} != set(context["inventory"]):
+            raise ValueError("The native recording inventory changed")
+        identities = tuple(self._file_identity(context["raw"] / name) for name in sorted(context["inventory"]))
+        reader_key = (str(context["raw"]), identities)
+        if self._review_reader_cache is None or self._review_reader_cache[0] != reader_key:
+            reader = RecordingReader(context["raw"])
+            if {p.name for p in reader.paths} != set(context["inventory"]):
+                raise ValueError("The native recording inventory changed")
+            self._review_reader_cache = (reader_key, reader)
+        reader = self._review_reader_cache[1]
+        cache_key = (expected_hash, self._file_identity(path), local_index)
+        if cache_key not in self._review_png_cache:
+            with reader.open_chunk(path) as handle:
+                times, images = handle.get("data/time"), handle.get("data/l_img")
+                if times is None or images is None or local_index >= len(times) or local_index >= len(images):
+                    raise ValueError("The requested native image does not exist")
+                if float(times[local_index]) != float(observation["t_abs"]):
+                    raise ValueError("Native image timestamp differs from the bound observation")
+                bgr = np.asarray(images[local_index])
+                if bgr.dtype != np.uint8 or bgr.ndim != 3 or bgr.shape[2] != 3:
+                    raise ValueError("Unsupported original-image shape or type")
+                # OpenCV encodes BGR into a browser-standard RGB PNG correctly.
+                try:
+                    success, encoded = cv2.imencode(".png", bgr)
+                except cv2.error as exc:
+                    raise ValueError("Original image encoding failed") from exc
+                if not success:
+                    raise ValueError("Original image encoding failed")
+            if cache_key[1] != self._file_identity(path):
+                raise ValueError("The original source changed while decoding")
+            if len(self._review_png_cache) >= 32:
+                self._review_png_cache.clear()
+            self._review_png_cache[cache_key] = encoded.tobytes()
+        return self._review_png_cache[cache_key], timestamp
+
+    def _enrich_review_keyframes(self, plan: Mapping[str, Any], run: Mapping[str, Any]) -> None:
+        with self._review_lock:
+            authorized = {}
+            context, context_error = None, None
+            for item in plan.get("items", []):
+                for ordinal, clip in enumerate(item.get("review_clips") or []):
+                    clip["keyframe_available"] = False
+                    clip.pop("keyframe_url", None)
+                    anchor = clip.get("anchor_t_s")
+                    index = clip.get("anchor_frame_idx_global")
+                    if index is None or anchor is None:
+                        clip["keyframe_reason"] = "no_bound_native_anchor"
+                        continue
+                    try:
+                        if isinstance(index, bool) or int(index) != float(index) or not math.isfinite(float(anchor)):
+                            raise ValueError("Invalid native anchor")
+                        if not float(clip["t_start_s"]) <= float(anchor) <= float(clip["t_end_s"]):
+                            raise ValueError("The anchor is outside its review interval")
+                        if context_error:
+                            raise ValueError(context_error)
+                        if context is None:
+                            try:
+                                context = self._bound_review_context(run)
+                            except (OSError, ValueError, KeyError, TypeError) as exc:
+                                context_error = str(exc)
+                                raise
+                        png, timestamp = self._decode_review_frame(context, int(index), float(anchor))
+                        token = hashlib.sha256(json.dumps([run["global_run_id"], item.get("feedback_id"),
+                            clip.get("review_clip_id"), ordinal, int(index), timestamp], separators=(",", ":")).encode()).hexdigest()
+                        authorized[token] = png
+                        clip.update(keyframe_available=True, keyframe_time_s=timestamp,
+                                    keyframe_frame_idx_global=int(index),
+                                    keyframe_url="/api/media/keyframe?"+urlencode({"clip_id":token}))
+                        clip.pop("keyframe_reason", None)
+                    except (ImportError, OSError, ValueError, KeyError, TypeError, IndexError):
+                        clip["keyframe_reason"] = "original_source_unavailable_or_unbound"
+            self._review_images = authorized
+
+    def original_review_frame(self, clip_id: str) -> bytes:
+        if not re.fullmatch(r"[0-9a-f]{64}", clip_id):
+            raise ValueError("Unknown review frame")
+        # Revalidate current coaching membership and changed-file identities.
+        with self._review_lock:
+            self.bootstrap()
+            if clip_id not in self._review_images:
+                raise ValueError("Original review frame is unavailable")
+            return self._review_images[clip_id]
+
+    def _current_motion_comparison(self, run: Mapping[str, Any], reference: Mapping[str, Any]) -> dict:
+        """Compare current DB observations; an archive never borrows observed reference values."""
+        from .motion_comparison import add_stroke_length, artifact_sha256, build_motion_windows, compare_motion_windows, validate_window_build
+
+        unavailable = {"schema": "motion_comparison_v1", "available": False,
+                       "status": "unavailable", "reason": "current_motion_source_unbound",
+                       "global_run_id": run["global_run_id"], "windows": [], "episodes": [], "per_phase": {}}
+        unavailable["artifact_sha256"] = artifact_sha256(unavailable)
+        try:
+            context = self._bound_review_context(run)
+            stages = context["stages"]
+            sidecar = stages / "09_motion_comparison/motion_windows.json"
+            expected_sources = {
+                "frames": stages / "05_strokes/frame_observations_complete.csv",
+                "phases": stages / "01_core_frames/phase_intervals.csv",
+                "clock": context["core_path"],
+            }
+            identities = [self._file_identity(self.retriever.db_path),
+                          self._file_identity(context["phase_path"]), self._file_identity(context["core_path"])]
+            if self.cohort_benchmark_path:
+                identities.append(self._file_identity(self.cohort_benchmark_path))
+            if sidecar.is_file():
+                identities.append(self._file_identity(sidecar))
+                identities.extend(self._file_identity(path) for path in expected_sources.values())
+            cache_key = tuple(identities)
+            if self._motion_cache is not None and self._motion_cache[0] == cache_key:
+                return self._motion_cache[1]
+            with self.retriever._connect() as connection:
+                records = connection.execute(
+                    "SELECT frame_idx,t_video_s,phase_id,observation_json FROM frames "
+                    "WHERE global_run_id=? ORDER BY frame_idx", (run["global_run_id"],),
+                ).fetchall()
+            frames = []
+            for index, record in enumerate(records):
+                row = json.loads(record["observation_json"])
+                if (record["frame_idx"] != index or row.get("frame_idx_global") != index
+                        or row.get("t_video_s") != record["t_video_s"]
+                        or row.get("phase_id") != record["phase_id"]):
+                    raise ValueError("Current database observation identity differs")
+                frames.append(row)
+            if len(frames) != context["clock"].get("frame_count"):
+                raise ValueError("Motion frame count differs from the bound recording clock")
+            provenance = {
+                "pose_source": "canonical_vision_pose", "position_unit": "m",
+                "phase_source_kind": "model_phase_prediction",
+                "phase_model_sha256": context["phase"].get("checkpoint_sha256"),
+                "clock_source": context["clock"]["source"],
+                "source_artifacts": [
+                    {"kind": "frames", "path": str(self.retriever.db_path.resolve()),
+                     "sha256": self._binding_sha256(self.retriever.db_path)},
+                    {"kind": "phases", "path": str(context["phase_path"]), "sha256": context["phase_sha256"]},
+                    {"kind": "clock", "path": str(context["core_path"]),
+                     "sha256": self._binding_sha256(context["core_path"])},
+                ],
+            }
+            current = build_motion_windows(frames, global_run_id=run["global_run_id"],
+                participant_id=run.get("participant_id") or None, provenance=provenance)
+            origin = "current_database_observations_archive_fallback"
+            length_origin = None
+            if sidecar.is_file():
+                saved = json.loads(sidecar.read_text(encoding="utf-8"))
+                validate_window_build(saved)
+                saved_provenance = saved["provenance"]
+                for key in ("pose_source", "position_unit", "phase_source_kind", "phase_model_sha256", "clock_source"):
+                    if saved_provenance.get(key) != provenance[key]:
+                        raise ValueError("Saved motion source contract differs from current authority")
+                declarations = saved_provenance["source_artifacts"]
+                if len(declarations) != 3 or {s["kind"] for s in declarations} != set(expected_sources):
+                    raise ValueError("Saved motion source inventory differs")
+                for declaration in declarations:
+                    path = expected_sources[declaration["kind"]].resolve()
+                    if (Path(declaration["path"]).resolve() != path
+                            or self._binding_sha256(path) != declaration["sha256"]):
+                        raise ValueError("Saved motion artifact differs from the current pipeline")
+                if saved.get("stroke_length_metadata") is not None:
+                    current = add_stroke_length(current, frames)
+                    for key in ("stroke_length_metadata", "stroke_lengths"):
+                        if saved.get(key) != current.get(key):
+                            raise ValueError("Saved stroke lengths differ from current database observations")
+                    length_origin = "bound_pipeline_sidecar_verified_against_current_database"
+                for key in ("global_run_id", "participant_id", "protocol_sha256", "input_rows_sha256",
+                            "source_frame_count", "native_time_origin_abs", "native_duration_s", "windows"):
+                    if saved.get(key) != current.get(key):
+                        raise ValueError("Saved motion values differ from current database observations")
+                current = saved
+                origin = "bound_pipeline_sidecar_verified_against_current_database"
+            length_unavailable = None
+            if (any(item.get("stroke_length_metadata") is not None for item in reference["recordings"])
+                    and current.get("stroke_length_metadata") is None):
+                try:
+                    current = add_stroke_length(current, frames)
+                    length_origin = "current_database_complete_strokes"
+                except ValueError as error:
+                    length_unavailable = str(error)
+            result = compare_motion_windows(current, reference, participant_id=run.get("participant_id") or None)
+            result["current_source"] = origin
+            if length_unavailable is not None:
+                result["stroke_length_unavailable_reason"] = length_unavailable
+            if length_origin is not None:
+                result["stroke_length_source"] = length_origin
+            result["artifact_sha256"] = artifact_sha256(result)
+            self._motion_cache = (cache_key, result)
+            return result
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return unavailable
+
+    def _validate_ray_binding(self, ray: Mapping[str, Any], run: Mapping[str, Any]) -> bool:
+        """Bind strict-build sidecars to DB-anchored evidence, not their run claim."""
+        with self.retriever._connect() as connection:
+            artifact = connection.execute(
+                "SELECT path, sha256 FROM generated_artifacts WHERE global_run_id = ? "
+                "AND artifact_type = 'stroke_build'", (run["global_run_id"],),
+            ).fetchone()
+            phase_source = connection.execute(
+                "SELECT path, sha256 FROM source_files WHERE global_run_id = ? "
+                "AND source_type = 'model_phase_prediction'", (run["global_run_id"],),
+            ).fetchone()
+        stages = self.artifact_root / "stages"
+        artifact_path = None
+        if artifact is not None and not str(artifact["path"]).startswith("in_memory://"):
+            artifact_path = Path(artifact["path"]).resolve()
+            if artifact_path.is_relative_to(self.artifact_root):
+                stages = artifact_path.parent.parent
+        audit_path = stages / "00_source_audit" / "source_manifest.json"
+        if not audit_path.is_file():
+            if run.get("source_manifest_hash"):
+                raise ValueError("The database-bound source audit is unavailable")
+            return False  # Small historical/synthetic stores can have no source audit.
+        audit = json.loads(audit_path.read_text(encoding="utf-8"))
+        canonical = json.dumps(
+            {key: value for key, value in audit.items() if key != "generated_at"},
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        if hashlib.sha256(canonical).hexdigest() != run.get("source_manifest_hash"):
+            raise ValueError("Source audit does not match the database manifest hash")
+        if audit.get("global_run_id") != run["global_run_id"]:
+            raise ValueError("Source audit belongs to a different recording")
+        authority = audit.get("geometry_provenance") or {}
+        strict_historical = (
+            authority.get("status") == "verified_R4_v3_sources"
+            and authority.get("real_R4_validated") is True
+        )
+        strict_model = (
+            authority.get("status") == "verified_anatomy_model_sources"
+            and authority.get("real_R4_validated") is False
+            and authority.get("model_parameter_sources_verified") is True
+            and authority.get("recording_geometry_verified") is False
+            and authority.get("geometry_quality") == "unverified_new_recording"
+        )
+        if authority.get("status") == "verified_anatomy_model_sources" and not strict_model:
+            raise ValueError("New model-geometry authority has inconsistent verification flags")
+        if not (strict_historical or strict_model):
+            return False  # Preserve explicit synthetic and historical low-level contracts.
+        if artifact_path is None or not artifact_path.is_relative_to(self.artifact_root):
+            raise ValueError("Strict source artifacts are not bound inside the database artifact root")
+        if self._binding_sha256(artifact_path) != artifact["sha256"]:
+            raise ValueError("The database-bound stroke artifact changed")
+        provenance = ray.get("provenance") or {}
+        if provenance.get("geometry_provenance") != authority:
+            raise ValueError("Ray geometry provenance differs from the database-bound R4 receipt")
+        core_path = stages / "01_core_frames" / "extraction_manifest.json"
+        core = json.loads(core_path.read_text(encoding="utf-8"))
+        if core.get("geometry_provenance") != authority or core.get("global_run_id") != run["global_run_id"]:
+            raise ValueError("Current frame provenance differs from the database-bound R4 receipt")
+        clock = core.get("clock_alignment")
+        if not isinstance(clock, dict) or provenance.get("clock_alignment") != clock:
+            raise ValueError("Ray clock differs from the current frame clock")
+        if phase_source is not None:
+            phase_path = Path(phase_source["path"]).resolve()
+            if not phase_path.is_relative_to(self.artifact_root):
+                raise ValueError("The phase clock authority is outside the database artifact root")
+            if self._binding_sha256(phase_path) != phase_source["sha256"]:
+                raise ValueError("The database-bound phase manifest changed")
+            phase = json.loads(phase_path.read_text(encoding="utf-8"))
+            if phase.get("clock") != clock:
+                raise ValueError("Frame clock differs from the database-bound phase clock")
+        if clock.get("source") in {"explicit_frame_alignment", "generated_hdf5_native_alignment"}:
+            if not clock.get("path") or self._binding_sha256(Path(clock["path"])) != clock.get("sha256"):
+                raise ValueError("The bound frame-alignment source changed")
+        if clock.get("source") == "generated_hdf5_native_alignment":
+            from .hdf5_clock import MANIFEST_NAME, SCHEMA, SOURCE
+
+            alignment_path = Path(clock["path"]).resolve()
+            manifest_value = clock.get("generated_manifest_path")
+            if not manifest_value:
+                raise ValueError("The generated HDF5 clock manifest is unavailable")
+            manifest_path = Path(manifest_value).resolve()
+            if manifest_path != alignment_path.parent / MANIFEST_NAME:
+                raise ValueError("The generated HDF5 clock manifest has a different location")
+            if self._binding_sha256(manifest_path) != clock.get("generated_manifest_sha256"):
+                raise ValueError("The bound generated HDF5 clock manifest changed")
+            generated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            inventory = generated.get("source_inventory")
+            inventory_digest = hashlib.sha256(json.dumps(
+                inventory, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            if (
+                generated.get("schema") != SCHEMA or generated.get("source") != SOURCE
+                or generated.get("alignment_file") != alignment_path.name
+                or generated.get("alignment_sha256") != clock.get("sha256")
+                or generated.get("frame_count") != clock.get("frame_count")
+                or not isinstance(inventory, list) or not inventory
+                or inventory_digest != generated.get("source_inventory_sha256")
+                or inventory_digest != clock.get("source_inventory_sha256")
+                or not clock.get("source_raw_run_dir") or not generated.get("raw_run_dir")
+                or Path(generated["raw_run_dir"]).resolve() != Path(clock["source_raw_run_dir"]).resolve()
+                or generated.get("training_reference_clock") is not False
+                or clock.get("training_reference_clock") is not False
+                or clock.get("native_correspondence_verified") is not True
+            ):
+                raise ValueError("Generated HDF5 clock source binding is inconsistent")
+        inputs = provenance.get("input_artifacts") or {}
+        expected_paths = {
+            "frames": stages / "05_strokes" / "frame_observations_complete.csv",
+            "removed_voxels": stages / "02_edt_enrichment" / "removed_voxel_edt.csv",
+        }
+        for name, expected_path in expected_paths.items():
+            declared = inputs.get(name) or {}
+            if not declared.get("path") or Path(declared["path"]).resolve() != expected_path.resolve():
+                raise ValueError(f"Ray {name} are not the current recording's stage artifact")
+            if self._binding_sha256(expected_path) != declared.get("sha256"):
+                raise ValueError(f"Ray {name} hash differs from the current stage artifact")
+        return True
 
     def _study(self) -> ExpertStudyStore:
         if self.mode != "expert-study" or self.study_store is None:
@@ -674,13 +1187,19 @@ class FeedbackService:
             },
             "phases": [
                 {
+                    "phase_id": row.get("phase_id"),
                     "phase_name": row.get("phase_name"),
+                    "phase_source_kind": row.get("phase_source_kind"),
+                    "phase_source_sha256": row.get("phase_source_sha256"),
+                    "segment_role": row.get("segment_role"),
                     "t_start_s": row.get("t_start_s"),
                     "t_end_s": row.get("t_end_s"),
                 }
                 for row in bootstrap["phases"]
             ],
             "feedback": feedback,
+            "detection_status": bootstrap["detection_status"],
+            "review_candidates": bootstrap["review_candidates"],
             "media": bootstrap["media"],
             "expert_proposed_moments": self.public_moments(participant_id),
         }
@@ -960,6 +1479,25 @@ def _handler(
             )
             self._file(path, mime_type, send_body=send_body)
 
+        def _keyframe(self, parsed, *, send_body: bool = True) -> None:
+            query = parse_qs(parsed.query, keep_blank_values=True)
+            if set(query) != {"clip_id"} or len(query["clip_id"]) != 1:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "Original review frame unavailable"})
+                return
+            try:
+                body = service.original_review_frame(query["clip_id"][0])
+            except ValueError:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "Original review frame unavailable"})
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self._headers()
+            self.end_headers()
+            if send_body:
+                self.wfile.write(body)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             try:
@@ -980,6 +1518,9 @@ def _handler(
                     return
                 if parsed.path == "/api/media/video":
                     self._file(service.video_path, "video/webm")
+                    return
+                if parsed.path == "/api/media/keyframe":
+                    self._keyframe(parsed)
                     return
                 if parsed.path == "/api/expert-study/coaching-moment-audio":
                     self._audio(parsed)
@@ -1004,6 +1545,9 @@ def _handler(
             try:
                 if parsed.path == "/api/media/video":
                     self._file(service.video_path, "video/webm", send_body=False)
+                    return
+                if parsed.path == "/api/media/keyframe":
+                    self._keyframe(parsed, send_body=False)
                     return
                 if parsed.path == "/api/expert-study/coaching-moment-audio":
                     self._audio(parsed, send_body=False)

@@ -12,6 +12,7 @@ from typing import Any, Sequence
 
 from .core_frames import _git_commit, _require_numeric_stack
 from .edt_enrichment import EdtFrameBuild, load_anatomy_profile, read_edt_file
+from .phase_geometry import resolve_phase_geometry
 from ..registry import RunRecord
 from ..source_config import ResolvedRunSources
 
@@ -84,9 +85,16 @@ def enrich_tip_edt(
     sources: ResolvedRunSources,
     *,
     project_root: Path,
+    anatomy_profile: dict[str, Any] | None = None,
 ) -> TipEdtBuild:
     _, np = _require_numeric_stack()
-    profile = load_anatomy_profile(project_root, record.anatomy_key)
+    profile = (
+        anatomy_profile if anatomy_profile is not None
+        else load_anatomy_profile(project_root, record.anatomy_key)
+    )
+    phase_geometry = resolve_phase_geometry(
+        profile, global_run_id=record.global_run_id, edt_profile=record.edt_profile
+    )
     frames = edt.frames
     drill_position = np.asarray(
         [[row["drill_x"], row["drill_y"], row["drill_z"]] for row in frames],
@@ -103,6 +111,10 @@ def enrich_tip_edt(
         ],
         dtype=float,
     )
+    if phase_geometry is not None:
+        volume_quaternion = np.broadcast_to(
+            phase_geometry["volume_quaternion_xyzw"], (len(frames), 4)
+        ).copy()
     local_m = _inverse_quaternion_rotate(
         drill_position - volume_position, volume_quaternion
     )
@@ -162,6 +174,7 @@ def enrich_tip_edt(
         "tip_outside_volume_frame_count": outside_count,
         "tip_inside_volume_frame_count": int(np.sum(inside)),
         "distance_definition": "EDT_raw * edt_distance_scale_mm - burr_mm / 2",
+        "phase_signal_geometry": phase_geometry,
         "invariants": {
             "upstream_ready": bool(edt.manifest["ready_for_visibility_enrichment"]),
             "frame_count_preserved": len(rows) == len(frames),

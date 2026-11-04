@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from typing import Any, Sequence
 
-from .core_frames import _git_commit, _require_numeric_stack
+from .core_frames import _git_commit, _require_numeric_stack, map_native_event_times
 from .tip_edt import TIP_STRUCTURES
 from .visibility import VisibilityBuild
 from ..registry import RunRecord
@@ -150,6 +150,34 @@ def build_strokes(
         [index for index, row in enumerate(frames) if row["is_drilling_frame"]],
         dtype=int,
     )
+    for row in frames:
+        row["stroke_id"] = None
+        row["stroke_end_flag"] = False
+    if len(drilling_global_indices) < 7:
+        # The k=3 detector has no supported neighborhood. Preserve frame evidence
+        # instead of inventing a stroke or making the feedback/video build fail.
+        return StrokeBuild(frames, [], [], visibility.removed_voxels, {
+            "schema": "stroke_evidence_v1",
+            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "git_commit": _git_commit(project_root),
+            "dataset_id": record.dataset_id, "run_id": record.run_id,
+            "global_run_id": record.global_run_id,
+            "upstream_schema": visibility.manifest["schema"],
+            "frame_count": len(frames), "drilling_frame_count": len(drilling_global_indices),
+            "stroke_count": 0,
+            "segmentation": {"method": "legacy_k_cosine_v1", "neighbor_k": 3,
+                             "status": "insufficient_drilling_frames", "minimum_frames": 7},
+            "metrics_available": False,
+            "clock_semantics": {"video_bounds": "canonical aligned frame clock",
+                                "duration_and_kinematic_rates": "native HDF5 data/time seconds"},
+            "invariants": {
+                "upstream_ready": bool(visibility.manifest["ready_for_strokes"]),
+                "frame_count_preserved": len(frames) == len(visibility.frames),
+                "no_strokes_or_metrics_invented": True,
+            },
+            "ready_for_eventization": bool(visibility.manifest["ready_for_strokes"]),
+            "eventization_scope": "frame_level_evidence_only; performance bouts unavailable",
+        })
     positions = np.asarray(
         [
             [frames[index]["drill_x"], frames[index]["drill_y"], frames[index]["drill_z"]]
@@ -164,6 +192,14 @@ def build_strokes(
     start_indices = np.insert(end_indices[:-1] + 1, 0, 0)
     boundary_end_abs = times_abs[end_indices]
     boundary_start_abs = np.insert(boundary_end_abs[:-1], 0, np.min(times_abs))
+    native_frame_times = np.asarray([row["t_abs"] for row in frames], dtype=float)
+    canonical_frame_times = np.asarray([row["t_video_s"] for row in frames], dtype=float)
+    boundary_start_video = map_native_event_times(
+        boundary_start_abs, native_frame_times, canonical_frame_times,
+    )
+    boundary_end_video = map_native_event_times(
+        boundary_end_abs, native_frame_times, canonical_frame_times,
+    )
     legacy_metrics = _legacy_kinematics(positions, times_abs, stroke_ends)
 
     for row in frames:
@@ -201,9 +237,11 @@ def build_strokes(
                 "end_time_video": end_video,
                 "boundary_start_abs": float(boundary_start),
                 "boundary_end_abs": float(boundary_end),
-                "boundary_start_video": float(boundary_start - frames[0]["t_abs"]),
-                "boundary_end_video": float(boundary_end - frames[0]["t_abs"]),
+                "boundary_start_video": float(boundary_start_video[stroke_id]),
+                "boundary_end_video": float(boundary_end_video[stroke_id]),
                 "duration_s": end_abs - start_abs,
+                "duration_clock": "native_HDF5_data/time",
+                "video_duration_s": end_video - start_video,
                 "n_frames": end - start + 1,
             }
         )
@@ -267,6 +305,10 @@ def build_strokes(
         "frame_count": len(frames),
         "drilling_frame_count": len(drilling_global_indices),
         "stroke_count": len(stroke_rows),
+        "clock_semantics": {
+            "video_bounds": "canonical aligned frame clock",
+            "duration_and_kinematic_rates": "native HDF5 data/time seconds",
+        },
         "segmentation": {
             "method": "legacy_k_cosine_v1",
             "neighbor_k": 3,
@@ -353,9 +395,14 @@ def compare_legacy_strokes(build: StrokeBuild, raw_run_dir: Path) -> dict[str, A
     return {"stroke_table": table, "legacy_kinematics": metrics}
 
 
-def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
+def _write_csv(
+    path: Path, rows: Sequence[dict[str, Any]], *, empty_fields: Sequence[str] = ()
+) -> None:
+    fields = list(rows[0]) if rows else list(empty_fields)
+    if not fields:
+        raise ValueError(f"Required frame artifact is empty: {path.name}")
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -363,8 +410,15 @@ def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
 def write_stroke_build(output_dir: Path, build: StrokeBuild, regression: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "frame_observations_complete.csv", build.frames)
-    _write_csv(output_dir / "strokes.csv", build.strokes)
-    _write_csv(output_dir / "stroke_metrics.csv", build.metrics)
+    _write_csv(output_dir / "strokes.csv", build.strokes, empty_fields=(
+        "stroke_evidence_id", "global_run_id", "stroke_id", "start_time_abs", "end_time_abs",
+        "start_time_video", "end_time_video", "duration_s", "duration_clock", "video_duration_s",
+    ))
+    _write_csv(output_dir / "stroke_metrics.csv", build.metrics, empty_fields=(
+        "stroke_evidence_id", "global_run_id", "stroke_id", "stroke_end_time_video",
+        "legacy_length_m", "legacy_velocity_m_s", "legacy_acceleration", "legacy_jerk",
+        "legacy_curvature", "removed_voxel_count", "removed_volume_mm3",
+    ))
     (output_dir / "stroke_manifest.json").write_text(
         json.dumps(build.manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

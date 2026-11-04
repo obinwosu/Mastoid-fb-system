@@ -121,6 +121,11 @@ class DemoPipelineTests(unittest.TestCase):
             self.assertGreater(summary["event_count"], 0)
             self.assertGreater(summary["relation_count"], 0)
             self.assertEqual(summary["store_integrity"], "ok")
+            self.assertEqual(summary["under_ledge_detection"]["status"], "not_run")
+            self.assertEqual(
+                summary["under_ledge_detection"]["reason"],
+                "validated_signal_geometry_not_configured",
+            )
             self.assertTrue(
                 (result_dir / "stages" / "07_relations" / "relations.jsonl").is_file()
             )

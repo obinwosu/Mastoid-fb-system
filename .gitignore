@@ -30,6 +30,7 @@ secrets/
 config/local/
 config/*.local.*
 config/source_paths.local.json
+/config.local.json
 
 # Raw, derived, and participant-generated data
 .local/

@@ -37,24 +37,32 @@
       <p>Start with the highest-priority item, then review the linked moments in your video.</p>
     </section>
 
-    <section class="feedback-layout">
-      <nav class="focus-list" aria-label="Session coaching priorities">
-        <div id="focusList"></div>
-      </nav>
+    <section class="review-workspace" aria-label="Video and coaching review">
+      <aside class="video-card" id="videoCard" aria-labelledby="videoHeading">
+        <div class="section-title video-title">
+          <div><p class="eyebrow">Linked session video</p><h2 id="videoHeading">Review the supporting moment</h2></div>
+          <span id="videoWindow">Full session</span>
+        </div>
+        <div class="media-stage" id="mediaStage">
+          <video id="sessionVideo" controls preload="metadata" playsinline>Your browser does not support the local review video.</video>
+          <div id="videoUnavailable" class="video-unavailable hidden">A review video is not available for this session.</div>
+          <div id="keyframeOverlay" class="keyframe-overlay hidden">
+            <img id="keyframeImage" alt="" />
+            <div class="keyframe-caption"><span id="keyframeCaption"></span><button id="returnToVideo" type="button">Return to video</button></div>
+          </div>
+        </div>
+        <p id="keyframeStatus" class="keyframe-status hidden" role="status" aria-live="polite"></p>
+        <div id="clipList" class="clip-list"></div>
+      </aside>
 
-      <article class="feedback-detail" id="feedbackDetail">
-        <div class="empty-state"><h2>Loading session feedback…</h2></div>
-      </article>
-    </section>
-
-    <section class="video-card" id="videoCard">
-      <div class="section-title video-title">
-        <div><p class="eyebrow">Linked session video</p><h2 id="videoHeading">Review the supporting moment</h2></div>
-        <span id="videoWindow">Full session</span>
+      <div class="feedback-layout">
+        <nav class="focus-list" aria-label="Session coaching priorities">
+          <div id="focusList"></div>
+        </nav>
+        <article class="feedback-detail" id="feedbackDetail">
+          <div class="empty-state"><h2>Loading session feedback…</h2></div>
+        </article>
       </div>
-      <video id="sessionVideo" controls preload="metadata" playsinline>Your browser does not support the local review video.</video>
-      <div id="videoUnavailable" class="video-unavailable hidden">A review video is not available for this session.</div>
-      <div id="clipList" class="clip-list"></div>
     </section>
 
     <details class="more-detail">

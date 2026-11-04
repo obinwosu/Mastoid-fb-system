@@ -17,7 +17,7 @@ MAX_ROWS = 500
 
 TOOL_DESCRIPTIONS = {
     "get_run_summary": ("Retrieve compact run, phase, and evidence counts.", ["run_id"]),
-    "get_phase_summary": ("Retrieve compact evidence statistics for one manual phase.", ["run_id", "phase"]),
+    "get_phase_summary": ("Aggregate evidence across every interval of one phase label.", ["run_id", "phase"]),
     "get_events": ("Filter canonical events by type, phase, status, or time overlap.", ["run_id"]),
     "get_event_details": ("Retrieve one event, its evidence IDs, relations, and motion context.", ["event_id"]),
     "get_event_relations": ("Retrieve the factual subgraph incident to one event.", ["event_id"]),
@@ -26,7 +26,7 @@ TOOL_DESCRIPTIONS = {
     "get_source_frames": ("Page through source frames supporting one event.", ["event_id"]),
     "get_source_strokes": ("Page through source strokes supporting one event.", ["event_id"]),
     "get_review_clip": ("Retrieve a generated review clip or explicit unavailable status.", ["event_id"]),
-    "compare_phases": ("Compare compact statistics across one to four manual phases.", ["run_id", "phases"]),
+    "compare_phases": ("Compare compact statistics across one to four phase labels.", ["run_id", "phases"]),
     "get_expert_reference": ("Retrieve registered expert reference or explicit abstention.", ["run_id"]),
     "get_validated_coaching_rule": ("Retrieve only expert-validated coaching rules.", ["event_type"]),
 }
@@ -147,6 +147,7 @@ class EvidenceRetriever:
             "t_start_s": row["t_start_s"],
             "t_end_s": row["t_end_s"],
             "phase": row["phase_name"],
+            "phase_id": row["phase_id"],
             "anatomy": row["anatomy"],
             "evidence_status": row["evidence_status"],
             "lifecycle_status": row["lifecycle_status"],
@@ -184,10 +185,17 @@ class EvidenceRetriever:
             phases = [
                 {
                     **dict(row),
-                    "segment_role": "pre_drilling_context" if row["phase_name"] == "pre_drilling" else "annotated_drilling_phase",
+                    "segment_role": (
+                        "pre_drilling_context" if row["phase_name"] == "pre_drilling" else
+                        "predicted_drilling_phase" if row["phase_source_kind"] == "model_phase_prediction"
+                        else "annotated_drilling_phase"
+                    ),
                 }
                 for row in connection.execute(
-                    "SELECT phase_id, phase_name, t_start_s, t_end_s FROM phases WHERE global_run_id = ? ORDER BY t_start_s",
+                    "SELECT p.*, s.source_type AS phase_source_kind, "
+                    "s.sha256 AS phase_source_sha256 FROM phases p "
+                    "LEFT JOIN source_files s ON s.source_file_id = p.annotation_source_id "
+                    "WHERE p.global_run_id = ? ORDER BY p.t_start_s, p.phase_id",
                     (global_run_id,),
                 )
             ]
@@ -203,6 +211,9 @@ class EvidenceRetriever:
                 ),
                 "pre_drilling_context_count": sum(
                     row["segment_role"] == "pre_drilling_context" for row in phases
+                ),
+                "predicted_drilling_phase_count": sum(
+                    row["segment_role"] == "predicted_drilling_phase" for row in phases
                 ),
                 "evidence_ids": [global_run_id],
             }
@@ -422,23 +433,30 @@ class EvidenceRetriever:
     def get_phase_summary(self, run_id: str, phase: str) -> dict[str, Any]:
         with self._connect() as connection:
             global_run_id = self._global_run_id(connection, run_id)
-            phase_row = connection.execute(
-                "SELECT * FROM phases WHERE global_run_id = ? AND phase_name = ?", (global_run_id, phase)
-            ).fetchone()
-            if phase_row is None:
+            phase_rows = connection.execute(
+                "SELECT p.*, s.source_type AS phase_source_kind, "
+                "s.sha256 AS phase_source_sha256 FROM phases p "
+                "LEFT JOIN source_files s ON s.source_file_id = p.annotation_source_id "
+                "WHERE p.global_run_id = ? AND p.phase_name = ? ORDER BY p.t_start_s, p.phase_id",
+                (global_run_id, phase),
+            ).fetchall()
+            if not phase_rows:
                 raise KeyError(f"Unknown phase for {run_id}: {phase}")
+            phase_ids = [row["phase_id"] for row in phase_rows]
+            placeholders = ",".join("?" for _ in phase_ids)
             frame_rows = connection.execute(
-                "SELECT frame_evidence_id, observation_json FROM frames WHERE phase_id = ? ORDER BY frame_idx",
-                (phase_row["phase_id"],),
+                "SELECT frame_evidence_id, observation_json FROM frames "
+                f"WHERE phase_id IN ({placeholders}) ORDER BY frame_idx", phase_ids,
             ).fetchall()
             observations = [_decode(row["observation_json"], {}) for row in frame_rows]
             event_rows = connection.execute(
-                "SELECT event_type, COUNT(*) AS n FROM events WHERE phase_id = ? GROUP BY event_type ORDER BY event_type",
-                (phase_row["phase_id"],),
+                "SELECT event_type, COUNT(*) AS n FROM events "
+                f"WHERE phase_id IN ({placeholders}) GROUP BY event_type ORDER BY event_type",
+                phase_ids,
             ).fetchall()
             relation_rows = connection.execute(
-                "SELECT * FROM relations WHERE source_id = ? OR target_id = ? ORDER BY relation_id",
-                (phase_row["phase_id"], phase_row["phase_id"]),
+                f"SELECT * FROM relations WHERE source_id IN ({placeholders}) "
+                f"OR target_id IN ({placeholders}) ORDER BY relation_id", [*phase_ids, *phase_ids],
             ).fetchall()
             phase_relations = []
             for relation in relation_rows:
@@ -449,13 +467,21 @@ class EvidenceRetriever:
             return {
                 "tool": "get_phase_summary",
                 "run_id": run_id,
-                "phase": dict(phase_row),
+                "phase": dict(phase_rows[0]) if len(phase_rows) == 1 else {
+                    "phase_name": phase, "phase_id": None, "phase_ids": phase_ids,
+                    "interval_count": len(phase_rows), "continuous": False,
+                },
+                "intervals": [dict(row) for row in phase_rows],
+                "interval_count": len(phase_rows),
+                "summed_interval_duration_s": sum(
+                    float(row["t_end_s"]) - float(row["t_start_s"]) for row in phase_rows
+                ),
                 "frame_count": len(frame_rows),
                 "drilling_frame_count": sum(bool(row.get("is_drilling_frame")) for row in observations),
                 "removed_volume_mm3": sum(float(row.get("frame_removed_mm3") or 0) for row in observations),
                 "event_counts": {row["event_type"]: int(row["n"]) for row in event_rows},
                 "relations": phase_relations,
-                "evidence_ids": [phase_row["phase_id"]],
+                "evidence_ids": phase_ids,
             }
 
     def compare_phases(self, run_id: str, phases: Sequence[str]) -> dict[str, Any]:
@@ -467,6 +493,8 @@ class EvidenceRetriever:
             "phases": [
                 {
                     "phase_id": row["phase"]["phase_id"],
+                    "phase_ids": row["evidence_ids"],
+                    "intervals": row["intervals"],
                     "phase": row["phase"]["phase_name"],
                     "frame_count": row["frame_count"],
                     "drilling_frame_count": row["drilling_frame_count"],

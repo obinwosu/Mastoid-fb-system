@@ -169,7 +169,11 @@ function renderProcedureMap() {
     const left = 100 * Number(phase.t_start_s) / duration;
     const width = 100 * (Number(phase.t_end_s) - Number(phase.t_start_s)) / duration;
     const name = String(phase.phase_name || "").replaceAll("_", " ");
-    return `<div class="phase-segment ${escapeHtml(phase.phase_name)}" style="left:${left}%;width:${width}%" title="${escapeHtml(name)} · ${fmtTime(phase.t_start_s)}–${fmtTime(phase.t_end_s)}">${escapeHtml(name)}</div>`;
+    const rule = phase.phase_name === "pre_drilling";
+    const predicted = !rule && phase.phase_source_kind === "model_phase_prediction";
+    const source = rule ? "Predrilling rule" : predicted ? "Model-predicted phase" : "Manual phase annotation";
+    const label = predicted ? `${name} · Predicted` : name;
+    return `<div class="phase-segment ${escapeHtml(phase.phase_name)}" data-phase-id="${escapeHtml(phase.phase_id || "")}" style="left:${left}%;width:${width}%" title="${escapeHtml(name)} · ${escapeHtml(source)} · ${fmtTime(phase.t_start_s)}–${fmtTime(phase.t_end_s)}">${escapeHtml(label)}</div>`;
   }).join("");
   const automaticMarkers = feedbackItems().map(item => {
     const left = 100 * Number(item.t_start_s) / duration;

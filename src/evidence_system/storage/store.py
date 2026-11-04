@@ -10,6 +10,7 @@ import sqlite3
 from typing import Any, Iterable, Mapping, Sequence
 
 from ..events import EventBuild, event_to_dict
+from ..events.builder import phase_id_for
 from ..frame_pipeline.core_frames import CoreFrameBuild, _git_commit
 from ..frame_pipeline.strokes import StrokeBuild
 from ..project import PROJECT_ROOT
@@ -165,13 +166,18 @@ def populate_evidence_store(
                         chunk.get("sha256"), int(chunk["size_bytes"]), chunk.get("modified_at"), 1,
                     )
                 )
-            phase_source_id = _source_id(record.global_run_id, "phase", "human_annotation")
             phase_audit = source_audit["phase_annotation"]
+            phase_kind = str(phase_audit.get("source_kind") or "human_phase_annotation")
+            phase_source_name = (
+                "model_phase_prediction" if phase_kind == "model_phase_prediction"
+                else "human_video_timepoint_annotation"
+            )
+            phase_source_id = _source_id(record.global_run_id, "phase", phase_source_name)
             phase_path = Path(str(phase_audit["path"]))
             phase_stat = phase_path.stat() if phase_path.is_file() else None
             source_file_rows.append(
                 (
-                    phase_source_id, record.global_run_id, "human_phase_annotation",
+                    phase_source_id, record.global_run_id, phase_kind,
                     str(phase_path), phase_audit.get("sha256"),
                     phase_stat.st_size if phase_stat else None,
                     datetime.fromtimestamp(phase_stat.st_mtime, tz=timezone.utc).isoformat() if phase_stat else None,
@@ -233,7 +239,9 @@ def populate_evidence_store(
                 connection,
                 "INSERT INTO evidence_sources VALUES (?, ?, ?)",
                 [
-                    ("source:human_video_timepoint_annotation", "human_video_timepoint_annotation", "Manual phase interval annotation"),
+                    (f"source:{phase_source_name}", phase_source_name,
+                     "Offline model prediction and removal rule; not reviewed ground truth"
+                     if phase_kind == "model_phase_prediction" else "Manual phase interval annotation"),
                     ("source:simulator_removed_voxel_edt", "simulator_removed_voxel_edt", "Removed-voxel anatomy EDT evidence"),
                     ("source:simulator_stroke_table", "simulator_stroke_table", "Deterministic stroke interval and metric evidence"),
                     ("source:derived_frame_visibility_geometry", "derived_frame_visibility_geometry", "Automatic RGB/depth visibility candidate evidence"),
@@ -252,8 +260,6 @@ def populate_evidence_store(
                     for row in core.phase_intervals
                 ],
             )
-            phase_ids = {str(row["phase"]): str(row["phase_id"]) for row in core.phase_intervals}
-
             _insert_many(
                 connection,
                 "INSERT INTO frames VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -261,7 +267,9 @@ def populate_evidence_store(
                     (
                         row["frame_evidence_id"], record.global_run_id,
                         int(row["frame_idx_global"]), float(row["t_video_s"]),
-                        phase_ids.get(str(row["phase"])), hdf5_source_ids[str(row["source_hdf5"])],
+                        phase_id_for(float(row["t_video_s"]), core.phase_intervals,
+                                     name=str(row["phase"]), explicit_id=row.get("phase_id")),
+                        hdf5_source_ids[str(row["source_hdf5"])],
                         int(row["source_frame_idx"]), _json(row),
                     )
                     for row in strokes.frames
@@ -288,7 +296,9 @@ def populate_evidence_store(
                 [
                     (
                         event.event_id, record.global_run_id, event.event_type,
-                        event.t_start_s, event.t_end_s, phase_ids.get(str(event.phase)),
+                        event.t_start_s, event.t_end_s,
+                        phase_id_for((event.t_start_s + event.t_end_s) / 2, core.phase_intervals,
+                                     name=event.phase, explicit_id=event.attributes.get("phase_id")),
                         event.anatomy, event.evidence_status.value,
                         event.lifecycle_status.value, event.rule_version,
                         _json(event.attributes), created_at,
@@ -365,7 +375,7 @@ def populate_evidence_store(
             "integrity_check": integrity,
             "foreign_key_violation_count": len(foreign_key_violations),
             "input_roles": {
-                "canonical_runtime_inputs": ["raw_hdf5", "anatomy_edt", "human_phase_annotation"],
+                "canonical_runtime_inputs": ["raw_hdf5", "anatomy_edt", phase_kind],
                 "validation_only": ["legacy_graph"],
             },
         }

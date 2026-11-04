@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 import subprocess
 import unittest
 from pathlib import Path, PurePosixPath
@@ -10,6 +11,12 @@ from pathlib import Path, PurePosixPath
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
+# Explicit user authorization (2026-11-04): carry these frozen references with
+# the project for migration. No other real data or changed bytes are exempt.
+AUTHORIZED_REFERENCE_HASHES = {
+    "references/r4_motion_windows_v2.json": "5291f70328806f5899c21bc6bf61e9c509c70d98069c99502df405c94c3664b9",
+    "references/r4_motion_windows_v3.json": "16dea829688b5eecdfe66698cf3c60e41386bc463070a3587952dd2132a7f071",
+}
 
 FORBIDDEN_FILE_SUFFIXES = (
     ".avi",
@@ -119,6 +126,10 @@ class RepositoryHygieneTests(unittest.TestCase):
                 problems.append(f"{relative}: symbolic links are not allowed")
                 continue
             if not path.is_file():
+                continue
+            if relative in AUTHORIZED_REFERENCE_HASHES:
+                if hashlib.sha256(path.read_bytes()).hexdigest() != AUTHORIZED_REFERENCE_HASHES[relative]:
+                    problems.append(f"{relative}: frozen reference differs from its authorized digest")
                 continue
             if any(lower_name.endswith(suffix) for suffix in FORBIDDEN_FILE_SUFFIXES):
                 problems.append(f"{relative}: forbidden binary/data extension")
