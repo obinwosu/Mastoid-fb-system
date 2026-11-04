@@ -77,6 +77,8 @@ Git attributes preserve the frozen resources' bytes on Windows and Linux.
 
 ## Generate anatomy EDT grids
 
+You can also use pre processed EDT grid on: https://livejohnshopkins-my.sharepoint.com/:f:/r/personal/xzou8_jh_edu/Documents/skill_assessment_data/SDF_based_assistance?d=w93bcda23ec904a46a09a468be4439114&csf=1&web=1&e=f2hU25. Please download all the EDT folders.
+
 The anatomy models' EDT grids can be generated with the included
 [`edt_tools/batch_generate_edt.py`](edt_tools/batch_generate_edt.py) script.
 Its input is the **folder containing the anatomy volumes**: each immediate
