@@ -749,7 +749,8 @@ def test_cli_builds_native_time_expert_windows_from_verified_manual_phase_rows(t
     assert min(row["native_start_s"] for row in windows) == 2  # First removal, not prehistory.
     assert {row["phase"] for row in windows} == {"early_phase", "antrum", "incus"}
     assert len({row["phase_id"] for row in windows if row["phase"] == "incus"}) == 1
-    assert any(row["native_start_s"] < 19 < row["native_end_s"] for row in windows if row["phase"] == "incus")
+    assert [(row["native_start_s"], row["native_end_s"]) for row in windows if row["phase"] == "incus"] == [(14, 19), (19, 24)]
+    assert payload["protocol"]["stride_s"] == 5 and payload["protocol"]["persistence_windows"] == 1
     for row in windows:
         assert row["speed_mm_s"] == pytest.approx(1.0)
         assert row["t_start_s"] == row["native_start_s"]

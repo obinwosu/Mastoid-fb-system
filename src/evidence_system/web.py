@@ -814,12 +814,18 @@ class FeedbackService:
                 ],
             }
             current = build_motion_windows(frames, global_run_id=run["global_run_id"],
-                participant_id=run.get("participant_id") or None, provenance=provenance)
+                participant_id=run.get("participant_id") or None, provenance=provenance,
+                protocol=reference["protocol"])
             origin = "current_database_observations_archive_fallback"
             length_origin = None
             if sidecar.is_file():
                 saved = json.loads(sidecar.read_text(encoding="utf-8"))
                 validate_window_build(saved)
+                # Verify the archive using its own grid before adapting current
+                # observations to the selected reference. Never rewrite it.
+                current = build_motion_windows(frames, global_run_id=run["global_run_id"],
+                    participant_id=run.get("participant_id") or None, provenance=provenance,
+                    protocol=saved["protocol"])
                 saved_provenance = saved["provenance"]
                 for key in ("pose_source", "position_unit", "phase_source_kind", "phase_model_sha256", "clock_source"):
                     if saved_provenance.get(key) != provenance[key]:
@@ -844,6 +850,12 @@ class FeedbackService:
                         raise ValueError("Saved motion values differ from current database observations")
                 current = saved
                 origin = "bound_pipeline_sidecar_verified_against_current_database"
+                if saved["protocol"] != reference["protocol"]:
+                    current = build_motion_windows(frames, global_run_id=run["global_run_id"],
+                        participant_id=run.get("participant_id") or None, provenance=provenance,
+                        protocol=reference["protocol"])
+                    origin = "current_database_reference_grid_after_archive_validation"
+                    length_origin = None
             length_unavailable = None
             if (any(item.get("stroke_length_metadata") is not None for item in reference["recordings"])
                     and current.get("stroke_length_metadata") is None):
@@ -853,6 +865,16 @@ class FeedbackService:
                 except ValueError as error:
                     length_unavailable = str(error)
             result = compare_motion_windows(current, reference, participant_id=run.get("participant_id") or None)
+            for episode in result.get("length_episodes", []):
+                anchors = [s for s in current.get("stroke_lengths", [])
+                           if s["stroke_id"] in episode["source_stroke_ids"]
+                           and episode["native_start_s"] < s["native_end_s"] <= episode["native_end_s"]]
+                if anchors:
+                    anchor = min(anchors, key=lambda s: s["native_end_s"])
+                    index = anchor["source_end_row"]
+                    episode["anchor_frame_idx_global"] = index
+                    episode["anchor_t_s"] = float(frames[index]["t_video_s"])
+                    episode["anchor_role"] = "first_eligible_completed_stroke_in_review_interval"
             result["current_source"] = origin
             if length_unavailable is not None:
                 result["stroke_length_unavailable_reason"] = length_unavailable

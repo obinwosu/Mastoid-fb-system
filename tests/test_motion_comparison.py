@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from evidence_system.coaching_plan import build_session_coaching_plan
 from evidence_system.motion_comparison import (
-    DEFAULT_PROTOCOL, artifact_sha256, build_expert_reference, build_motion_windows,
+    DEFAULT_PROTOCOL, LEGACY_PROTOCOL, artifact_sha256, build_expert_reference, build_motion_windows,
     compare_motion_windows, validate_expert_reference, validate_window_build, write_motion_artifact,
 )
 
@@ -38,8 +38,11 @@ def frames(speed=1.0, seconds=7, phase="antrum", *, origin=0, video_scale=1, vid
 
 
 def build(speed=1., seconds=7, *, run="case", participant="current", phase="antrum", rows=None, predicted=False):
+    # Preserve the historical one-second-stride regression cases explicitly.
+    # Default non-overlapping behavior is covered in test_nonoverlap_motion.py.
     return build_motion_windows(frames(speed, seconds, phase) if rows is None else rows,
-                                global_run_id=run, participant_id=participant, provenance=provenance(predicted))
+                                global_run_id=run, participant_id=participant, provenance=provenance(predicted),
+                                protocol=LEGACY_PROTOCOL)
 
 
 def reference(speeds=(10., 20., 30.), phase="antrum"):
@@ -234,10 +237,10 @@ def test_all_phase_coaching_is_descriptive_and_preserves_each_review_interval():
     ref = build_expert_reference(experts, expert_participant_ids=[f"expert{i}" for i in range(3)], provenance={"expert_definition": "fixture"})
     result = compare_motion_windows(build(rows=three_phase_rows(1)), ref)
     plan = build_session_coaching_plan([], [], {}, None, motion_comparison=result)
-    assert [item["phase"] for item in plan["items"]] == ["early_surface", "antrum", "incus"]
+    assert [item["feedback_id"] for item in plan["items"]] == ["coaching:motion_reference"]
     assert all(item["evidence_status"] == "descriptive_cohort_comparison" for item in plan["items"])
     assert all("increase drilling speed" not in item["recommended_action"] for item in plan["items"])
-    assert all(len(item["review_clips"]) == 1 for item in plan["items"])
+    assert [clip["phase"] for clip in plan["items"][0]["review_clips"]] == ["early_phase", "antrum", "incus"]
     assert "not a skill score" in plan["items"][0]["claim_boundary"]
 
 

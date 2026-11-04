@@ -28,7 +28,7 @@ root**. Copy `config.example.json` if it does not exist.
 | `correction_table` | Path to the unchanged R4 `geometry_corrections_v3.csv`; edit the path, not the CSV contents |
 | `phase_model_bundle` | Trained model directory containing `model.pt`, `neural_preprocessing.json`, and `manifest.json` |
 | `video_fps` | Output video frame rate, default 10; does not change native timestamps or signal sampling |
-| `motion_reference` | Saved expert distribution: `references/r4_motion_windows_v3.json`, included with the project. Keep this relative path when migrating; `null` disables expert motion comparisons. |
+| `motion_reference` | Saved expert distribution: `references/r4_motion_windows_v6.json`, included with the project. Keep this relative path when migrating; `null` disables expert motion comparisons. |
 
 For a new batch, change `--input-dir`; alignment and per-recording configuration
 are generated automatically. New recordings with `volume_adf` in `metadata.json`
@@ -96,68 +96,126 @@ Detailed contracts: [directory input](docs/hdf5-directory-input.md),
 [phase integration](docs/signal-phase-integration.md),
 [data boundary](docs/data-boundary.md).
 
-## Motion reference and frame review
+## Saved expert reference
 
-The precomputed expert reference is saved at
-[`references/r4_motion_windows_v3.json`](references/r4_motion_windows_v3.json)
-and is not ignored by Git. Both the configuration template and local configuration
-use this project-relative path. Commit this file with the project when migrating
-through Git; no expert HDF5 files or R4 catalog are needed to use the distribution.
-Its 39 recordings from five participants contain 5,860 windows, including 4,203
-eligible windows. The embedded source paths are provenance, not runtime inputs.
+**The 39 expert recordings have already been processed into a saved reference:**
+[`references/r4_motion_windows_v6.json`](references/r4_motion_windows_v6.json).
+It is included with the project and is not ignored by Git. Both root configurations
+select this file. Migration needs this JSON; it does not require expert videos,
+expert HDF5 files, the original R4 catalog, or regeneration of expert statistics.
+The JSON contains the reference measurements and provenance; the application only
+performs the small weighted comparisons when reviewing a new case.
 
-Version 3 preserves every version-2 speed/removal value and adds two saved stroke
-frequencies to each window. All times below are native simulator seconds:
+The reference uses five participants (P4, P5, P7, P8 and P9), selected by recorded
+training years >= 11, and 39 R4 recordings with complete manual phase annotations.
+P9T1 is excluded because its phase boundaries are incomplete. Measurements come
+from hash-verified R4 signal tables and their phase alignment. No expert feedback
+text is an input. Existing geometry review flags remain unchanged.
 
-| Field | Numerator | Denominator |
-| --- | --- | --- |
-| `stroke_frequency_hz` | Recorded stroke endpoints in `(start, end]` (`stroke_end_count`) | Full 5 seconds |
-| `stroke_rate_per_s` | Distinct recorded stroke IDs on drilling rows in `[start, end]` (`stroke_count`) | `stroke_drilling_time_s` |
+The current reference contains **1,216 non-overlapping windows**, including 867
+speed/removal-qualified windows and 544 Length-qualified windows. There are 3,369
+eligible complete strokes in its saved stroke tables. Reference phases are manual;
+new-recording phases are predicted by the frozen offline MS-TCN++. Predrilling is
+before the first positive removal; comparisons use early drilling, antrum and incus,
+with post-incus included in incus. Specimens and assistance conditions are pooled.
 
-`stroke_drilling_time_s` follows the legacy drilling-mask formula: between observed
-rows inside the window, sum each interval whose right-hand row is marked drilling,
-capping each interval at one second. The old phase statistic used `t_video`; this
-window reference uses native time. This is an estimated drilling-mask duration,
-not recorded motor-on time. A zero denominator produces `null`, not zero frequency.
-An overlapping stroke can count even when its endpoint is outside the window,
-so the two numerators can differ. Source flags/IDs are reused without resegmentation.
+Each phase is compared separately. Participants receive equal weight, then their
+eligible recordings receive equal weight, then windows within a recording receive
+equal weight. A known participant's own recordings are excluded before weighting.
+At least three eligible reference participants are required for a comparison.
 
-`stroke_frequency_metadata` records the formula, input digest and source diagnostics.
-P4T2, P4T4 and P4T6 contain nonfinite legacy turning angles; their original numbers
-are retained but both frequency eligibility flags are false. Existing strokes can
-also span gaps; this extension does not repair that legacy limitation. There are
-3,714 coverage/source-qualified endpoint-rate windows and 3,321 drilling-time-rate
-windows (the latter also require at least five drilling rows and positive time).
-These fields are saved for later comparison; live comparisons and coaching still
-use the existing speed/removal path. No frequency coaching rule has been enabled.
-Version 2 remains available unchanged for archives.
+## Window timing and coaching rules
 
-Existing `process-hdf5`, `serve-batch`, and direct `serve` commands use the configured
-reference automatically. An archived batch may retain its original absolute
-reference path; the old `.local/references/` copy is preserved for those archives.
+**One valid five-second window can trigger coaching. There is no three-window
+persistence requirement.** Windows have a five-second duration and five-second
+step: 0-5, 5-10, 10-15 seconds relative to the start of each contiguous phase.
+They do not overlap or cross phase boundaries; a final partial window shorter
+than five seconds is omitted. Expert and current-recording windows use the same
+protocol and native simulator time.
 
-Optional maintainer operation, only when intentionally creating a new reference
-version from the verified R4 catalog (not part of installation or migration):
+Motion windows require at least 80% valid coverage. Adjacent pose samples more than
+0.25 seconds apart are not bridged. Missing evidence is not treated as zero motion.
+Unusable display-clock mappings also suppress motion review clips. These criteria
+identify descriptive review candidates; they are not clinically validated error
+thresholds or skill scores.
+
+| Coaching or metric | Current trigger / behavior |
+| --- | --- |
+| **Shorter strokes (Length)** | A valid window's mean complete-stroke Length is below the same-phase expert Q25, beyond numeric tie tolerance. At least one eligible completed stroke is required. One qualifying window is enough. Frequency is not part of this rule. |
+| **Lower tool-motion speed** | A valid window's speed is at or below the same-phase expert 10th percentile **and** at least 25% below the expert median. One qualifying window is enough. The prompt asks for contextual review, not faster drilling. |
+| **Safety-boundary / overshoot** | Within one structure and one frame: at least 10 removed voxels have EDT <= 0 and the minimum EDT is <= -0.1 mm, **or** minimum EDT is < -1.0 mm. No minimum duration applies. The weaker raw signal (any removed voxel with EDT <= 0) alone does not necessarily produce coaching. |
+| **Under-ledge / working-corridor exposure (Ray-v3)** | Episode span >= 0.3 s, at least 5 positive frames, mean blocked-contact ray fraction >= 70%, median registered contact count >= 20, and recording-level registered/raw contact-frame fraction >= 80%. Usable contacts and verified source binding are required. |
+| **Removal rate** | Compared with the same-phase reference for description; it does not independently trigger coaching. |
+| **Stroke frequency** | Both denominator definitions are saved in the reference; neither currently triggers coaching or participates in live expert comparisons. |
+
+Ray-v3 marks a candidate frame when at least 50% of its sampled camera-to-contact
+rays are blocked. It samples at most 20 rays per frame after burr-radius + 1 mm
+contact registration and initial-bone checks. Candidate frames separated by at
+most one second form an episode, requiring at least two supporting frames before
+the stricter coaching gates above. The blocked fraction measures rays, not image
+pixels. Episode span is first-to-last supporting frame, not proof of continuous
+occlusion. Unavailable/mismatched source geometry suppresses Ray coaching instead
+of substituting the earlier image-edge heuristic.
+
+Raw overshoot events group the same anatomy/phase at gaps up to 10 seconds;
+safety-qualified frames form review segments at gaps up to one second. Ray review
+clips can combine qualified episodes separated by up to five seconds. These are
+event grouping gaps, not overlapping motion windows.
+
+Adjacent qualifying motion windows in the same phase are combined into one review
+interval for convenience; an isolated qualifying window still produces a clip.
+**Each coaching type appears once** (one Length card, one Speed card), with all its
+clips listed chronologically. Each clip shows its own phase. Phases remain separate
+for calculations and are never merged into one evidence interval.
+
+Rule definitions live in [motion_comparison.py](src/evidence_system/motion_comparison.py),
+[under_ledge_ray.py](src/evidence_system/under_ledge_ray.py),
+[edt_enrichment.py](src/evidence_system/frame_pipeline/edt_enrichment.py),
+[events/builder.py](src/evidence_system/events/builder.py) and
+[coaching_plan.py](src/evidence_system/coaching_plan.py).
+
+## Metric definitions
+
+- **Speed (mm/s):** valid observed path length / valid native observation time.
+- **Removal rate (mm3/s):** qualifying frame-assigned removed volume / full five
+  seconds; counts with unsupported predecessor intervals are omitted.
+- **Length (mm):** full path length within each recorded stroke ID. Assign the
+  whole stroke by its endpoint in `(window start, window end]`; never shorten its
+  path at the window boundary. `mean_stroke_length_mm` averages eligible strokes
+  ending in that window. No eligible endpoints produces `null`, not zero.
+- **`stroke_frequency_hz`:** recorded stroke endpoints in `(start, end]` / full
+  five seconds. **`stroke_rate_per_s`:** distinct recorded drilling stroke IDs
+  in `[start, end]` / `stroke_drilling_time_s`. The latter sums in-window observed
+  intervals whose right-hand frame is marked drilling, with each interval capped
+  at one second. This adapts the earlier drilling-mask formula to native time;
+  it is not measured motor-on time. Zero denominator produces `null`. A stroke
+  crossing a window boundary may count in both ID-based numerators.
+
+Length excludes strokes with fewer than two points, missing or forced terminal
+boundaries, interleaved IDs, phase changes, selected-frame gaps over 0.25 seconds,
+or invalid source segmentation. Raw paths and reasons remain in `stroke_lengths`.
+P4T2, P4T4 and P4T6 have nonfinite legacy turning angles: their raw source values
+remain saved, but their Length/frequency eligibility is false. The existing stroke
+segmentation algorithm is reused; this reference does not silently repair it.
+
+Older references remain preserved for archives. Old motion sidecars are validated
+on their original grid, then current observations are remeasured in memory on the
+selected reference's grid; old outputs are not overwritten. Current deployment
+uses v6, not the earlier overlapping references or combined antrum Length/frequency
+rule. Optional maintainer-only regeneration from the verified R4 catalog:
 
 ```text
 python run.py build-motion-reference --catalog /path/to/organized --output references/r4_motion_windows_new.json
 ```
 
-Use a new output filename to preserve the existing reference, then update
-`motion_reference` in `config.local.json` after validating the new version.
+Use a new filename and update `motion_reference` only after validation. This is not
+part of normal installation, migration or processing a new recording.
 
-The reference uses participants with recorded training years >= 11, complete
-manual phases, and hash-verified R4 all-frame pose tables. Post-incus is included
-in incus. Five-second windows use native simulator seconds, one-second steps,
-valid adjacent observations and explicit missing coverage. Each participant has
-equal weight; recordings within a participant have equal weight. A participant's
-own recordings are excluded when assessing that participant. References pool
-specimens and assistance conditions; their manual phases differ in provenance
-from the model-predicted phases of a new recording. Geometry review flags remain
-unchanged. These are descriptive comparisons, not validated skill scores.
+## Frame review
 
-The recommendations page retains its existing feedback content. **Go to key
-frame** displays the original source image and pauses playback; **Play context**
-plays the surrounding video. Original source files must remain locally readable
-for exact-frame display. The review video is resampled and can omit some source
-frames, so seeking its timeline alone does not guarantee the original frame.
+**Go to key frame** displays the bound original image and pauses playback;
+**Play context** plays the interval with up to five seconds of context on either
+side. Playback context can overlap between clips; analysis windows do not.
+Original source files must remain readable for exact-frame display. The resampled
+review video can omit source frames, so timeline seeking alone does not guarantee
+the original image. Length anchors use an eligible completed stroke in the interval.

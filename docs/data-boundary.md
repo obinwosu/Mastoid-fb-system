@@ -8,7 +8,9 @@
 - Documentation and expected results derived exclusively from synthetic data.
 - User-authorized exception (2026-11-04): the frozen expert reference
   `references/r4_motion_windows_v2.json` and its requested frequency extension
-  `references/r4_motion_windows_v3.json` are kept with the project for migration.
+  `references/r4_motion_windows_v3.json`, plus the requested Length reference
+  `references/r4_motion_windows_v4.json` and the current non-overlapping reference
+  `references/r4_motion_windows_v6.json`, are kept with the project for migration.
   These references retain pseudonymous participant/recording IDs,
   window metrics and original provenance paths; it is not anonymized. This
   exception does not include other research data or authorize a public upload.

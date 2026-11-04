@@ -255,45 +255,80 @@ def build_session_coaching_plan(
                 or motion_comparison.get("artifact_sha256") != artifact_sha256(motion_comparison)):
             raise ValueError("Motion coaching requires an intact window comparison artifact")
         if motion_comparison.get("available"):
-            for phase in PHASES:
-                episodes = [dict(row) for row in motion_comparison.get("episodes", [])
-                            if row["phase"] == phase]
-                if not episodes:
-                    continue
+            episodes = sorted((dict(row) for row in motion_comparison.get("episodes", [])
+                               if row["phase"] in PHASES), key=lambda row: float(row["t_start_s"]))
+            if episodes:
                 first = episodes[0]
-                label = "early drilling" if phase == "early_phase" else phase
+                phases_present = [phase for phase in PHASES if any(row["phase"] == phase for row in episodes)]
                 clips = [{**row, "review_clip_id": row["episode_id"]} for row in episodes]
                 items.append({
-                    "feedback_id": f"coaching:motion_reference:{phase}",
+                    "feedback_id": "coaching:motion_reference",
                     "category": "technique", "priority": "low",
-                    "title": f"Review lower tool-motion speed during {label}",
+                    "title": "Review lower tool-motion speed",
                     "message": "Review the local task and tool movement alongside the same-phase reference.",
                     "observed_issue": (
-                        "Several overlapping five-second windows had lower observed tool-motion speed "
+                        "One or more five-second windows had lower observed tool-motion speed "
                         "than the experienced-participant reference."
                     ),
                     "why_it_matters": "The difference identifies a review interval; it does not establish poor technique.",
                     "recommended_action": "Review the video and task context before interpreting this difference.",
                     "evidence_summary": (
                         f"{len(episodes)} review interval(s), using native-time vision poses and "
-                        "coverage-qualified comparisons within this phase."
+                        "coverage-qualified comparisons within each clip's phase."
                     ),
                     "technical_facts": {
                         "protocol": motion_comparison["protocol"],
                         "reference": motion_comparison["reference_summary"],
-                        "phase_reference": motion_comparison["per_phase"][phase],
+                        "phase_references": {phase: motion_comparison["per_phase"][phase] for phase in phases_present},
                         "reference_sha256": motion_comparison["reference_sha256"],
                         "window_build_sha256": motion_comparison["window_build_sha256"],
-                        "overlapping_windows_are_independent": False,
+                        "window_stride_s": motion_comparison["protocol"]["stride_s"],
                     },
                     "t_start_s": first["t_start_s"], "t_end_s": first["t_end_s"],
-                    "phase": first["phase_name"], "anatomy": None,
+                    "phase": "session", "phases": phases_present, "anatomy": None,
                     "evidence_status": "descriptive_cohort_comparison",
                     "source_type": "native_vision_motion_windows",
                     "source_ids": [row["episode_id"] for row in episodes],
                     "evidence_segments": episodes, "review_clips": clips,
                     "claim_boundary": motion_comparison["claim_boundary"],
                 })
+
+        episodes = sorted((dict(row) for row in motion_comparison.get("length_episodes", [])
+                           if row["phase"] in PHASES), key=lambda row: float(row["t_start_s"]))
+        if episodes:
+            first = episodes[0]
+            phases_present = [phase for phase in PHASES if any(row["phase"] == phase for row in episodes)]
+            length_policy = motion_comparison.get("length_review_policy") or {}
+            minimum_windows = int(length_policy.get("persistence_windows", 3))
+            minimum_strokes = int(length_policy.get("min_distinct_strokes", 3))
+            window_requirement = ("one qualifying five-second window" if minimum_windows == 1
+                                  else f"{minimum_windows} consecutive five-second windows")
+            stroke_requirement = ("one eligible complete stroke" if minimum_strokes == 1
+                                  else f"{minimum_strokes} distinct eligible complete strokes")
+            items.append({
+                "feedback_id": "coaching:short_strokes", "category": "technique", "priority": "medium",
+                "title": "Review shorter strokes",
+                "message": "Review whether the local task allows longer, continuous strokes.",
+                "observed_issue": "One or more five-second windows contained shorter complete strokes than the same-phase expert lower quartile.",
+                "why_it_matters": "The pattern can identify fragmented movement, but nearby anatomy and the local task may justify short strokes.",
+                "recommended_action": "Review the highlighted video. Where the anatomy and task permit, consider longer, continuous strokes.",
+                "evidence_summary": f"{len(episodes)} interval(s) below the same-phase expert Q25, with at least {stroke_requirement} in {window_requirement}.",
+                "technical_facts": {
+                    "metric": "mean_stroke_length_mm", "unit": "mm",
+                    "policy": motion_comparison.get("length_review_policy"),
+                    "phase_references": {phase: motion_comparison["per_phase"][phase]["mean_stroke_length_mm"] for phase in phases_present},
+                    "reference_sha256": motion_comparison["reference_sha256"],
+                    "window_build_sha256": motion_comparison["window_build_sha256"],
+                    "frequency_used": False,
+                },
+                "t_start_s": first["t_start_s"], "t_end_s": first["t_end_s"],
+                "phase": "session", "phases": phases_present, "anatomy": None,
+                "evidence_status": "descriptive_cohort_comparison", "source_type": "complete_recorded_stroke_length",
+                "source_ids": [row["episode_id"] for row in episodes],
+                "evidence_segments": episodes,
+                "review_clips": [{**row, "review_clip_id": row["episode_id"]} for row in episodes],
+                "claim_boundary": motion_comparison["claim_boundary"],
+            })
 
     example = (
         under_ledge_screening.get("coaching_example")

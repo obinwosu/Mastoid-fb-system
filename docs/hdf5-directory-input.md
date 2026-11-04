@@ -114,7 +114,7 @@ folder token or inferred from surgical video. Unavailable or unsupported model
 sources are reported instead of borrowing another specimen's grid.
 
 The root `motion_reference` setting defaults to the saved, Git-visible
-`references/r4_motion_windows_v3.json` and binds that portable R4 five-second
+`references/r4_motion_windows_v6.json` and binds that portable R4 five-second
 reference to every completed case. Deployment does not rebuild the expert
 distribution or read its original source paths. Set the setting to `null` to
 disable expert motion comparisons. New builds save native-time motion windows;

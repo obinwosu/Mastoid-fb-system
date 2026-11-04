@@ -8,7 +8,7 @@ import pytest
 
 from test_review_frames import bound_case, dump, reference_for, sha
 from evidence_system.motion_comparison import (
-    add_stroke_length, artifact_sha256, build_motion_windows, validate_expert_reference,
+    LEGACY_PROTOCOL, add_stroke_length, artifact_sha256, build_motion_windows, validate_expert_reference,
 )
 
 
@@ -24,8 +24,8 @@ def with_strokes(service, frames, *, update_database=True):
     return rows
 
 
-def length_reference(service, frames):
-    old = reference_for(service, frames)
+def length_reference(service, frames, *, protocol=LEGACY_PROTOCOL):
+    old = reference_for(service, frames, protocol=protocol)
     reference = deepcopy(old)
     for index, record in enumerate(reference["recordings"]):
         rows = [{**row, "drill_x": row["drill_x"] * 4} for row in frames]
@@ -36,7 +36,7 @@ def length_reference(service, frames):
     return old, reference
 
 
-def save_sidecar(service, frames, stages, *, length):
+def save_sidecar(service, frames, stages, *, length, protocol=LEGACY_PROTOCOL):
     run = service.retriever.get_run_summary("case")["run"]
     context = service._bound_review_context(run)
     files = {"frames": stages / "05_strokes/frame_observations_complete.csv",
@@ -48,8 +48,8 @@ def save_sidecar(service, frames, stages, *, length):
                   "clock_source": context["clock"]["source"],
                   "source_artifacts": [{"kind": kind, "path": str(path), "sha256": sha(path)}
                                        for kind, path in files.items()]}
-    saved = build_motion_windows(frames, global_run_id="synthetic:case", participant_id=None,
-                                 provenance=provenance)
+    saved = build_motion_windows(frames, global_run_id="synthetic:case", participant_id=run.get("participant_id") or None,
+                                 provenance=provenance, protocol=protocol)
     if length:
         saved = add_stroke_length(saved, frames)
     path = stages / "09_motion_comparison/motion_windows.json"
@@ -66,7 +66,8 @@ def test_length_service_uses_current_whole_strokes_and_keeps_frequency_saved_onl
     if sidecar_kind != "absent":
         path, _ = save_sidecar(service, frames, stages, length=sidecar_kind == "length")
     before = path.read_bytes() if path else None
-    comparison = service.bootstrap()["motion_comparison"]
+    bootstrap = service.bootstrap()
+    comparison = bootstrap["motion_comparison"]
     assert comparison["available"]
     first = comparison["windows"][0]
     assert first["mean_stroke_length_mm"] == pytest.approx(.9)
@@ -75,6 +76,14 @@ def test_length_service_uses_current_whole_strokes_and_keeps_frequency_saved_onl
     assert first["comparisons"]["speed_mm_s"]["observed"] == pytest.approx(1.)
     assert "stroke_frequency_hz" not in first["comparisons"]
     assert "stroke_rate_per_s" not in first["comparisons"]
+    assert comparison["length_episodes"]
+    for episode in comparison["length_episodes"]:
+        anchor = frames[episode["anchor_frame_idx_global"]]
+        assert anchor["stroke_end_flag"]
+        assert anchor["t_video_s"] == episode["anchor_t_s"]
+        assert episode["t_start_s"] <= episode["anchor_t_s"] <= episode["t_end_s"]
+    length_cards = [i for i in bootstrap["coaching_plan"]["items"] if i["feedback_id"] == "coaching:short_strokes"]
+    assert length_cards and all(c["keyframe_available"] for i in length_cards for c in i["review_clips"])
     if path:
         assert comparison["current_source"].startswith("bound_pipeline_sidecar")
         assert path.read_bytes() == before  # Archive enrichment is in memory only.

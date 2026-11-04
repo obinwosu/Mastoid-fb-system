@@ -16,6 +16,8 @@ MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 AUTHORIZED_REFERENCE_HASHES = {
     "references/r4_motion_windows_v2.json": "5291f70328806f5899c21bc6bf61e9c509c70d98069c99502df405c94c3664b9",
     "references/r4_motion_windows_v3.json": "16dea829688b5eecdfe66698cf3c60e41386bc463070a3587952dd2132a7f071",
+    "references/r4_motion_windows_v4.json": "14f68ad459bad32d56fd48ad1a8da6cb05d4d72e47db1855bd16b5a0158e880b",
+    "references/r4_motion_windows_v6.json": "1377c2badee4a11bce18319cb0c2c5a01d0c35b6d2ff2d24c39255e7e1e589f2",
 }
 
 FORBIDDEN_FILE_SUFFIXES = (

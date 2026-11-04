@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from evidence_system.motion_comparison import (
-    add_stroke_frequency, artifact_sha256, build_motion_windows, validate_window_build,
+    LEGACY_PROTOCOL, add_stroke_frequency, artifact_sha256, build_motion_windows, validate_window_build,
 )
 
 
@@ -29,6 +29,7 @@ def source_rows(*, origin=1000., video_scale=1.):
 
 def windows(rows):
     return build_motion_windows(rows, global_run_id="generated:reference",
+        protocol=LEGACY_PROTOCOL,
         participant_id="generated_expert", provenance={
             "pose_source": "canonical_vision_pose", "position_unit": "m",
             "phase_source_kind": "manual_frame_phase", "clock_source": "generated_native_clock",

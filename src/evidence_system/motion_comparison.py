@@ -21,7 +21,7 @@ REFERENCE_SCHEMA = "motion_expert_reference_v1"
 COMPARISON_SCHEMA = "motion_comparison_v1"
 PHASES = ("early_phase", "antrum", "incus")
 PHASE_NAMES = {"early_phase": "early_surface", "antrum": "antrum", "incus": "incus"}
-DEFAULT_PROTOCOL = {
+LEGACY_PROTOCOL = {
     "schema": "motion_window_protocol_v1",
     "pose_source": "canonical_vision_pose", "position_unit": "m",
     "time_basis": "native_elapsed_seconds", "coarse_phase_taxonomy": list(PHASES),
@@ -33,10 +33,13 @@ DEFAULT_PROTOCOL = {
     "threshold_status": "provisional_descriptive_review_policy_not_clinically_validated",
     "policy_date": "2026-11-04",
 }
+DEFAULT_PROTOCOL = {**deepcopy(LEGACY_PROTOCOL), "schema": "motion_window_protocol_v2",
+                    "stride_s": 5.0, "persistence_windows": 1}
 CLAIM_BOUNDARY = (
     "This is a descriptive comparison with experienced participants, not a skill score, "
     "clinical abnormality threshold, or instruction to increase drilling speed. "
-    "Overlapping windows are correlated. Anatomy and assistance conditions are pooled; "
+    "The window layout is recorded in the protocol; nearby observations can be correlated. "
+    "Anatomy and assistance conditions are pooled; "
     "manual reference phases and predicted current phases can differ in accuracy."
 )
 STROKE_FREQUENCY_CONTRACT = {
@@ -60,12 +63,21 @@ STROKE_LENGTH_CONTRACT = {
     "coverage": "window also requires motion min_coverage; source exclusions remain visible in the stroke table",
     "limitation": "recorded segmentation is reused, not repaired; endpoint windows overlap and can repeat strokes",
 }
+NONOVERLAP_LENGTH_CONTRACT = {
+    **STROKE_LENGTH_CONTRACT, "schema": "complete_recorded_stroke_length_v2",
+    "limitation": "recorded segmentation is reused, not repaired; non-overlapping windows assign each endpoint at most once",
+}
 STROKE_LENGTH_REVIEW_POLICY = {
     "schema": "stroke_length_review_policy_v1",
-    "candidate": "mean_stroke_length_mm strictly below same-phase weighted expert Q25",
+    "candidate": "mean_stroke_length_mm below same-phase weighted expert Q25 beyond protocol numeric tie tolerance",
     "persistence_windows": 3,
+    "min_distinct_strokes": 3,
     "status": "provisional_descriptive_review_policy_not_clinically_validated",
     "frequency_gate": False,
+}
+SINGLE_WINDOW_LENGTH_REVIEW_POLICY = {
+    **STROKE_LENGTH_REVIEW_POLICY, "schema": "stroke_length_review_policy_v2",
+    "persistence_windows": 1, "min_distinct_strokes": 1,
 }
 
 
@@ -105,7 +117,9 @@ def _protocol(value: Mapping | None) -> dict:
     fixed = ("schema", "pose_source", "position_unit", "time_basis", "coarse_phase_taxonomy",
              "window_s", "stride_s", "threshold_status", "policy_date",
              "percentile_tie_abs_tolerance", "percentile_tie_rel_tolerance")
-    if any(result[key] != DEFAULT_PROTOCOL[key] for key in fixed):
+    expected = {"motion_window_protocol_v1": LEGACY_PROTOCOL,
+                "motion_window_protocol_v2": DEFAULT_PROTOCOL}.get(result.get("schema"))
+    if expected is None or any(result[key] != expected[key] for key in fixed):
         raise ValueError("Unsupported motion source, taxonomy, time basis, or window contract")
     for key in ("max_gap_s", "min_coverage", "low_percentile", "min_relative_deficit",
                 "max_display_clock_step_s"):
@@ -269,7 +283,7 @@ def build_motion_windows(
         "windows": windows, "window_count": len(windows),
         "eligible_window_count": sum(w["eligible"] for w in windows),
         "measurement_contract": {
-            "window_grid": "5 native seconds, stride1, anchored at each contiguous observed phase's first row",
+            "window_grid": f"5 native seconds, stride{policy['stride_s']:g}, anchored at each contiguous observed phase's first row",
             "speed": "sum valid clipped adjacent path mm / valid observed native seconds",
             "coverage": "valid adjacent native seconds / full5seconds; never bridge long gaps",
             "removal": "frame-assigned counts on(start,end], omit long/missing predecessor intervals; divide by full5seconds",
@@ -410,8 +424,9 @@ def add_stroke_length(window_build: Mapping, frames: Sequence[Mapping]) -> dict:
             "max_gap_s": gap, "eligible": not reasons, "exclusion_reasons": reasons,
         })
     result = deepcopy(dict(window_build))
+    contract = STROKE_LENGTH_CONTRACT if result["protocol"]["schema"] == "motion_window_protocol_v1" else NONOVERLAP_LENGTH_CONTRACT
     result["stroke_length_metadata"] = {
-        "schema": STROKE_LENGTH_CONTRACT["schema"], "contract": deepcopy(STROKE_LENGTH_CONTRACT),
+        "schema": contract["schema"], "contract": deepcopy(contract),
         "input_sha256": _digest({"rows": rows, "phases": identities}),
         "source_status": source["source_status"],
         "nonfinite_turn_angle_count": source["nonfinite_turn_angle_count"],
@@ -465,8 +480,9 @@ def validate_window_build(payload: Mapping) -> None:
             raise ValueError("Stroke frequency source status disagrees with diagnostics")
     length = payload.get("stroke_length_metadata")
     if length is not None:
-        if (length.get("schema") != STROKE_LENGTH_CONTRACT["schema"]
-                or length.get("contract") != STROKE_LENGTH_CONTRACT
+        contract = STROKE_LENGTH_CONTRACT if policy["schema"] == "motion_window_protocol_v1" else NONOVERLAP_LENGTH_CONTRACT
+        if (length.get("schema") != contract["schema"]
+                or length.get("contract") != contract
                 or not _sha(length.get("input_sha256"))
                 or not isinstance(payload.get("stroke_lengths"), list)):
             raise ValueError("Invalid stroke length source contract")
@@ -696,7 +712,12 @@ def compare_motion_windows(
     length_enabled = any("stroke_length_metadata" in r for r in reference["recordings"])
     if length_enabled:
         metrics.append(("mean_stroke_length_mm", "stroke_length_eligible"))
-        result["length_review_policy"] = deepcopy(STROKE_LENGTH_REVIEW_POLICY)
+        review_policy = deepcopy(STROKE_LENGTH_REVIEW_POLICY if policy["schema"] == "motion_window_protocol_v1"
+                                 else SINGLE_WINDOW_LENGTH_REVIEW_POLICY)
+        if policy["schema"] != "motion_window_protocol_v1":
+            review_policy["persistence_windows"] = policy["persistence_windows"]
+        review_policy["minimum_span_s"] = policy["window_s"] + (review_policy["persistence_windows"] - 1) * policy["stride_s"]
+        result["length_review_policy"] = review_policy
         result["length_episodes"] = []
     distributions = {(phase, metric): _distribution(recordings, phase, metric)
                      for phase in PHASES for metric, _ in metrics}
@@ -737,8 +758,9 @@ def compare_motion_windows(
                                     and speed["relative_deficit"] >= policy["min_relative_deficit"])
         if length_enabled:
             measured = row["comparisons"]["mean_stroke_length_mm"]
+            tolerance = policy["percentile_tie_abs_tolerance"] + abs(measured["observed"] or 0) * policy["percentile_tie_rel_tolerance"]
             row["candidate_short"] = bool(measured["status"] == "compared" and row["display_clock_valid"]
-                                           and measured["observed"] < measured["reference_q25"])
+                                           and measured["observed"] + tolerance < measured["reference_q25"])
             row["persistent_short"] = False
         result["windows"].append(row)
     streak: list[dict] = []
@@ -774,7 +796,10 @@ def compare_motion_windows(
         short: list[dict] = []
 
         def finish_short():
-            if len(short) < STROKE_LENGTH_REVIEW_POLICY["persistence_windows"]:
+            if len(short) < review_policy["persistence_windows"]:
+                return
+            distinct = {sid for w in short for sid in w["stroke_length_ids"]}
+            if len(distinct) < review_policy["min_distinct_strokes"]:
                 return
             for window in short:
                 window["persistent_short"] = True
@@ -788,7 +813,7 @@ def compare_motion_windows(
                 "minimum_coverage": min(w["coverage_fraction"] for w in short),
                 "mean_stroke_length_mm_range": [min(w["mean_stroke_length_mm"] for w in short), max(w["mean_stroke_length_mm"] for w in short)],
                 "reference_q25_mm": first["comparisons"]["mean_stroke_length_mm"]["reference_q25"],
-                "source_stroke_ids": sorted({sid for w in short for sid in w["stroke_length_ids"]}),
+                "source_stroke_ids": sorted(distinct),
                 "status": "provisional_descriptive_review_candidate",
             })
         for row in result["windows"]:

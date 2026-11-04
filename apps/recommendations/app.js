@@ -88,6 +88,17 @@ function clipsFor(item) {
   return clips.length ? clips : [{ t_start_s: item.t_start_s, t_end_s: item.t_end_s }];
 }
 
+function clipPhaseLabel(clip, item) {
+  const names = {
+    early_phase: "Early drilling", early_surface: "Early drilling", pre_antrum: "Early drilling",
+    antrum: "Antrum", incus: "Incus", post_incus: "Incus", pre_drilling: "Predrilling",
+  };
+  const phases = clip.phases?.length ? clip.phases : [clip.phase || clip.phase_name || item.phase];
+  const labels = [...new Set(phases.filter(phase => phase && phase !== "session")
+    .map(phase => names[phase] || String(phase).replaceAll("_", " ")))];
+  return labels.length ? labels.join(" / ") : "Phase unavailable";
+}
+
 function keyframeFor(clip) {
   const time = clip.keyframe_time_s;
   if (clip.keyframe_available === false || !clip.keyframe_url || time == null
@@ -199,8 +210,9 @@ function renderClips(item) {
   const root = document.getElementById("clipList");
   root.innerHTML = clips.map((clip, index) => {
     const keyframe = keyframeFor(clip);
-    const label = keyframe ? `Key frame · ${fmtTime(keyframe.time)}`
+    const timeLabel = keyframe ? `Key frame · ${fmtTime(keyframe.time)}`
       : `Review interval · ${fmtTime(clip.t_start_s)}–${fmtTime(clip.t_end_s)}`;
+    const label = `${clipPhaseLabel(clip, item)} · ${timeLabel}`;
     return `<div class="clip-row">
       <div class="clip-copy"><strong>${clips.length > 1 ? `Review moment ${index + 1}` : "Review moment"}</strong><span>${escapeHtml(label)}</span></div>
       <div class="clip-actions">

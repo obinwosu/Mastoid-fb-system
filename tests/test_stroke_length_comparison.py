@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from evidence_system.coaching_plan import build_session_coaching_plan
 from evidence_system.motion_comparison import (
-    add_stroke_length, artifact_sha256, build_expert_reference, build_motion_windows,
+    LEGACY_PROTOCOL, add_stroke_length, artifact_sha256, build_expert_reference, build_motion_windows,
     compare_motion_windows, validate_window_build,
 )
 
@@ -29,6 +29,7 @@ def rows(*, seconds=9, stroke_frames=4, scale=1., phase="antrum"):
 
 def base(source, *, run="query", participant="query"):
     return build_motion_windows(source, global_run_id=run, participant_id=participant,
+        protocol=LEGACY_PROTOCOL,
         provenance={"pose_source": "canonical_vision_pose", "position_unit": "m",
             "phase_source_kind": "manual_frame_phase", "clock_source": "generated_native_clock",
             "source_artifacts": [
@@ -41,9 +42,9 @@ def measured(source, **kwargs):
     return add_stroke_length(base(source, **kwargs), source)
 
 
-def experts(*, phase="antrum", n=3):
+def experts(*, phase="antrum", n=3, stroke_frames=8):
     return build_expert_reference([
-        measured(rows(seconds=7, stroke_frames=8, phase=phase),
+        measured(rows(seconds=7, stroke_frames=stroke_frames, phase=phase),
                  run=f"expert:{i}", participant=f"expert:{i}") for i in range(n)
     ], expert_participant_ids=[f"expert:{i}" for i in range(n)],
        provenance={"expert_definition": "Generated source trajectories, not participant records"})
@@ -158,10 +159,11 @@ def test_shorter_length_compares_by_phase_and_produces_separate_coaching(phase):
         assert window["candidate_short"] and window["persistent_short"]
         assert not window["candidate_low"]
     plan = build_session_coaching_plan([], [], {}, None, motion_comparison=comparison)
-    canonical = "early_phase" if phase == "early_surface" else phase
     assert len(plan["items"]) == 1
-    assert plan["items"][0]["feedback_id"] == f"coaching:short_strokes:{canonical}"
+    assert plan["items"][0]["feedback_id"] == "coaching:short_strokes"
     assert plan["items"][0]["review_clips"]
+    assert all(clip["phase"] == ("early_phase" if phase == "early_surface" else phase)
+               for clip in plan["items"][0]["review_clips"])
     assert plan["items"][0]["category"] == "technique"
 
 
@@ -172,3 +174,20 @@ def test_length_needs_three_experts_and_persistence_and_ties_are_not_short():
     tied = compare_motion_windows(measured(rows(seconds=7, stroke_frames=8)), experts())
     assert tied["length_episodes"] == []
     assert all(not window["candidate_short"] for window in tied["windows"])
+    near_tied = compare_motion_windows(
+        measured(rows(seconds=7, stroke_frames=8, scale=1. - 1e-11)), experts())
+    assert all(not window["candidate_short"] for window in near_tied["windows"])
+
+
+def test_one_short_stroke_repeated_in_three_overlapping_windows_cannot_trigger_coaching():
+    source = rows(seconds=7)
+    for i, row in enumerate(source):
+        row["stroke_id"] = 0 if i <= 12 else 1
+        row["stroke_end_flag"] = i in (12, 28)
+    comparison = compare_motion_windows(measured(source), experts(stroke_frames=16))
+    assert len(comparison["windows"]) == 3
+    assert all(window["candidate_short"] for window in comparison["windows"])
+    assert all(window["stroke_length_ids"] == [0] for window in comparison["windows"])
+    assert comparison["length_episodes"] == []
+    assert all(not window["persistent_short"] for window in comparison["windows"])
+    assert build_session_coaching_plan([], [], {}, None, motion_comparison=comparison)["items"] == []

@@ -17,7 +17,7 @@ import pytest
 from test_ray_feedback_runtime import make_service, write_ray
 from evidence_system.hdf5_clock import generate_hdf5_alignment
 from evidence_system.frame_pipeline.core_frames import resolve_frame_clock
-from evidence_system.motion_comparison import build_motion_windows, build_expert_reference, artifact_sha256
+from evidence_system.motion_comparison import LEGACY_PROTOCOL, build_motion_windows, build_expert_reference, artifact_sha256
 from evidence_system.web import _handler
 
 
@@ -30,13 +30,13 @@ def dump(path, value):
     path.write_text(json.dumps(value), encoding="utf-8")
 
 
-def bound_case(tmp_path, *, schema="legacy"):
+def bound_case(tmp_path, *, schema="legacy", seconds=8):
     root = tmp_path / "run"
     service = make_service(root)
     raw = tmp_path / "raw"
     raw.mkdir()
     source = raw / "chunk.hdf5"
-    times = 100 + np.arange(81) / 10
+    times = 100 + np.arange(int(seconds * 10) + 1) / 10
     with h5py.File(source, "w") as handle:
         prefix = "data/" if schema == "legacy" else "vision_data/continuous_data/"
         handle.create_dataset(prefix + "time", data=times)
@@ -75,7 +75,7 @@ def bound_case(tmp_path, *, schema="legacy"):
             connection.execute("INSERT INTO source_files VALUES (?,?,?,?,?,?,?,?)",
                 (name, "synthetic:case", kind, str(path), sha(path), path.stat().st_size, "test", 1))
         connection.execute("INSERT INTO phases VALUES (?,?,?,?,?,?,?)",
-            ("phase:antrum", "synthetic:case", "antrum", "antrum", 0, 8, "phase"))
+            ("phase:antrum", "synthetic:case", "antrum", "antrum", 0, seconds, "phase"))
         for index, item in enumerate(aligned):
             row = {**parts[index], "frame_idx_global": index, "t_video_s": item["video_time_s"],
                    "phase_id": "phase:antrum", "phase": "antrum", "model_phase": "antrum",
@@ -176,8 +176,7 @@ def test_endpoint_cannot_accept_file_or_arbitrary_index(tmp_path):
         service.original_review_frame("f" * 64)
 
 
-def reference_for(service, frames):
-    from evidence_system.motion_comparison import DEFAULT_PROTOCOL
+def reference_for(service, frames, *, protocol=LEGACY_PROTOCOL):
     people = ["expert_alpha", "expert_beta", "expert_gamma"]
     provenance = {"pose_source": "canonical_vision_pose", "position_unit": "m",
                   "phase_source_kind": "manual", "clock_source": "native_relative_time",
@@ -187,7 +186,7 @@ def reference_for(service, frames):
     for person in people:
         rows = [{**row, "drill_x": row["drill_x"] * 4} for row in frames]
         builds.append(build_motion_windows(rows, global_run_id="reference:"+person,
-                      participant_id=person, provenance=provenance, protocol=DEFAULT_PROTOCOL))
+                      participant_id=person, provenance=provenance, protocol=protocol))
     reference = build_expert_reference(builds, expert_participant_ids=people,
                                       provenance={"expert_definition": "Synthetic test roster"})
     service.cohort_benchmark_path = service.artifact_root / "reference.json"
@@ -229,7 +228,8 @@ def test_saved_motion_must_match_current_db_and_artifact_binding(tmp_path, parti
                   "phase_source_kind": "model_phase_prediction", "phase_model_sha256": "a"*64,
                   "clock_source": context["clock"]["source"],
                   "source_artifacts": [{"kind": kind, "path": str(path), "sha256": sha(path)} for kind,path in files.items()]}
-    saved = build_motion_windows(frames, global_run_id="synthetic:case", participant_id=participant or None, provenance=provenance)
+    saved = build_motion_windows(frames, global_run_id="synthetic:case", participant_id=participant or None,
+                                 provenance=provenance, protocol=LEGACY_PROTOCOL)
     sidecar = stages / "09_motion_comparison/motion_windows.json"
     dump(sidecar, saved)
     assert service.bootstrap()["motion_comparison"]["current_source"].startswith("bound_pipeline_sidecar")
