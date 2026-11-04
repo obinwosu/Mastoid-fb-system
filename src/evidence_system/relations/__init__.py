@@ -1,5 +1,4 @@
 """Versioned deterministic factual relation construction."""
-"""Factual relation construction."""
 
 from .builder import (
     RelationBuild,
@@ -16,4 +15,3 @@ __all__ = [
     "relation_to_dict",
     "write_relation_build",
 ]
-

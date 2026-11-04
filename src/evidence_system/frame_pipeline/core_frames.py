@@ -3,29 +3,39 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
-from pathlib import Path
 import subprocess
-from typing import Any, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from ..hdf5_clock import (
-    MANIFEST_NAME, validate_generated_alignment,
+    MANIFEST_NAME,
+    validate_generated_alignment,
 )
 from ..hdf5_reader import RecordingReader
 from ..registry import RunRecord
 from ..source_audit import inspect_phase_annotation
 from ..source_config import ResolvedRunSources
 
-
 DRILLING_TIMESTAMP_GAP_S = 0.2
 DEFAULT_BURR_MM = 6.0
 REMOVED_VOXEL_FIELDS = (
-    "removed_voxel_id", "global_run_id", "removed_voxel_row", "t_abs", "t_video_s",
-    "frame_idx_global", "x", "y", "z", "source_hdf5", "source_voxel_row",
+    "removed_voxel_id",
+    "global_run_id",
+    "removed_voxel_row",
+    "t_abs",
+    "t_video_s",
+    "frame_idx_global",
+    "x",
+    "y",
+    "z",
+    "source_hdf5",
+    "source_voxel_row",
     "source_timestamp_idx",
 )
 
@@ -86,22 +96,34 @@ def resolve_frame_clock(
         raise ValueError("Frame clock requires finite native timestamps")
     origin = raw_times[0]
     manifest: dict[str, Any] = {
-        "schema": "frame_clock_alignment_v1", "configured_global_run_id": global_run_id,
-        "frame_count": len(frame_parts), "raw_time_origin_abs": origin,
+        "schema": "frame_clock_alignment_v1",
+        "configured_global_run_id": global_run_id,
+        "frame_count": len(frame_parts),
+        "raw_time_origin_abs": origin,
         "raw_time_bounds_abs": [min(raw_times), max(raw_times)],
         "phase_columns_consumed": False,
         "native_pose_and_voxel_assignment_clock": "original_HDF5_data/time",
-        "removed_event_clock_mapping": "native absolute timestamp interpolated between aligned frame clocks; linear endpoint extrapolation outside observed frame bounds",
+        "removed_event_clock_mapping": (
+            "native absolute timestamp interpolated between aligned frame clocks; "
+            "linear endpoint extrapolation outside observed frame bounds"
+        ),
     }
     generated = None
     if alignment_file is None:
-        aligned = [{"video_time_s": value-origin} for value in raw_times]
-        manifest.update(source="native_relative_time", path=None, sha256=None,
-                        columns_used=[], world_frame_index_present=False,
-                        correspondence_validation="Derived directly from the native frame inventory")
+        aligned = [{"video_time_s": value - origin} for value in raw_times]
+        manifest.update(
+            source="native_relative_time",
+            path=None,
+            sha256=None,
+            columns_used=[],
+            world_frame_index_present=False,
+            correspondence_validation="Derived directly from the native frame inventory",
+        )
     else:
-        if any(right <= left for left, right in zip(raw_times, raw_times[1:])):
-            raise ValueError("Explicit frame alignment requires strictly increasing native timestamps")
+        if any(right <= left for left, right in zip(raw_times, raw_times[1:], strict=False)):
+            raise ValueError(
+                "Explicit frame alignment requires strictly increasing native timestamps"
+            )
         path = alignment_file.expanduser().resolve()
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
             reader = csv.DictReader(stream)
@@ -113,7 +135,9 @@ def resolve_frame_clock(
                 used.append("world_frame_index")
             clock_rows = [{key: row[key] for key in used} for row in reader]
         if (path.parent / MANIFEST_NAME).exists() or {
-            "source_hdf5", "source_frame_idx", "t_abs"
+            "source_hdf5",
+            "source_frame_idx",
+            "t_abs",
         }.intersection(columns):
             if raw_run_dir is None:
                 raise ValueError("Generated HDF5 clock requires the current raw source directory")
@@ -144,12 +168,23 @@ def resolve_frame_clock(
                 item["world_frame_index"] = world
                 previous_world = world
             aligned.append(item)
-        if any(right["video_time_s"] <= left["video_time_s"] for left,right in zip(aligned, aligned[1:])):
+        if any(
+            right["video_time_s"] <= left["video_time_s"]
+            for left, right in zip(aligned, aligned[1:], strict=False)
+        ):
             raise ValueError("Frame alignment video times must strictly increase")
-        manifest.update(source="explicit_frame_alignment", path=str(path),
-                        sha256=hashlib.sha256(path.read_bytes()).hexdigest(), columns_used=used,
-                        world_frame_index_present="world_frame_index" in used,
-                        correspondence_validation="Configured run binding, exact file hash, native frame count and ordered indices; equal-size wrong-record sidecars cannot be excluded by these columns alone")
+        manifest.update(
+            source="explicit_frame_alignment",
+            path=str(path),
+            sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            columns_used=used,
+            world_frame_index_present="world_frame_index" in used,
+            correspondence_validation=(
+                "Configured run binding, exact file hash, native frame count and ordered "
+                "indices; equal-size wrong-record sidecars cannot be excluded by these "
+                "columns alone"
+            ),
+        )
         if generated:
             manifest.update(generated)
     manifest["video_time_bounds_s"] = [aligned[0]["video_time_s"], aligned[-1]["video_time_s"]]
@@ -162,8 +197,11 @@ def resolve_frame_clock(
         raise ValueError("Configured phase duration must cover the aligned frame time range")
     manifest["duration_s"] = duration
     manifest["duration_source"] = (
-        generated["duration_source"] if generated else
-        "last_aligned_frame" if duration_s is None else "explicit_recording_duration"
+        generated["duration_source"]
+        if generated
+        else "last_aligned_frame"
+        if duration_s is None
+        else "explicit_recording_duration"
     )
     return aligned, manifest
 
@@ -175,15 +213,21 @@ def map_native_event_times(event_times: Any, frame_times: Any, video_times: Any)
     raw = np.asarray(frame_times, dtype=float)
     mapped = np.asarray(video_times, dtype=float)
     if len(raw) == 1:
-        return mapped[0]+events-raw[0]
+        return mapped[0] + events - raw[0]
     result = np.interp(events, raw, mapped)
     before, after = events < raw[0], events > raw[-1]
-    result[before] = mapped[0]+(events[before]-raw[0])*(mapped[1]-mapped[0])/(raw[1]-raw[0])
-    result[after] = mapped[-1]+(events[after]-raw[-1])*(mapped[-1]-mapped[-2])/(raw[-1]-raw[-2])
+    result[before] = mapped[0] + (events[before] - raw[0]) * (mapped[1] - mapped[0]) / (
+        raw[1] - raw[0]
+    )
+    result[after] = mapped[-1] + (events[after] - raw[-1]) * (mapped[-1] - mapped[-2]) / (
+        raw[-1] - raw[-2]
+    )
     return result
 
 
-def _drilling_mask(frame_times: Any, removal_times: Any, gap_s: float = DRILLING_TIMESTAMP_GAP_S) -> Any:
+def _drilling_mask(
+    frame_times: Any, removal_times: Any, gap_s: float = DRILLING_TIMESTAMP_GAP_S
+) -> Any:
     _, np = _require_numeric_stack()
     frame_times = np.asarray(frame_times, dtype=float)
     removal_times = np.asarray(removal_times, dtype=float)
@@ -195,7 +239,7 @@ def _drilling_mask(frame_times: Any, removal_times: Any, gap_s: float = DRILLING
     breaks = np.where(np.diff(times) >= gap_s)[0]
     starts = np.concatenate(([0], breaks + 1))
     ends = np.concatenate((breaks, [len(times) - 1]))
-    for start_idx, end_idx in zip(starts, ends):
+    for start_idx, end_idx in zip(starts, ends, strict=False):
         if int(start_idx) == int(end_idx):
             continue
         mask |= (frame_times >= times[start_idx]) & (frame_times <= times[end_idx])
@@ -278,10 +322,10 @@ def _build_phase_intervals(
         )
 
     times = np.asarray(frame_times_video, dtype=float)
-    assigned_phases = np.asarray([
-        _phase_for_time(value, first_drilling_s, antrum, incus, incus_end)
-        for value in times
-    ], dtype=object)
+    assigned_phases = np.asarray(
+        [_phase_for_time(value, first_drilling_s, antrum, incus, incus_end) for value in times],
+        dtype=object,
+    )
     rows = []
     for index, (phase, start, end, boundary_source) in enumerate(definitions, 1):
         # Count from the same phase assignment used on frame rows. This avoids
@@ -370,9 +414,7 @@ def extract_core_frames(
                         }
                     )
 
-            change_times = _dataset_array(
-                handle, "burr_change/time_stamp", required=False
-            )
+            change_times = _dataset_array(handle, "burr_change/time_stamp", required=False)
             change_sizes = _dataset_array(handle, "burr_change/burr_size", required=False)
             if change_times is not None and change_sizes is not None:
                 change_times = np.asarray(change_times, dtype=float).reshape(-1)
@@ -404,7 +446,7 @@ def extract_core_frames(
             if timestamp_indices.min() < 0 or timestamp_indices.max() >= len(removal_times):
                 raise ValueError(f"Invalid voxel timestamp indices in {path.name}")
             for local_row, (row, timestamp_index) in enumerate(
-                zip(removed, timestamp_indices)
+                zip(removed, timestamp_indices, strict=False)
             ):
                 voxel_parts.append(
                     {
@@ -427,22 +469,24 @@ def extract_core_frames(
         raise ValueError("Frame timestamps are empty or non-monotonic after merge")
     experiment_start = float(frame_times[0])
     clock_rows, clock_manifest = resolve_frame_clock(
-        frame_parts, sources.frame_alignment_file, global_run_id=record.global_run_id,
+        frame_parts,
+        sources.frame_alignment_file,
+        global_run_id=record.global_run_id,
         duration_s=sources.phase_duration_s,
         raw_run_dir=sources.raw_run_dir,
     )
     if reader.schema == "v3":
         clock_manifest["native_pose_and_voxel_assignment_clock"] = (
-            "vision_data/continuous_data/time and physics_data/intermittent_data/voxels_removed/voxel_time_stamp"
+            "vision_data/continuous_data/time and "
+            "physics_data/intermittent_data/voxels_removed/voxel_time_stamp"
         )
     t_video = np.asarray([row["video_time_s"] for row in clock_rows], dtype=float)
     voxel_video_times = (
         map_native_event_times(voxel_times, frame_times, t_video)
-        if sources.frame_alignment_file is not None else voxel_times-experiment_start
+        if sources.frame_alignment_file is not None
+        else voxel_times - experiment_start
     )
-    assigned_frames, frame_removed_counts = _assign_voxels_to_frames(
-        frame_times, voxel_times
-    )
+    assigned_frames, frame_removed_counts = _assign_voxels_to_frames(frame_times, voxel_times)
     valid_voxels = assigned_frames < len(frame_times)
     drilling = _drilling_mask(frame_times, voxel_times)
     automatic_phase = sources.phase_model_bundle is not None
@@ -464,7 +508,11 @@ def extract_core_frames(
     first_drilling_s = float(t_video[np.where(drilling)[0][0]]) if np.any(drilling) else None
     last_drilling_s = float(t_video[np.where(drilling)[0][-1]]) if np.any(drilling) else None
     if automatic_phase:
-        phase_audit = {"valid": True, "source_kind": "model_phase_prediction", "status": "pending_geometry_and_inference"}
+        phase_audit = {
+            "valid": True,
+            "source_kind": "model_phase_prediction",
+            "status": "pending_geometry_and_inference",
+        }
         phase_row = None
         phase_intervals = []
     else:
@@ -475,15 +523,18 @@ def extract_core_frames(
             raise ValueError(f"Invalid phase annotation for {record.run_id}")
         phase_row = dict(phase_audit["row"])
         phase_intervals = _build_phase_intervals(
-            record=record, first_drilling_s=first_drilling_s, record_end_s=float(t_video[-1]),
-            phase_row=phase_row, frame_times_video=t_video,
+            record=record,
+            first_drilling_s=first_drilling_s,
+            record_end_s=float(t_video[-1]),
+            phase_row=phase_row,
+            frame_times_video=t_video,
         )
 
     voxel_start = [None] * len(frame_parts)
     voxel_end = [None] * len(frame_parts)
     removed_voxel_rows: list[dict[str, Any]] = []
     for sorted_idx, (source, assigned, valid) in enumerate(
-        zip(voxel_parts, assigned_frames, valid_voxels)
+        zip(voxel_parts, assigned_frames, valid_voxels, strict=False)
     ):
         frame_index = int(assigned) if valid else None
         if frame_index is not None:
@@ -513,12 +564,16 @@ def extract_core_frames(
         drill_pose = source["drill_pose"]
         volume_pose = source["volume_pose"]
         camera_pose = source["camera_pose"]
-        phase = None if automatic_phase else _phase_for_time(
-            float(t_video[index]),
-            first_drilling_s,
-            float(phase_row["antrum_start_sec"]),
-            float(phase_row["incus_start_sec"]),
-            float(phase_row["incus_end_sec"]),
+        phase = (
+            None
+            if automatic_phase
+            else _phase_for_time(
+                float(t_video[index]),
+                first_drilling_s,
+                float(phase_row["antrum_start_sec"]),
+                float(phase_row["incus_start_sec"]),
+                float(phase_row["incus_end_sec"]),
+            )
         )
         drilling_frame_idx = drilling_sequence_index if drilling[index] else None
         if drilling[index]:
@@ -559,14 +614,18 @@ def extract_core_frames(
                 "camera_qy": float(camera_pose[4]),
                 "camera_qz": float(camera_pose[5]),
                 "camera_qw": float(camera_pose[6]),
-                "rgb_frame_ref": f"{source['source_hdf5']}:{reader.dataset_path('data/l_img')}:{source['source_frame_idx']}",
-                "depth_frame_ref": f"{source['source_hdf5']}:{reader.dataset_path('data/depth')}:{source['source_frame_idx']}",
+                "rgb_frame_ref": (
+                    f"{source['source_hdf5']}:{reader.dataset_path('data/l_img')}:"
+                    f"{source['source_frame_idx']}"
+                ),
+                "depth_frame_ref": (
+                    f"{source['source_hdf5']}:{reader.dataset_path('data/depth')}:"
+                    f"{source['source_frame_idx']}"
+                ),
                 "frame_removed_voxels": int(frame_removed_counts[index]),
                 "frame_removed_voxels_cum": int(cumulative[index]),
                 "frame_removed_voxels_per_s": (
-                    None
-                    if np.isnan(dt[index])
-                    else float(frame_removed_counts[index] / dt[index])
+                    None if np.isnan(dt[index]) else float(frame_removed_counts[index] / dt[index])
                 ),
                 "frame_removed_mm3": float(frame_removed_counts[index] * voxel_volume_mm3),
                 "frame_removed_mm3_cum": float(cumulative[index] * voxel_volume_mm3),
@@ -581,12 +640,20 @@ def extract_core_frames(
         )
 
     if sources.frame_alignment_file is not None:
-        for frame, clock in zip(frame_rows, clock_rows):
-            frame["t_record_s"] = frame["t_abs"]-experiment_start
+        for frame, clock in zip(frame_rows, clock_rows, strict=False):
+            frame["t_record_s"] = frame["t_abs"] - experiment_start
             if "world_frame_index" in clock:
                 frame["world_frame_index"] = clock["world_frame_index"]
     if reader.schema == "v3":
-        camera_fields = ("camera_x", "camera_y", "camera_z", "camera_qx", "camera_qy", "camera_qz", "camera_qw")
+        camera_fields = (
+            "camera_x",
+            "camera_y",
+            "camera_z",
+            "camera_qx",
+            "camera_qy",
+            "camera_qz",
+            "camera_qw",
+        )
         for frame in frame_rows:
             for name in camera_fields:
                 frame[name] = _finite_float(frame[name])
@@ -601,20 +668,30 @@ def extract_core_frames(
         "modalities_have_source_references": all(
             row["rgb_frame_ref"] and row["depth_frame_ref"] for row in frame_rows
         ),
-        ("automatic_phase_deferred_without_manual_input" if automatic_phase else "phase_annotation_valid"): bool(phase_audit["valid"]),
+        (
+            "automatic_phase_deferred_without_manual_input"
+            if automatic_phase
+            else "phase_annotation_valid"
+        ): bool(phase_audit["valid"]),
     }
     manifest = {
         "schema": "core_frame_extraction_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "generator_version": "frame_evidence_pipeline_v1_core",
         "git_commit": _git_commit(project_root),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
         "global_run_id": record.global_run_id,
         "primary_raw_run_dir": str(sources.raw_run_dir),
-        "auxiliary_phase_annotation": None if automatic_phase else str(sources.phase_annotation_file),
-        "phase_source_kind": "model_phase_prediction" if automatic_phase else "human_phase_annotation",
-        "phase_status": "pending_geometry_and_inference" if automatic_phase else "validated_manual_annotation",
+        "auxiliary_phase_annotation": None
+        if automatic_phase
+        else str(sources.phase_annotation_file),
+        "phase_source_kind": "model_phase_prediction"
+        if automatic_phase
+        else "human_phase_annotation",
+        "phase_status": "pending_geometry_and_inference"
+        if automatic_phase
+        else "validated_manual_annotation",
         "clock_alignment": clock_manifest,
         "validation_only_legacy_frame_file": str(
             sources.raw_run_dir / "frame_level_spatial_all_frames_with_voxel.csv"
@@ -645,9 +722,12 @@ def extract_core_frames(
     }
     if reader.schema == "v3":
         manifest["hdf5_reader"] = reader.manifest()
-        manifest["physics_only_files"] = [p.name for p in reader.paths if reader.chunk_role(p) == "physics_only"]
+        manifest["physics_only_files"] = [
+            p.name for p in reader.paths if reader.chunk_role(p) == "physics_only"
+        ]
         manifest["burr_size_provenance"] = {
-            "change_event_count": len(burr_times), "default_diameter_mm": DEFAULT_BURR_MM,
+            "change_event_count": len(burr_times),
+            "default_diameter_mm": DEFAULT_BURR_MM,
             "policy": "Assume the existing 6 mm initial burr until the first explicit change event",
             "initial_size_measured": False,
         }
@@ -659,9 +739,7 @@ def extract_core_frames(
     )
 
 
-def compare_legacy_core_frames(
-    build: CoreFrameBuild, legacy_path: Path
-) -> dict[str, Any]:
+def compare_legacy_core_frames(build: CoreFrameBuild, legacy_path: Path) -> dict[str, Any]:
     """Explicit validation-only comparison; never used to construct new frames."""
 
     if not legacy_path.is_file():
@@ -703,7 +781,7 @@ def compare_legacy_core_frames(
             return None
         return result if math.isfinite(result) else None
 
-    for new, old in zip(build.frames, legacy):
+    for new, old in zip(build.frames, legacy, strict=False):
         if int(old["frame_idx_global"]) != int(new["frame_idx_global"]):
             mismatches["frame_idx"] += 1
         old_drilling = str(old["is_drilling_frame"]).strip().lower() in {"1", "true", "t", "yes"}
@@ -717,14 +795,20 @@ def compare_legacy_core_frames(
             mismatches["removed_voxels"] += 1
         if int(float(old["frame_removed_voxels_cum"])) != int(new["frame_removed_voxels_cum"]):
             mismatches["cumulative"] += 1
-        max_errors["t_abs"] = max(max_errors["t_abs"], abs(float(old["t_abs"]) - float(new["t_abs"])))
-        max_errors["t_video"] = max(max_errors["t_video"], abs(float(old["t_video"]) - float(new["t_video_s"])))
+        max_errors["t_abs"] = max(
+            max_errors["t_abs"], abs(float(old["t_abs"]) - float(new["t_abs"]))
+        )
+        max_errors["t_video"] = max(
+            max_errors["t_video"], abs(float(old["t_video"]) - float(new["t_video_s"]))
+        )
         position_error = max(
             abs(float(old[column]) - float(new[column]))
             for column in ("drill_x", "drill_y", "drill_z")
         )
         max_errors["drill_position"] = max(max_errors["drill_position"], position_error)
-        max_errors["burr_mm"] = max(max_errors["burr_mm"], abs(float(old["burr_mm"]) - float(new["burr_mm"])))
+        max_errors["burr_mm"] = max(
+            max_errors["burr_mm"], abs(float(old["burr_mm"]) - float(new["burr_mm"]))
+        )
         for mismatch_name, old_column, new_column, error_name in (
             (
                 "removed_voxels_per_s",
@@ -807,7 +891,10 @@ def render_core_audit(build: CoreFrameBuild, regression: dict[str, Any]) -> str:
     else:
         lines.append(f"- Role: `{regression.get('role')}`")
         lines.append(f"- Exact comparison passed: **{regression.get('all_match')}**")
-        lines.append(f"- Row counts: {regression.get('new_row_count')} new / {regression.get('legacy_row_count')} legacy")
+        lines.append(
+            f"- Row counts: {regression.get('new_row_count')} new / "
+            f"{regression.get('legacy_row_count')} legacy"
+        )
         for name, count in regression.get("mismatches", {}).items():
             lines.append(f"- {name} mismatches: {count}")
     lines.extend(
@@ -849,4 +936,3 @@ def write_core_frame_build(
     (output_dir / "CORE_FRAME_AUDIT.md").write_text(
         render_core_audit(build, regression), encoding="utf-8"
     )
-

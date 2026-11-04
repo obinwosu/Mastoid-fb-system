@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
 import hashlib
 import json
 import math
-from pathlib import Path
 import re
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from .hdf5_clock import list_hdf5_paths
 from .registry import RunRecord
 from .source_config import ResolvedRunSources
-
 
 DERIVED_SUFFIXES = {".csv", ".json", ".jsonl"}
 RAW_MEDIA_SUFFIXES = {".mp4", ".npy", ".intrinsics", ".pldata"}
@@ -58,7 +57,10 @@ def _finite_float(value: Any) -> float | None:
 
 
 def inspect_hdf5(
-    path: Path, *, hash_files: bool, reader: Any = None,
+    path: Path,
+    *,
+    hash_files: bool,
+    reader: Any = None,
     reader_error: str | None = None,
 ) -> dict[str, Any]:
     """Inventory physical datasets, then audit the recording's canonical view.
@@ -76,27 +78,45 @@ def inspect_hdf5(
     datasets: list[dict[str, Any]] = []
     errors: list[str] = []
     count_fields = (
-        "frame_count", "image_frame_count", "depth_frame_count",
-        "drill_pose_count", "volume_pose_count", "camera_pose_count",
-        "removed_timestamp_count", "removed_voxel_row_count",
+        "frame_count",
+        "image_frame_count",
+        "depth_frame_count",
+        "drill_pose_count",
+        "volume_pose_count",
+        "camera_pose_count",
+        "removed_timestamp_count",
+        "removed_voxel_row_count",
     )
     result: dict[str, Any] = {
-        "file_name": path.name, "path": str(path),
+        "file_name": path.name,
+        "path": str(path),
         "size_bytes": path.stat().st_size,
-        "modified_at": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
+        "modified_at": datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat(),
         "sha256": sha256_file(path) if hash_files else None,
-        "readable": False, "canonical_valid": False,
-        "format": None, "chunk_role": "unknown", "error": None,
-        "canonical_errors": errors, "warnings": [], "root_groups": [], "datasets": datasets,
+        "readable": False,
+        "canonical_valid": False,
+        "format": None,
+        "chunk_role": "unknown",
+        "error": None,
+        "canonical_errors": errors,
+        "warnings": [],
+        "root_groups": [],
+        "datasets": datasets,
         "canonical_fields": {},
         **{field: None for field in count_fields},
-        "time_start": None, "time_end": None,
-        "time_finite": None, "time_monotonic": None, "camera_pose_valid": None,
+        "time_start": None,
+        "time_end": None,
+        "time_finite": None,
+        "time_monotonic": None,
+        "camera_pose_valid": None,
         "removed_timestamp_index_min": None,
         "removed_timestamp_index_max": None,
         "removed_timestamp_indices_valid": None,
         "voxel_volume": None,
-        "validation_scope": "Physical dataset inventory plus canonical shape/time/pose/event checks; geometry and scientific validity are separate.",
+        "validation_scope": (
+            "Physical dataset inventory plus canonical shape/time/pose/event checks; "
+            "geometry and scientific validity are separate."
+        ),
     }
     try:
         with h5py.File(path, "r") as raw:
@@ -106,7 +126,9 @@ def inspect_hdf5(
                 if isinstance(item, h5py.Dataset):
                     entry = {"path": name, "shape": list(item.shape), "dtype": str(item.dtype)}
                     # Preserve declared units without guessing their physical scale.
-                    units = {key: str(item.attrs[key]) for key in ("unit", "units") if key in item.attrs}
+                    units = {
+                        key: str(item.attrs[key]) for key in ("unit", "units") if key in item.attrs
+                    }
                     if units:
                         entry["declared_units"] = units
                     datasets.append(entry)
@@ -122,18 +144,24 @@ def inspect_hdf5(
             raise ValueError(reader_error)
         if reader is None:
             from .hdf5_reader import RecordingReader
+
             reader = RecordingReader(path.parent)
         result["format"] = reader.schema
         result["chunk_role"] = reader.chunk_role(path)
         camera_alignment = reader.manifest().get("camera_alignment", {})
         expected_camera_missing = {
-            int(row["source_frame_idx"]) for row in camera_alignment.get("missing_frames", [])
+            int(row["source_frame_idx"])
+            for row in camera_alignment.get("missing_frames", [])
             if row["source_hdf5"] == path.name
         }
         result["camera_missing_frame_count"] = len(expected_camera_missing)
         if expected_camera_missing:
-            result["warnings"].append("Declared camera-alignment gaps retained as NaN; camera-dependent evidence is not evaluable for these frames.")
+            result["warnings"].append(
+                "Declared camera-alignment gaps retained as NaN; camera-dependent "
+                "evidence is not evaluable for these frames."
+            )
         with reader.open_chunk(path) as handle:
+
             def field(name: str, *, required: bool = False) -> Any:
                 try:
                     value = handle.get(name)
@@ -143,11 +171,16 @@ def inspect_hdf5(
                             errors.append(f"Missing canonical field: {name}")
                     else:
                         result["canonical_fields"][name] = {
-                            "present": True, "shape": list(value.shape), "dtype": str(value.dtype),
+                            "present": True,
+                            "shape": list(value.shape),
+                            "dtype": str(value.dtype),
                         }
                     return value
                 except Exception as exc:
-                    result["canonical_fields"][name] = {"present": False, "error": f"{type(exc).__name__}: {exc}"}
+                    result["canonical_fields"][name] = {
+                        "present": False,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
                     errors.append(f"{name}: {type(exc).__name__}: {exc}")
                     return None
 
@@ -160,11 +193,15 @@ def inspect_hdf5(
                 times = np.asarray(time_dataset[()], dtype=float).reshape(-1)
                 result["frame_count"] = int(len(times))
                 result["time_finite"] = bool(np.all(np.isfinite(times)))
-                result["time_monotonic"] = bool(result["time_finite"] and np.all(np.diff(times) > 0))
+                result["time_monotonic"] = bool(
+                    result["time_finite"] and np.all(np.diff(times) > 0)
+                )
                 if len(times) and result["time_finite"]:
                     result["time_start"], result["time_end"] = float(times[0]), float(times[-1])
                 if not result["time_monotonic"] or (is_frame and not len(times)):
-                    errors.append("Frame timestamps must be nonempty, finite and strictly increasing.")
+                    errors.append(
+                        "Frame timestamps must be nonempty, finite and strictly increasing."
+                    )
 
             n = result["frame_count"]
             for name, key, kind in (
@@ -185,20 +222,30 @@ def inspect_hdf5(
                     array = np.asarray(value[()], dtype=float)
                     valid_pose = shape == (n, 7)
                     if valid_pose:
-                        invalid_rows = set(np.flatnonzero(~np.all(np.isfinite(array), axis=1)).tolist())
+                        invalid_rows = set(
+                            np.flatnonzero(~np.all(np.isfinite(array), axis=1)).tolist()
+                        )
                         if name == "data/pose_main_camera" and reader.schema == "v3":
                             valid_pose = invalid_rows == expected_camera_missing
                             if invalid_rows:
-                                valid_pose = valid_pose and bool(np.all(np.isnan(array[sorted(invalid_rows)])))
+                                valid_pose = valid_pose and bool(
+                                    np.all(np.isnan(array[sorted(invalid_rows)]))
+                                )
                         else:
                             valid_pose = not invalid_rows
-                        finite_rows = [index for index in range(len(array)) if index not in invalid_rows]
+                        finite_rows = [
+                            index for index in range(len(array)) if index not in invalid_rows
+                        ]
                         if finite_rows:
-                            valid_pose = valid_pose and bool(np.all(np.linalg.norm(array[finite_rows, 3:], axis=1) > 0))
+                            valid_pose = valid_pose and bool(
+                                np.all(np.linalg.norm(array[finite_rows, 3:], axis=1) > 0)
+                            )
                     if name == "data/pose_main_camera":
                         result["camera_pose_valid"] = valid_pose
                     if not valid_pose:
-                        errors.append(f"Expected finite N x 7 pose except declared v3 camera gaps: {name}")
+                        errors.append(
+                            f"Expected finite N x 7 pose except declared v3 camera gaps: {name}"
+                        )
                 elif kind == "image" and (len(shape) != 4 or shape[-1] != 3):
                     errors.append(f"Expected N x H x W x 3 image shape: {name}")
                 elif kind == "depth" and len(shape) != 3:
@@ -221,15 +268,26 @@ def inspect_hdf5(
                 result["removed_timestamp_count"] = len(event_times)
                 result["removed_voxel_row_count"] = int(rows.shape[0]) if rows.ndim else None
                 valid = bool(np.all(np.isfinite(event_times)) and np.all(np.diff(event_times) >= 0))
-                valid = valid and rows.ndim == 2 and rows.shape[1] >= 4 and bool(np.all(np.isfinite(rows)))
+                valid = (
+                    valid
+                    and rows.ndim == 2
+                    and rows.shape[1] >= 4
+                    and bool(np.all(np.isfinite(rows)))
+                )
                 if valid and len(rows):
                     indices = rows[:, 0]
-                    valid = bool(np.all(indices == np.floor(indices)) and np.all(indices >= 0) and np.all(indices < len(event_times)))
+                    valid = bool(
+                        np.all(indices == np.floor(indices))
+                        and np.all(indices >= 0)
+                        and np.all(indices < len(event_times))
+                    )
                     result["removed_timestamp_index_min"] = float(indices.min())
                     result["removed_timestamp_index_max"] = float(indices.max())
                 result["removed_timestamp_indices_valid"] = valid
                 if not valid:
-                    errors.append("Invalid chunk-local removed-voxel timestamp indices or event values.")
+                    errors.append(
+                        "Invalid chunk-local removed-voxel timestamp indices or event values."
+                    )
 
             volume = field("metadata/voxel_volume")
             if volume is not None:
@@ -247,6 +305,7 @@ def inspect_hdf5(
 
 def read_edt_header(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
+
         def next_token() -> str:
             char = handle.read(1)
             while char and char in b" \t\r\n":
@@ -284,18 +343,15 @@ def inspect_phase_annotation(path: Path, record: RunRecord) -> dict[str, Any]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         rows = list(csv.DictReader(handle))
     matches = [
-        row for row in rows
+        row
+        for row in rows
         if (
             str(row.get("run_id", "")).strip() == record.run_id
             or (
                 record.phase_annotation_id
-                and str(row.get("phase_annotation_id", "")).strip()
-                == record.phase_annotation_id
+                and str(row.get("phase_annotation_id", "")).strip() == record.phase_annotation_id
             )
-            or (
-                record.exp_id
-                and str(row.get("exp_id", "")).strip() == record.exp_id
-            )
+            or (record.exp_id and str(row.get("exp_id", "")).strip() == record.exp_id)
         )
     ]
     result: dict[str, Any] = {
@@ -311,12 +367,8 @@ def inspect_phase_annotation(path: Path, record: RunRecord) -> dict[str, Any]:
     if len(matches) != 1:
         return result
     row = matches[0]
-    antrum = _finite_float(
-        row.get("antrum_start_sec") or row.get("antrum_start_s")
-    )
-    incus = _finite_float(
-        row.get("antrum_end_incus_start_sec") or row.get("incus_start_s")
-    )
+    antrum = _finite_float(row.get("antrum_start_sec") or row.get("antrum_start_s"))
+    incus = _finite_float(row.get("antrum_end_incus_start_sec") or row.get("incus_start_s"))
     incus_end = _finite_float(row.get("incus_end_sec") or row.get("incus_end_s"))
     ordered = (
         antrum is not None
@@ -331,13 +383,9 @@ def inspect_phase_annotation(path: Path, record: RunRecord) -> dict[str, Any]:
         run_id_matches = bool(
             (
                 record.phase_annotation_id
-                and str(row.get("phase_annotation_id", "")).strip()
-                == record.phase_annotation_id
+                and str(row.get("phase_annotation_id", "")).strip() == record.phase_annotation_id
             )
-            or (
-                record.exp_id
-                and str(row.get("exp_id", "")).strip() == record.exp_id
-            )
+            or (record.exp_id and str(row.get("exp_id", "")).strip() == record.exp_id)
         )
     result.update(
         {
@@ -391,7 +439,9 @@ def build_source_audit(
             if not (sources.phase_model_bundle / filename).is_file():
                 raise FileNotFoundError(sources.phase_model_bundle / filename)
     elif sources.phase_annotation_file is None or not sources.phase_annotation_file.is_file():
-        raise FileNotFoundError(sources.phase_annotation_file or "Manual phase annotation not configured")
+        raise FileNotFoundError(
+            sources.phase_annotation_file or "Manual phase annotation not configured"
+        )
     if sources.frame_alignment_file is not None and not sources.frame_alignment_file.is_file():
         raise FileNotFoundError(sources.frame_alignment_file)
 
@@ -404,16 +454,21 @@ def build_source_audit(
         reader_manifest = reader.manifest()
     except Exception as exc:
         reader_error = f"{type(exc).__name__}: {exc}"
-    hdf5 = [inspect_hdf5(path, hash_files=hash_hdf5, reader=reader,
-                         reader_error=reader_error) for path in hdf5_paths]
+    hdf5 = [
+        inspect_hdf5(path, hash_files=hash_hdf5, reader=reader, reader_error=reader_error)
+        for path in hdf5_paths
+    ]
     readable = [item for item in hdf5 if item["readable"]]
     time_chunks = sorted(
-        (item for item in readable
-         if item["time_start"] is not None and item["time_end"] is not None),
+        (
+            item
+            for item in readable
+            if item["time_start"] is not None and item["time_end"] is not None
+        ),
         key=lambda item: item["time_start"],
     )
     continuity = []
-    for previous, current in zip(time_chunks, time_chunks[1:]):
+    for previous, current in zip(time_chunks, time_chunks[1:], strict=False):
         gap = float(current["time_start"]) - float(previous["time_end"])
         continuity.append(
             {
@@ -429,13 +484,25 @@ def build_source_audit(
     edt_stems = {path.stem for path in edt_files}
     missing_required_edt = sorted(REQUIRED_EDT_STEMS - edt_stems)
     phase = (
-        {"path": str(sources.phase_model_bundle), "sha256": None, "valid": True,
-         "row": None, "source_kind": "model_phase_prediction", "status": "pending_inference",
-         "human_annotation_read": False,
-         "bundle_files": {name: sha256_file(sources.phase_model_bundle / name)
-                          for name in ("model.pt", "neural_preprocessing.json", "manifest.json")},
-         "validation_scope": "Bundle directory exists; frozen assets and predictions are validated by phase inference after geometry enrichment."}
-        if automatic_phase else inspect_phase_annotation(sources.phase_annotation_file, record)
+        {
+            "path": str(sources.phase_model_bundle),
+            "sha256": None,
+            "valid": True,
+            "row": None,
+            "source_kind": "model_phase_prediction",
+            "status": "pending_inference",
+            "human_annotation_read": False,
+            "bundle_files": {
+                name: sha256_file(sources.phase_model_bundle / name)
+                for name in ("model.pt", "neural_preprocessing.json", "manifest.json")
+            },
+            "validation_scope": (
+                "Bundle directory exists; frozen assets and predictions are validated by "
+                "phase inference after geometry enrichment."
+            ),
+        }
+        if automatic_phase
+        else inspect_phase_annotation(sources.phase_annotation_file, record)
     )
     classified = classify_run_files(sources.raw_run_dir)
     anatomy_mapping_confirmed = record.anatomy_mapping_status.casefold().startswith(
@@ -449,16 +516,12 @@ def build_source_audit(
         "supported_recording_schema": reader_manifest is not None,
         "all_canonical_chunks_valid": bool(hdf5) and all(item["canonical_valid"] for item in hdf5),
         "frame_chunk_times_do_not_overlap": all(item["gap_s"] > 0 for item in continuity),
-        "frame_data_chunks_found": any(
-            item["chunk_role"] == "frame_data" for item in readable
-        ),
+        "frame_data_chunks_found": any(item["chunk_role"] == "frame_data" for item in readable),
         "all_hdf5_roles_supported": all(
             item["chunk_role"] in {"frame_data", "metadata_only", "physics_only"}
             for item in readable
         ),
-        "all_hdf5_time_monotonic": all(
-            item["time_monotonic"] in (True, None) for item in readable
-        ),
+        "all_hdf5_time_monotonic": all(item["time_monotonic"] in (True, None) for item in readable),
         "all_frame_modalities_aligned": all(
             item["frame_count"]
             == item["image_frame_count"]
@@ -474,7 +537,11 @@ def build_source_audit(
         ),
         "edt_profile_found": len(edt_files) > 0,
         "required_edt_files_present": not missing_required_edt,
-        ("phase_model_directory_available" if automatic_phase else "phase_annotation_unique_and_valid"): bool(phase["valid"]),
+        (
+            "phase_model_directory_available"
+            if automatic_phase
+            else "phase_annotation_unique_and_valid"
+        ): bool(phase["valid"]),
         "anatomy_mapping_confirmed": anatomy_mapping_confirmed,
         "old_derived_files_excluded": True,
     }
@@ -482,12 +549,16 @@ def build_source_audit(
 
     def known_total(field: str) -> int | None:
         values = [item[field] for item in hdf5]
-        return sum(int(value) for value in values) if all(value is not None for value in values) else None
+        return (
+            sum(int(value) for value in values)
+            if all(value is not None for value in values)
+            else None
+        )
 
     camera_alignment = (reader_manifest or {}).get("camera_alignment", {})
     return {
         "schema": "canonical_source_audit_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
         "global_run_id": record.global_run_id,
@@ -498,7 +569,9 @@ def build_source_audit(
                 None if automatic_phase else str(sources.phase_annotation_file)
             ),
             "phase_model_bundle": str(sources.phase_model_bundle) if automatic_phase else None,
-            "frame_alignment_file": str(sources.frame_alignment_file) if sources.frame_alignment_file else None,
+            "frame_alignment_file": str(sources.frame_alignment_file)
+            if sources.frame_alignment_file
+            else None,
             "validation_only_golden": str(sources.golden_reference_path),
         },
         "registry": {
@@ -534,14 +607,31 @@ def build_source_audit(
         "excluded_derived_files": classified["excluded_derived_files"],
         "checks": checks,
         "ready_for_frame_extraction": ready,
-        "validation_scope": "Canonical structure, numeric frame/event checks and source availability only. This does not establish geometry calibration, physical units, image/depth pixel validity, model validity or clinical accuracy.",
-        "camera_dependent_evidence_complete": bool(
-            reader_manifest is not None and camera_alignment.get("status") != "incomplete"
-            and any(item["chunk_role"] == "frame_data" for item in hdf5)
-            and all(item["camera_pose_valid"] is True for item in hdf5 if item["chunk_role"] == "frame_data")
+        "validation_scope": (
+            "Canonical structure, numeric frame/event checks and source availability "
+            "only. This does not establish geometry calibration, physical units, "
+            "image/depth pixel validity, model validity or clinical accuracy."
         ),
-        "warnings": (["Some vision frames have explicitly missing camera poses; visibility and Ray evidence must mark those frames not evaluable."]
-                     if camera_alignment.get("missing_frame_count", 0) else []),
+        "camera_dependent_evidence_complete": bool(
+            reader_manifest is not None
+            and camera_alignment.get("status") != "incomplete"
+            and any(item["chunk_role"] == "frame_data" for item in hdf5)
+            and all(
+                item["camera_pose_valid"] is True
+                for item in hdf5
+                if item["chunk_role"] == "frame_data"
+            )
+        ),
+        "warnings": (
+            [
+                (
+                    "Some vision frames have explicitly missing camera poses; visibility and "
+                    "Ray evidence must mark those frames not evaluable."
+                )
+            ]
+            if camera_alignment.get("missing_frame_count", 0)
+            else []
+        ),
         "blocking_items": [name for name, passed in checks.items() if not passed],
     }
 
@@ -595,8 +685,10 @@ def render_markdown(audit: dict[str, Any]) -> str:
         f"- Primary raw directory: `{audit['source_classification']['primary_raw']}`",
         f"- HDF5 chunks: {audit['hdf5']['readable_count']}/{audit['hdf5']['file_count']} readable",
         f"- Recorder format: `{audit['hdf5'].get('format')}`",
-        f"- Camera alignment: `{audit['hdf5'].get('camera_alignment', {}).get('status', 'unavailable')}`",
-        f"- Camera-dependent evidence complete: **{audit.get('camera_dependent_evidence_complete', False)}**",
+        "- Camera alignment: "
+        f"`{audit['hdf5'].get('camera_alignment', {}).get('status', 'unavailable')}`",
+        "- Camera-dependent evidence complete: "
+        f"**{audit.get('camera_dependent_evidence_complete', False)}**",
         f"- Total image-time frames: {audit['hdf5']['frame_count_total']}",
         f"- Removed-voxel rows: {audit['hdf5']['removed_voxel_row_count_total']}",
         f"- EDT profile: `{audit['edt']['profile']}` ({audit['edt']['file_count']} files)",
@@ -604,7 +696,8 @@ def render_markdown(audit: dict[str, Any]) -> str:
         "## Phase source",
         "",
         f"- Annotation ID: `{audit['registry']['phase_annotation_id']}`",
-        f"- Source kind: `{audit['phase_annotation'].get('source_kind', 'human_phase_annotation')}`",
+        "- Source kind: "
+        f"`{audit['phase_annotation'].get('source_kind', 'human_phase_annotation')}`",
         f"- Status: `{audit['phase_annotation'].get('status', 'validated_manual_annotation')}`",
         f"- Video: `{phase_row.get('video')}`",
         f"- Antrum start: {phase_row.get('antrum_start_sec')} s",
@@ -614,9 +707,18 @@ def render_markdown(audit: dict[str, Any]) -> str:
         "## Source boundary",
         "",
         "- HDF5 and raw media are primary raw evidence.",
-        "- Readable physical HDF5, supported canonical structure and complete camera coverage are separate checks.",
-        "- Source units are preserved; this audit does not establish geometry calibration or scientific/clinical validity.",
-        "- EDT is an auxiliary anatomy reference; phase provenance distinguishes manual annotations from model predictions.",
+        (
+            "- Readable physical HDF5, supported canonical structure and complete "
+            "camera coverage are separate checks."
+        ),
+        (
+            "- Source units are preserved; this audit does not establish geometry "
+            "calibration or scientific/clinical validity."
+        ),
+        (
+            "- EDT is an auxiliary anatomy reference; phase provenance distinguishes "
+            "manual annotations from model predictions."
+        ),
         "- Existing CSV/JSON files in the run directory are excluded derived artifacts.",
         "- The legacy graph is validation-only and is not a pipeline input.",
         "",
@@ -653,6 +755,4 @@ def write_source_audit(output_dir: Path, audit: dict[str, Any]) -> None:
         json.dumps(audit, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     _write_inventory(output_dir / "hdf5_inventory.csv", audit)
-    (output_dir / "SOURCE_AUDIT.md").write_text(
-        render_markdown(audit), encoding="utf-8"
-    )
+    (output_dir / "SOURCE_AUDIT.md").write_text(render_markdown(audit), encoding="utf-8")

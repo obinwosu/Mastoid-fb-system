@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
-from .core_frames import _git_commit
-from .tip_edt import TipEdtBuild
 from ..registry import RunRecord
 from ..source_config import ResolvedRunSources
-
+from .core_frames import _git_commit
+from .tip_edt import TipEdtBuild
 
 SEARCH_RADIUS = 70
 DARK_THRESHOLD = 50
@@ -123,21 +123,28 @@ def classify_frame(
     previous_drill_pose: Any | None,
 ) -> dict[str, Any]:
     _, np, _ = _require_vision_stack()
-    frozen = previous_drill_pose is not None and np.abs(
-        drill_pose[:3] - previous_drill_pose[:3]
-    ).sum() < 1e-9
+    frozen = (
+        previous_drill_pose is not None
+        and np.abs(drill_pose[:3] - previous_drill_pose[:3]).sum() < 1e-9
+    )
     projection = project_tip(drill_pose, camera_pose, extrinsic, intrinsic)
     if projection is None:
         return {
-            "category": "no_drill", "projection": None, "tip_center": None,
-            "tip_area": 0, "frozen": bool(frozen),
+            "category": "no_drill",
+            "projection": None,
+            "tip_center": None,
+            "tip_area": 0,
+            "frozen": bool(frozen),
         }
     height, width = rgb.shape[:2]
     u, v = projection
     if u < -10 or u > width + 10 or v < -10 or v > height + 10:
         return {
-            "category": "out_of_view", "projection": projection, "tip_center": None,
-            "tip_area": 0, "frozen": bool(frozen),
+            "category": "out_of_view",
+            "projection": projection,
+            "tip_center": None,
+            "tip_area": 0,
+            "frozen": bool(frozen),
         }
     center, area, _, body_occluded = find_tip_blob(rgb, projection)
     category = "body_occluded" if body_occluded else ("visible" if center else "not_visible")
@@ -300,7 +307,7 @@ def enrich_visibility(
         severity_counts[row["under_ledge"]] = severity_counts.get(row["under_ledge"], 0) + 1
     manifest = {
         "schema": "tip_visibility_enrichment_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "git_commit": _git_commit(project_root),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
@@ -310,7 +317,9 @@ def enrich_visibility(
         "source_hdf5_file_count": len(hdf5_paths),
         "source_hdf5_files": source_names,
         "recording_reader": reader.manifest(),
-        "missing_camera_pose_count": sum(row["visibility_status"] == "missing_camera_pose" for row in rows),
+        "missing_camera_pose_count": sum(
+            row["visibility_status"] == "missing_camera_pose" for row in rows
+        ),
         "first_removal_time_abs": first_removal_time,
         "category_counts": category_counts,
         "under_ledge_counts": severity_counts,
@@ -345,7 +354,9 @@ def compare_legacy_visibility(build: VisibilityBuild, legacy_path: Path) -> dict
         return {"available": True, "row_count_match": False, "all_match": False}
     string_columns = ["tip_visibility", "under_ledge"]
     bool_columns = ["tip_visible", "pose_frozen"]
-    numeric_columns = [column for column in VISIBILITY_COLUMNS if column not in string_columns + bool_columns]
+    numeric_columns = [
+        column for column in VISIBILITY_COLUMNS if column not in string_columns + bool_columns
+    ]
     mismatches = {column: 0 for column in VISIBILITY_COLUMNS}
     max_error = {column: 0.0 for column in numeric_columns}
     differing_frames: set[int] = set()
@@ -363,7 +374,7 @@ def compare_legacy_visibility(build: VisibilityBuild, legacy_path: Path) -> dict
             return None
         return result if math.isfinite(result) else None
 
-    for new, old in zip(build.frames, legacy):
+    for new, old in zip(build.frames, legacy, strict=False):
         for column in string_columns:
             if normalized_string(new.get(column)) != normalized_string(old.get(column)):
                 mismatches[column] += 1
@@ -403,7 +414,9 @@ def _write_csv(path: Path, rows: Sequence[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def write_visibility_build(output_dir: Path, build: VisibilityBuild, regression: dict[str, Any]) -> None:
+def write_visibility_build(
+    output_dir: Path, build: VisibilityBuild, regression: dict[str, Any]
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "frame_observations_visibility.csv", build.frames)
     (output_dir / "visibility_manifest.json").write_text(
@@ -413,14 +426,15 @@ def write_visibility_build(output_dir: Path, build: VisibilityBuild, regression:
         json.dumps(regression, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     lines = [
-        f"# Visibility Audit: {build.manifest['run_id']}", "",
+        f"# Visibility Audit: {build.manifest['run_id']}",
+        "",
         f"- Category counts: {build.manifest['category_counts']}",
         f"- Under-ledge candidate counts: {build.manifest['under_ledge_counts']}",
         f"- Frozen frames: {build.manifest['frozen_frame_count']}",
         f"- Manual overrides: {build.manifest['manual_override_count']}",
         f"- Exact legacy regression: **{regression.get('all_match')}**",
-        f"- Differing frames: {regression.get('differing_frame_count')}", "",
+        f"- Differing frames: {regression.get('differing_frame_count')}",
+        "",
         "Under-ledge values are automatic depth candidates, not human-confirmed labels.",
     ]
     (output_dir / "VISIBILITY_AUDIT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-

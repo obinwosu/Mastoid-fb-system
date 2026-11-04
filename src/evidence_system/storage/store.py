@@ -2,22 +2,22 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
-from pathlib import Path
 import sqlite3
-from typing import Any, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
-from ..events import EventBuild, event_to_dict
+from ..events import EventBuild
 from ..events.builder import phase_id_for
 from ..frame_pipeline.core_frames import CoreFrameBuild, _git_commit
 from ..frame_pipeline.strokes import StrokeBuild
 from ..project import PROJECT_ROOT
 from ..registry import RunRecord
-from ..relations import RelationBuild, relation_to_dict
+from ..relations import RelationBuild
 from ..source_config import ResolvedRunSources
-
 
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 STORE_VERSION = "evidence_store_v1"
@@ -30,9 +30,7 @@ def _rule_text(project_root: Path, name: str) -> str:
     )
     path = next((candidate for candidate in candidates if candidate.is_file()), None)
     if path is None:
-        raise FileNotFoundError(
-            f"Required rule configuration was not found: {name}"
-        )
+        raise FileNotFoundError(f"Required rule configuration was not found: {name}")
     return path.read_text(encoding="utf-8")
 
 
@@ -74,7 +72,10 @@ def _artifact_rows(
         ("stroke_build", artifact_root / "05_strokes" / "strokes.csv"),
         ("event_inventory", artifact_root / "06_events" / "events.jsonl"),
         ("relation_inventory", artifact_root / "07_relations" / "relations.jsonl"),
-        ("deterministic_report", artifact_root / "08_deterministic_report" / "deterministic_report.json"),
+        (
+            "deterministic_report",
+            artifact_root / "08_deterministic_report" / "deterministic_report.json",
+        ),
         ("replay_comparison", artifact_root / "09_replay" / "batch_replay_comparison.json"),
     )
     rows = []
@@ -123,7 +124,7 @@ def populate_evidence_store(
     temporary = db_path.with_name(f"{db_path.name}.building")
     if temporary.exists():
         temporary.unlink()
-    created_at = datetime.now(tz=timezone.utc).isoformat()
+    created_at = datetime.now(tz=UTC).isoformat()
     git_commit = _git_commit(project_root)
     config_hash = _hash_value(
         {
@@ -162,14 +163,21 @@ def populate_evidence_store(
                 hdf5_source_ids[name] = source_id
                 source_file_rows.append(
                     (
-                        source_id, record.global_run_id, "raw_hdf5", str(chunk["path"]),
-                        chunk.get("sha256"), int(chunk["size_bytes"]), chunk.get("modified_at"), 1,
+                        source_id,
+                        record.global_run_id,
+                        "raw_hdf5",
+                        str(chunk["path"]),
+                        chunk.get("sha256"),
+                        int(chunk["size_bytes"]),
+                        chunk.get("modified_at"),
+                        1,
                     )
                 )
             phase_audit = source_audit["phase_annotation"]
             phase_kind = str(phase_audit.get("source_kind") or "human_phase_annotation")
             phase_source_name = (
-                "model_phase_prediction" if phase_kind == "model_phase_prediction"
+                "model_phase_prediction"
+                if phase_kind == "model_phase_prediction"
                 else "human_video_timepoint_annotation"
             )
             phase_source_id = _source_id(record.global_run_id, "phase", phase_source_name)
@@ -177,10 +185,15 @@ def populate_evidence_store(
             phase_stat = phase_path.stat() if phase_path.is_file() else None
             source_file_rows.append(
                 (
-                    phase_source_id, record.global_run_id, phase_kind,
-                    str(phase_path), phase_audit.get("sha256"),
+                    phase_source_id,
+                    record.global_run_id,
+                    phase_kind,
+                    str(phase_path),
+                    phase_audit.get("sha256"),
                     phase_stat.st_size if phase_stat else None,
-                    datetime.fromtimestamp(phase_stat.st_mtime, tz=timezone.utc).isoformat() if phase_stat else None,
+                    datetime.fromtimestamp(phase_stat.st_mtime, tz=UTC).isoformat()
+                    if phase_stat
+                    else None,
                     1,
                 )
             )
@@ -189,9 +202,15 @@ def populate_evidence_store(
                 path = sources.edt_dir / name
                 source_file_rows.append(
                     (
-                        _source_id(record.global_run_id, "edt", name), record.global_run_id,
-                        "anatomy_edt", str(path), None, int(header["size_bytes"]),
-                        datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat() if path.is_file() else None,
+                        _source_id(record.global_run_id, "edt", name),
+                        record.global_run_id,
+                        "anatomy_edt",
+                        str(path),
+                        None,
+                        int(header["size_bytes"]),
+                        datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat()
+                        if path.is_file()
+                        else None,
                         1,
                     )
                 )
@@ -202,8 +221,11 @@ def populate_evidence_store(
             )
 
             artifacts = _artifact_rows(
-                record, artifact_root, created_at=created_at,
-                git_commit=git_commit, config_hash=config_hash,
+                record,
+                artifact_root,
+                created_at=created_at,
+                git_commit=git_commit,
+                config_hash=config_hash,
             )
             stroke_artifact_id = f"{record.global_run_id}:artifact:stroke_build"
             if not any(row["artifact_id"] == stroke_artifact_id for row in artifacts):
@@ -213,7 +235,9 @@ def populate_evidence_store(
                         "global_run_id": record.global_run_id,
                         "artifact_type": "stroke_build",
                         "path": f"in_memory://{record.global_run_id}/stroke_build",
-                        "sha256": _hash_value({"strokes": strokes.strokes, "metrics": strokes.metrics}),
+                        "sha256": _hash_value(
+                            {"strokes": strokes.strokes, "metrics": strokes.metrics}
+                        ),
                         "generator_version": STORE_VERSION,
                         "git_commit": git_commit,
                         "config_hash": config_hash,
@@ -231,20 +255,39 @@ def populate_evidence_store(
                 "INSERT INTO validation_references VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     f"{record.global_run_id}:validation:legacy_graph",
-                    record.global_run_id, "legacy_graph", str(golden),
-                    _hash_file(golden), "validation_only; never used to populate canonical evidence",
+                    record.global_run_id,
+                    "legacy_graph",
+                    str(golden),
+                    _hash_file(golden),
+                    "validation_only; never used to populate canonical evidence",
                 ),
             )
             _insert_many(
                 connection,
                 "INSERT INTO evidence_sources VALUES (?, ?, ?)",
                 [
-                    (f"source:{phase_source_name}", phase_source_name,
-                     "Offline model prediction and removal rule; not reviewed ground truth"
-                     if phase_kind == "model_phase_prediction" else "Manual phase interval annotation"),
-                    ("source:simulator_removed_voxel_edt", "simulator_removed_voxel_edt", "Removed-voxel anatomy EDT evidence"),
-                    ("source:simulator_stroke_table", "simulator_stroke_table", "Deterministic stroke interval and metric evidence"),
-                    ("source:derived_frame_visibility_geometry", "derived_frame_visibility_geometry", "Automatic RGB/depth visibility candidate evidence"),
+                    (
+                        f"source:{phase_source_name}",
+                        phase_source_name,
+                        "Offline model prediction and removal rule; not reviewed ground truth"
+                        if phase_kind == "model_phase_prediction"
+                        else "Manual phase interval annotation",
+                    ),
+                    (
+                        "source:simulator_removed_voxel_edt",
+                        "simulator_removed_voxel_edt",
+                        "Removed-voxel anatomy EDT evidence",
+                    ),
+                    (
+                        "source:simulator_stroke_table",
+                        "simulator_stroke_table",
+                        "Deterministic stroke interval and metric evidence",
+                    ),
+                    (
+                        "source:derived_frame_visibility_geometry",
+                        "derived_frame_visibility_geometry",
+                        "Automatic RGB/depth visibility candidate evidence",
+                    ),
                 ],
             )
 
@@ -253,9 +296,15 @@ def populate_evidence_store(
                 "INSERT INTO phases VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        row["phase_id"], record.global_run_id, row["phase"],
-                        {"antrum": "antrum_entry", "incus": "deep_landmark"}.get(row["phase"], row["phase"]),
-                        float(row["annotation_start_s"]), float(row["annotation_end_s"]), phase_source_id,
+                        row["phase_id"],
+                        record.global_run_id,
+                        row["phase"],
+                        {"antrum": "antrum_entry", "incus": "deep_landmark"}.get(
+                            row["phase"], row["phase"]
+                        ),
+                        float(row["annotation_start_s"]),
+                        float(row["annotation_end_s"]),
+                        phase_source_id,
                     )
                     for row in core.phase_intervals
                 ],
@@ -265,12 +314,19 @@ def populate_evidence_store(
                 "INSERT INTO frames VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        row["frame_evidence_id"], record.global_run_id,
-                        int(row["frame_idx_global"]), float(row["t_video_s"]),
-                        phase_id_for(float(row["t_video_s"]), core.phase_intervals,
-                                     name=str(row["phase"]), explicit_id=row.get("phase_id")),
+                        row["frame_evidence_id"],
+                        record.global_run_id,
+                        int(row["frame_idx_global"]),
+                        float(row["t_video_s"]),
+                        phase_id_for(
+                            float(row["t_video_s"]),
+                            core.phase_intervals,
+                            name=str(row["phase"]),
+                            explicit_id=row.get("phase_id"),
+                        ),
                         hdf5_source_ids[str(row["source_hdf5"])],
-                        int(row["source_frame_idx"]), _json(row),
+                        int(row["source_frame_idx"]),
+                        _json(row),
                     )
                     for row in strokes.frames
                 ],
@@ -281,9 +337,14 @@ def populate_evidence_store(
                 "INSERT INTO strokes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        row["stroke_evidence_id"], record.global_run_id, str(row["stroke_id"]),
-                        float(row["start_time_video"]), float(row["end_time_video"]),
-                        None, stroke_artifact_id, int(row["stroke_id"]),
+                        row["stroke_evidence_id"],
+                        record.global_run_id,
+                        str(row["stroke_id"]),
+                        float(row["start_time_video"]),
+                        float(row["end_time_video"]),
+                        None,
+                        stroke_artifact_id,
+                        int(row["stroke_id"]),
                         _json({"interval": row, "metrics": metric_by_id[int(row["stroke_id"])]}),
                     )
                     for row in strokes.strokes
@@ -295,13 +356,23 @@ def populate_evidence_store(
                 "INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        event.event_id, record.global_run_id, event.event_type,
-                        event.t_start_s, event.t_end_s,
-                        phase_id_for((event.t_start_s + event.t_end_s) / 2, core.phase_intervals,
-                                     name=event.phase, explicit_id=event.attributes.get("phase_id")),
-                        event.anatomy, event.evidence_status.value,
-                        event.lifecycle_status.value, event.rule_version,
-                        _json(event.attributes), created_at,
+                        event.event_id,
+                        record.global_run_id,
+                        event.event_type,
+                        event.t_start_s,
+                        event.t_end_s,
+                        phase_id_for(
+                            (event.t_start_s + event.t_end_s) / 2,
+                            core.phase_intervals,
+                            name=event.phase,
+                            explicit_id=event.attributes.get("phase_id"),
+                        ),
+                        event.anatomy,
+                        event.evidence_status.value,
+                        event.lifecycle_status.value,
+                        event.rule_version,
+                        _json(event.attributes),
+                        created_at,
                     )
                     for event in events.events
                 ],
@@ -311,10 +382,16 @@ def populate_evidence_store(
                 "INSERT INTO event_evidence VALUES (?, ?, ?)",
                 [
                     (
-                        event.event_id, evidence_id,
-                        "frame" if ":frame:" in evidence_id else "stroke" if ":stroke:" in evidence_id else "unknown",
+                        event.event_id,
+                        evidence_id,
+                        "frame"
+                        if ":frame:" in evidence_id
+                        else "stroke"
+                        if ":stroke:" in evidence_id
+                        else "unknown",
                     )
-                    for event in events.events for evidence_id in event.source_evidence_ids
+                    for event in events.events
+                    for evidence_id in event.source_evidence_ids
                 ],
             )
             _insert_many(
@@ -322,15 +399,20 @@ def populate_evidence_store(
                 "INSERT INTO motion_contexts VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        row["motion_context_id"], record.global_run_id, row["event_id"],
-                        float(row["t_start_s"]), float(row["t_end_s"]), _json(row),
+                        row["motion_context_id"],
+                        record.global_run_id,
+                        row["event_id"],
+                        float(row["t_start_s"]),
+                        float(row["t_end_s"]),
+                        _json(row),
                     )
                     for row in events.motion_contexts
                 ],
             )
             entity_rows = [
                 (node["id"], "anatomy", str(node.get("label") or node["id"]))
-                for node in relations.graph["nodes"] if node["type"] == "anatomy"
+                for node in relations.graph["nodes"]
+                if node["type"] == "anatomy"
             ]
             _insert_many(connection, "INSERT INTO entities VALUES (?, ?, ?)", entity_rows)
             _insert_many(
@@ -338,25 +420,43 @@ def populate_evidence_store(
                 "INSERT INTO relations VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
-                        relation.relation_id, record.global_run_id,
-                        relation.source_id, relation.relation_type, relation.target_id,
-                        relation.construction_method, int(relation.provisional),
-                        relation.rule_version, _json(relation.attributes),
+                        relation.relation_id,
+                        record.global_run_id,
+                        relation.source_id,
+                        relation.relation_type,
+                        relation.target_id,
+                        relation.construction_method,
+                        int(relation.provisional),
+                        relation.rule_version,
+                        _json(relation.attributes),
                     )
                     for relation in relations.relations
                 ],
             )
 
-        foreign_key_violations = [dict(row) for row in connection.execute("PRAGMA foreign_key_check")]
+        foreign_key_violations = [
+            dict(row) for row in connection.execute("PRAGMA foreign_key_check")
+        ]
         integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
         if foreign_key_violations or integrity != "ok":
             raise RuntimeError(
-                f"Evidence store integrity failure: integrity={integrity}, foreign_keys={foreign_key_violations}"
+                f"Evidence store integrity failure: integrity={integrity}, "
+                f"foreign_keys={foreign_key_violations}"
             )
         table_names = (
-            "runs", "source_files", "generated_artifacts", "validation_references",
-            "evidence_sources", "entities", "phases", "frames", "strokes", "events",
-            "event_evidence", "motion_contexts", "relations",
+            "runs",
+            "source_files",
+            "generated_artifacts",
+            "validation_references",
+            "evidence_sources",
+            "entities",
+            "phases",
+            "frames",
+            "strokes",
+            "events",
+            "event_evidence",
+            "motion_contexts",
+            "relations",
         )
         counts = {
             table: int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])

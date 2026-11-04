@@ -7,20 +7,21 @@ from enum import Enum
 from typing import Any
 
 
-class EvidenceStatus(str, Enum):
+# Preserve the existing Enum string representation used by domain contracts.
+class EvidenceStatus(str, Enum):  # noqa: UP042
     CANDIDATE = "candidate"
     SIMULATOR_SUPPORTED = "simulator_supported"
     HUMAN_CONFIRMED = "human_confirmed"
     HUMAN_REJECTED = "human_rejected"
 
 
-class LifecycleStatus(str, Enum):
+class LifecycleStatus(str, Enum):  # noqa: UP042
     OPEN = "open"
     UPDATED = "updated"
     CLOSED = "closed"
 
 
-class RuleStatus(str, Enum):
+class RuleStatus(str, Enum):  # noqa: UP042
     DRAFT = "draft"
     EXPERT_VALIDATED = "expert_validated"
     RETIRED = "retired"
@@ -66,4 +67,3 @@ class EvidenceRelation:
     rule_version: str
     provisional: bool = False
     attributes: dict[str, Any] = field(default_factory=dict)
-

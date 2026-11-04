@@ -30,7 +30,7 @@ def digest(path):
 
 class ProvenanceTests(unittest.TestCase):
     def setUp(self):
-        generated_recording_id = "P" + "9"*3 + "T" + "9"*3
+        generated_recording_id = "P" + "9" * 3 + "T" + "9" * 3
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -48,16 +48,22 @@ class ProvenanceTests(unittest.TestCase):
             "volumes: [volume]\nvolume:\n  dimensions: {x: 0.256, y: 0.256, z: 0.256}\n"
             "  location:\n    orientation: {r: 0, p: 0, y: 0}\n"
         )
-        header = b"G3\n1 FLOAT\n4 4 4\n" + b"0 "*15 + b"1\n"
+        header = b"G3\n1 FLOAT\n4 4 4\n" + b"0 " * 15 + b"1\n"
         for stem in REQUIRED_EDT_STEMS:
-            (self.edt/(stem+".edt")).write_bytes(header + b"\0"*(4*4*4*4))
+            (self.edt / (stem + ".edt")).write_bytes(header + b"\0" * (4 * 4 * 4 * 4))
         self.table = self.root / "synthetic_authority.csv"
         row = {
-            "RecordingID": generated_recording_id, "FolderName": "generated_" + generated_recording_id,
-            "ActualSpecimen": "TESTSPECIMEN", "ActualAnatomy": "Z",
-            "UsedRotation": "[0,0,0,1]", "FittedRotation": "[0,0,0,1]",
-            "RecordedRotation": "[0,0,0,1]", "RecorderScale": "0.049202688",
-            "SpacingMm": "1.0", "GUIUnit": "0.064", "ReviewStatus": "needs_review",
+            "RecordingID": generated_recording_id,
+            "FolderName": "generated_" + generated_recording_id,
+            "ActualSpecimen": "TESTSPECIMEN",
+            "ActualAnatomy": "Z",
+            "UsedRotation": "[0,0,0,1]",
+            "FittedRotation": "[0,0,0,1]",
+            "RecordedRotation": "[0,0,0,1]",
+            "RecorderScale": "0.049202688",
+            "SpacingMm": "1.0",
+            "GUIUnit": "0.064",
+            "ReviewStatus": "needs_review",
             "RotationSource": "ADF/volume_256_TESTSPECIMEN.yaml:current",
         }
         with self.table.open("w", newline="") as stream:
@@ -67,30 +73,45 @@ class ProvenanceTests(unittest.TestCase):
         self.raw = self.root / row["FolderName"]
         self.raw.mkdir()
         self.record = SimpleNamespace(
-            dataset_id="R4", run_id=generated_recording_id, global_run_id="R4:" + generated_recording_id,
-            anatomy_key="fixture", edt_profile="edt_fixture",
-            raw_run_relpath=self.raw.name, anatomy_mapping_status="configured",
+            dataset_id="R4",
+            run_id=generated_recording_id,
+            global_run_id="R4:" + generated_recording_id,
+            anatomy_key="fixture",
+            edt_profile="edt_fixture",
+            raw_run_relpath=self.raw.name,
+            anatomy_mapping_status="configured",
             source_status="read_only_fixture_for_authority_tests",
         )
         self.sources = SimpleNamespace(raw_run_dir=self.raw, edt_dir=self.edt)
         contract = {
-            "schema": "r4_signal_geometry_v1", "global_run_id": self.record.global_run_id,
-            "edt_profile": "edt_fixture", "actual_specimen": "TESTSPECIMEN",
+            "schema": "r4_signal_geometry_v1",
+            "global_run_id": self.record.global_run_id,
+            "edt_profile": "edt_fixture",
+            "actual_specimen": "TESTSPECIMEN",
             "calibration_recording_id": self.record.run_id,
-            "rotation_source": row["RotationSource"], "volume_quaternion_xyzw": [0, 0, 0, 1],
+            "rotation_source": row["RotationSource"],
+            "volume_quaternion_xyzw": [0, 0, 0, 1],
             "recorder_scale_m_per_simulator_unit": 0.049202688,
-            "edt_distance_scale_mm": 1.0, "volume_dimensions_sim": [0.256]*3,
-            "geometry_quality": "needs_review", "grid_resolution_xyz": [4]*3,
-            "source_correction_table": str(self.table), "correction_table_sha256": digest(self.table),
+            "edt_distance_scale_mm": 1.0,
+            "volume_dimensions_sim": [0.256] * 3,
+            "geometry_quality": "needs_review",
+            "grid_resolution_xyz": [4] * 3,
+            "source_correction_table": str(self.table),
+            "correction_table_sha256": digest(self.table),
             "source_simulator_root": str(simulator),
-            "source_gui_path": str(self.gui), "source_gui_sha256": digest(self.gui),
-            "source_adf_path": str(self.adf), "source_adf_sha256": digest(self.adf),
+            "source_gui_path": str(self.gui),
+            "source_gui_sha256": digest(self.gui),
+            "source_adf_path": str(self.adf),
+            "source_adf_sha256": digest(self.adf),
             "source_edt_sha256": {p.name: digest(p) for p in self.edt.glob("*.edt")},
         }
         self.profile = {
-            "edt_profile": "edt_fixture", "meters_per_simulator_unit": 0.049202688,
-            "edt_distance_scale_mm": 1.0, "simulator_unit": 0.064,
-            "volume_dimensions_sim": [0.256]*3, "adf_profile": str(self.adf),
+            "edt_profile": "edt_fixture",
+            "meters_per_simulator_unit": 0.049202688,
+            "edt_distance_scale_mm": 1.0,
+            "simulator_unit": 0.064,
+            "volume_dimensions_sim": [0.256] * 3,
+            "adf_profile": str(self.adf),
             "phase_signal_geometry": contract,
         }
         self.config = self.root / "profiles.json"
@@ -100,13 +121,21 @@ class ProvenanceTests(unittest.TestCase):
     def write_catalogue(self):
         """Explicitly anchor generated source identities for authority tests."""
         contract = self.profile["phase_signal_geometry"]
-        self.catalogue.write_text(json.dumps({
-            "schema": "r4_edt_sources_v1", "correction_table_sha256": digest(self.table),
-            "models": {"TESTSPECIMEN": {
-                "edt_profile": self.edt.name, "grid_resolution_xyz": contract["grid_resolution_xyz"],
-                "sha256": contract["source_edt_sha256"],
-            }},
-        }))
+        self.catalogue.write_text(
+            json.dumps(
+                {
+                    "schema": "r4_edt_sources_v1",
+                    "correction_table_sha256": digest(self.table),
+                    "models": {
+                        "TESTSPECIMEN": {
+                            "edt_profile": self.edt.name,
+                            "grid_resolution_xyz": contract["grid_resolution_xyz"],
+                            "sha256": contract["source_edt_sha256"],
+                        }
+                    },
+                }
+            )
+        )
 
     def validate(self, trust_fixture=True):
         self.config.write_text(json.dumps({"profiles": {"fixture": self.profile}}))
@@ -115,7 +144,9 @@ class ProvenanceTests(unittest.TestCase):
             patch.dict(os.environ, {"MASTOID_ANATOMY_PROFILES": str(self.config)}),
             patch("evidence_system.r4_provenance.TRUSTED_R4_CORRECTION_SHA256", anchors),
             patch("evidence_system.r4_provenance.EDT_CATALOG_PATH", self.catalogue),
-            patch("evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256", digest(self.catalogue)),
+            patch(
+                "evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256", digest(self.catalogue)
+            ),
         ):
             return validate_production_geometry(self.record, self.sources, project_root=self.root)
 
@@ -162,13 +193,13 @@ class ProvenanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
             self.validate()
         bone.write_bytes(original)
-        self.adf.write_text(self.adf.read_text()+"# changed\n")
+        self.adf.write_text(self.adf.read_text() + "# changed\n")
         with self.assertRaisesRegex(ValueError, "SHA256 mismatch"):
             self.validate()
 
     def test_post_validation_source_replacement_fails(self):
         result = self.validate()
-        self.gui.write_text(self.gui.read_text()+"# changed\n")
+        self.gui.write_text(self.gui.read_text() + "# changed\n")
         with self.assertRaisesRegex(ValueError, "changed during"):
             assert_geometry_sources_unchanged(result)
 

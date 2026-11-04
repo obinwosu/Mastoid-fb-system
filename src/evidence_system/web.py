@@ -5,24 +5,24 @@ from __future__ import annotations
 import base64
 import binascii
 import csv
-import math
-from datetime import datetime, timezone
 import hashlib
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
-from pathlib import Path
+import math
 import re
 import tempfile
 import threading
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
 from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
 from .ray_v3_view import build_ray_v3_view
 from .retrieval import EvidenceRetriever
-
 
 APP_MODES = {"recommendations", "expert-study"}
 EXPERT_STUDY_SCHEMA = "expert_feedback_study_v1"
@@ -36,13 +36,27 @@ EXPERT_AUDIO_MIME_TYPES = {
     "audio/x-wav": ".wav",
 }
 EXPERT_STUDY_EVENT_TYPES = {
-    "study_started", "study_resumed", "stimulus_opened", "video_play",
-    "video_pause", "video_seek", "blind_submitted", "feedback_revealed",
-    "revealed_submitted", "case_completed", "next_case_opened",
-    "analysis_started", "analysis_completed", "feedback_item_opened",
-    "feedback_clip_played", "feedback_signal_frame_opened",
-    "support_details_opened", "experience_completed",
-    "expert_moment_saved", "expert_moment_deleted", "audio_recording_started",
+    "study_started",
+    "study_resumed",
+    "stimulus_opened",
+    "video_play",
+    "video_pause",
+    "video_seek",
+    "blind_submitted",
+    "feedback_revealed",
+    "revealed_submitted",
+    "case_completed",
+    "next_case_opened",
+    "analysis_started",
+    "analysis_completed",
+    "feedback_item_opened",
+    "feedback_clip_played",
+    "feedback_signal_frame_opened",
+    "support_details_opened",
+    "experience_completed",
+    "expert_moment_saved",
+    "expert_moment_deleted",
+    "audio_recording_started",
 }
 PARTICIPANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -104,9 +118,7 @@ class ExpertStudyStore:
                 "schema": EXPERT_STUDY_SCHEMA,
                 "sessions": dict(study.get("sessions") or {}),
                 "events": list(study.get("events") or []),
-                "expert_proposed_moments": dict(
-                    study.get("expert_proposed_moments") or {}
-                ),
+                "expert_proposed_moments": dict(study.get("expert_proposed_moments") or {}),
             },
         }
 
@@ -133,10 +145,7 @@ class ExpertStudyStore:
         participant_id = normalize_participant_id(participant_id)
         with self._lock:
             study = self._read_unlocked()["expert_study"]
-            return dict(
-                study["sessions"].get(self._session_key(participant_id, run_id))
-                or {}
-            )
+            return dict(study["sessions"].get(self._session_key(participant_id, run_id)) or {})
 
     def start_session(
         self,
@@ -147,7 +156,7 @@ class ExpertStudyStore:
     ) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             payload = self._read_unlocked()
             sessions = payload["expert_study"]["sessions"]
@@ -161,8 +170,7 @@ class ExpertStudyStore:
                 "last_opened_at": now,
                 "case_completed_at": existing.get("case_completed_at"),
                 "interface_version_at_start": (
-                    existing.get("interface_version_at_start")
-                    or self.interface_version
+                    existing.get("interface_version_at_start") or self.interface_version
                 ),
                 "interface_version_last_opened": self.interface_version,
             }
@@ -193,7 +201,7 @@ class ExpertStudyStore:
             "event_type": event_type,
             "interface_version": self.interface_version,
             "details": dict(details or {}),
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "recorded_at": datetime.now(UTC).isoformat(),
         }
         with self._lock:
             payload = self._read_unlocked()
@@ -204,15 +212,12 @@ class ExpertStudyStore:
     def moments(self, participant_id: str, run_id: str) -> list[dict[str, Any]]:
         participant_id = normalize_participant_id(participant_id)
         with self._lock:
-            values = self._read_unlocked()["expert_study"][
-                "expert_proposed_moments"
-            ].values()
+            values = self._read_unlocked()["expert_study"]["expert_proposed_moments"].values()
             return sorted(
                 [
                     dict(row)
                     for row in values
-                    if row.get("participant_id") == participant_id
-                    and row.get("run_id") == run_id
+                    if row.get("participant_id") == participant_id and row.get("run_id") == run_id
                 ],
                 key=lambda row: (
                     float(row.get("t_video_s") or 0.0),
@@ -238,9 +243,7 @@ class ExpertStudyStore:
         participant_id = normalize_participant_id(participant_id)
         if t_video_s < 0:
             raise ValueError("Coaching-moment time must be non-negative")
-        if category not in {
-            "exposure", "safety", "visualization", "efficiency", "other"
-        }:
+        if category not in {"exposure", "safety", "visualization", "efficiency", "other"}:
             raise ValueError("Select a supported coaching-moment category")
         if system_coverage not in {"missed", "partial", "addressed", "unsure"}:
             raise ValueError("Select how the automated feedback covered this moment")
@@ -296,7 +299,7 @@ class ExpertStudyStore:
             "importance": importance,
             "audio": audio,
             "interface_version": self.interface_version,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(UTC).isoformat(),
         }
         try:
             with self._lock:
@@ -309,9 +312,7 @@ class ExpertStudyStore:
             raise
         return row
 
-    def delete_moment(
-        self, participant_id: str, run_id: str, moment_id: str
-    ) -> dict[str, Any]:
+    def delete_moment(self, participant_id: str, run_id: str, moment_id: str) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
         with self._lock:
             payload = self._read_unlocked()
@@ -330,22 +331,14 @@ class ExpertStudyStore:
             (self.path.parent / "recordings" / filename).unlink(missing_ok=True)
         return row
 
-    def audio(
-        self, participant_id: str, run_id: str, moment_id: str
-    ) -> tuple[Path, str]:
+    def audio(self, participant_id: str, run_id: str, moment_id: str) -> tuple[Path, str]:
         participant_id = normalize_participant_id(participant_id)
         with self._lock:
             row = dict(
-                self._read_unlocked()["expert_study"][
-                    "expert_proposed_moments"
-                ].get(moment_id)
+                self._read_unlocked()["expert_study"]["expert_proposed_moments"].get(moment_id)
                 or {}
             )
-        if (
-            not row
-            or row.get("participant_id") != participant_id
-            or row.get("run_id") != run_id
-        ):
+        if not row or row.get("participant_id") != participant_id or row.get("run_id") != run_id:
             raise KeyError(moment_id)
         audio = row.get("audio") or {}
         filename = Path(str(audio.get("file_name") or "")).name
@@ -363,15 +356,13 @@ class ExpertStudyStore:
     ) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             payload = self._read_unlocked()
             sessions = payload["expert_study"]["sessions"]
             session = dict(sessions.get(key) or {})
             if not session:
-                raise ValueError(
-                    "Start the expert-study experience before completing it"
-                )
+                raise ValueError("Start the expert-study experience before completing it")
             session["experience_response"] = {
                 "answers": dict(answers),
                 "submitted_at": now,
@@ -432,9 +423,7 @@ class FeedbackService:
         available = bool(self.video_path and self.video_path.is_file())
         manifest: dict[str, Any] = {}
         if available and self.video_manifest_path and self.video_manifest_path.is_file():
-            manifest = json.loads(
-                self.video_manifest_path.read_text(encoding="utf-8")
-            )
+            manifest = json.loads(self.video_manifest_path.read_text(encoding="utf-8"))
         return {
             "available": available,
             "url": "/api/media/video" if available else None,
@@ -472,13 +461,18 @@ class FeedbackService:
                 ray_v3["reason"] = "strict_ray_binding_mismatch"
                 ray_v3["binding_validation"] = {"status": "rejected", "reason": str(exc)}
                 ray_v3["detection_status"].update(
-                    status="unavailable", reason="strict_ray_binding_mismatch",
-                    message="Exposure screening is unavailable because its evidence does not match this recording.",
+                    status="unavailable",
+                    reason="strict_ray_binding_mismatch",
+                    message=(
+                        "Exposure screening is unavailable because its evidence "
+                        "does not match this recording."
+                    ),
                 )
             else:
                 if strict_binding:
                     ray_v3["binding_validation"] = {
-                        "status": "verified", "authority": "database_source_manifest_hash",
+                        "status": "verified",
+                        "authority": "database_source_manifest_hash",
                     }
         benchmark = load_cohort_benchmark(self.cohort_benchmark_path)
         motion = None
@@ -486,7 +480,11 @@ class FeedbackService:
             motion = self._current_motion_comparison(summary["run"], benchmark)
             benchmark = None
         coaching_plan = build_session_coaching_plan(
-            events, phases, ray_v3, benchmark, **({"motion_comparison": motion} if motion is not None else {})
+            events,
+            phases,
+            ray_v3,
+            benchmark,
+            **({"motion_comparison": motion} if motion is not None else {}),
         )
         self._enrich_review_keyframes(coaching_plan, summary["run"])
         return {
@@ -531,18 +529,26 @@ class FeedbackService:
     @staticmethod
     def _file_identity(path: Path, stat=None) -> tuple:
         stat = stat or path.stat()
-        return (str(path.resolve()), stat.st_dev, stat.st_ino, stat.st_size,
-                stat.st_mtime_ns, stat.st_ctime_ns)
+        return (
+            str(path.resolve()),
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_size,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
 
     def _bound_review_context(self, run: Mapping[str, Any]) -> dict[str, Any]:
         """Resolve authority from the current database, never a request path."""
         with self.retriever._connect() as connection:
             artifact = connection.execute(
-                "SELECT path, sha256 FROM generated_artifacts WHERE global_run_id=? AND artifact_type='stroke_build'",
+                "SELECT path, sha256 FROM generated_artifacts "
+                "WHERE global_run_id=? AND artifact_type='stroke_build'",
                 (run["global_run_id"],),
             ).fetchone()
             phase_source = connection.execute(
-                "SELECT path, sha256 FROM source_files WHERE global_run_id=? AND source_type='model_phase_prediction'",
+                "SELECT path, sha256 FROM source_files "
+                "WHERE global_run_id=? AND source_type='model_phase_prediction'",
                 (run["global_run_id"],),
             ).fetchone()
         if artifact is None or phase_source is None or not run.get("source_manifest_hash"):
@@ -555,10 +561,16 @@ class FeedbackService:
         stages = artifact_path.parent.parent
         audit_path = stages / "00_source_audit/source_manifest.json"
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
-        canonical = json.dumps({k:v for k,v in audit.items() if k != "generated_at"},
-                               ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-        if (hashlib.sha256(canonical).hexdigest() != run["source_manifest_hash"]
-                or audit.get("global_run_id") != run["global_run_id"]):
+        canonical = json.dumps(
+            {k: v for k, v in audit.items() if k != "generated_at"},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        if (
+            hashlib.sha256(canonical).hexdigest() != run["source_manifest_hash"]
+            or audit.get("global_run_id") != run["global_run_id"]
+        ):
             raise ValueError("Source audit differs from the database authority")
         phase_path = Path(phase_source["path"]).resolve()
         if not phase_path.is_relative_to(self.artifact_root):
@@ -567,18 +579,25 @@ class FeedbackService:
             raise ValueError("The database-bound phase manifest changed")
         phase = json.loads(phase_path.read_text(encoding="utf-8"))
         clock = phase.get("clock") or {}
-        if (phase.get("global_run_id") != run["global_run_id"]
-                or clock.get("configured_global_run_id") != run["global_run_id"]):
+        if (
+            phase.get("global_run_id") != run["global_run_id"]
+            or clock.get("configured_global_run_id") != run["global_run_id"]
+        ):
             raise ValueError("Phase/clock authority belongs to another recording")
         core_path = stages / "01_core_frames/extraction_manifest.json"
         core = json.loads(core_path.read_text(encoding="utf-8"))
-        if core.get("global_run_id") != run["global_run_id"] or core.get("clock_alignment") != clock:
+        if (
+            core.get("global_run_id") != run["global_run_id"]
+            or core.get("clock_alignment") != clock
+        ):
             raise ValueError("Core clock differs from the database-bound phase clock")
         raw_value = (audit.get("source_classification") or {}).get("primary_raw")
         if not raw_value:
             raise ValueError("The original recording directory is not bound")
         raw = Path(raw_value).resolve()
-        inventory = {row["file_name"]:dict(row) for row in (audit.get("hdf5") or {}).get("chunks", [])}
+        inventory = {
+            row["file_name"]: dict(row) for row in (audit.get("hdf5") or {}).get("chunks", [])
+        }
         alignment_rows = None
         if clock.get("source") in {"explicit_frame_alignment", "generated_hdf5_native_alignment"}:
             alignment = Path(clock["path"]).resolve()
@@ -591,39 +610,64 @@ class FeedbackService:
             previous = -math.inf
             for index, row in enumerate(alignment_rows):
                 value = float(row["video_time_s"])
-                if int(row["frame_idx_global"]) != index or not math.isfinite(value) or value <= previous:
+                if (
+                    int(row["frame_idx_global"]) != index
+                    or not math.isfinite(value)
+                    or value <= previous
+                ):
                     raise ValueError("Frame alignment order is invalid")
                 previous = value
         elif clock.get("source") != "native_relative_time":
             raise ValueError("Unsupported original-frame clock")
         if clock.get("source") == "generated_hdf5_native_alignment":
             from .hdf5_clock import MANIFEST_NAME, SCHEMA, SOURCE
+
             manifest_path = Path(clock["generated_manifest_path"]).resolve()
-            if (manifest_path != Path(clock["path"]).resolve().parent / MANIFEST_NAME
-                    or self._binding_sha256(manifest_path) != clock.get("generated_manifest_sha256")):
+            if manifest_path != Path(
+                clock["path"]
+            ).resolve().parent / MANIFEST_NAME or self._binding_sha256(manifest_path) != clock.get(
+                "generated_manifest_sha256"
+            ):
                 raise ValueError("Generated-clock receipt changed")
             generated = json.loads(manifest_path.read_text(encoding="utf-8"))
             rows = generated.get("source_inventory")
-            inventory_hash = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-            if (generated.get("schema") != SCHEMA or generated.get("source") != SOURCE
-                    or generated.get("alignment_sha256") != clock.get("sha256")
-                    or generated.get("frame_count") != clock.get("frame_count")
-                    or generated.get("alignment_file") != Path(clock["path"]).name
-                    or inventory_hash != generated.get("source_inventory_sha256")
-                    or inventory_hash != clock.get("source_inventory_sha256")
-                    or Path(generated["raw_run_dir"]).resolve() != raw
-                    or Path(clock["source_raw_run_dir"]).resolve() != raw
-                    or clock.get("native_correspondence_verified") is not True):
+            inventory_hash = hashlib.sha256(
+                json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if (
+                generated.get("schema") != SCHEMA
+                or generated.get("source") != SOURCE
+                or generated.get("alignment_sha256") != clock.get("sha256")
+                or generated.get("frame_count") != clock.get("frame_count")
+                or generated.get("alignment_file") != Path(clock["path"]).name
+                or inventory_hash != generated.get("source_inventory_sha256")
+                or inventory_hash != clock.get("source_inventory_sha256")
+                or Path(generated["raw_run_dir"]).resolve() != raw
+                or Path(clock["source_raw_run_dir"]).resolve() != raw
+                or clock.get("native_correspondence_verified") is not True
+            ):
                 raise ValueError("Generated-clock source inventory is not bound")
-            inventory = {row["file_name"]:dict(row) for row in rows}
-        return {"run":dict(run), "stages":stages, "audit":audit, "phase":phase,
-                "phase_path":phase_path, "phase_sha256":phase_source["sha256"],
-                "core_path":core_path, "clock":clock, "raw":raw,
-                "inventory":inventory, "alignment_rows":alignment_rows}
+            inventory = {row["file_name"]: dict(row) for row in rows}
+        return {
+            "run": dict(run),
+            "stages": stages,
+            "audit": audit,
+            "phase": phase,
+            "phase_path": phase_path,
+            "phase_sha256": phase_source["sha256"],
+            "core_path": core_path,
+            "clock": clock,
+            "raw": raw,
+            "inventory": inventory,
+            "alignment_rows": alignment_rows,
+        }
 
-    def _decode_review_frame(self, context: Mapping[str, Any], index: int, anchor: float) -> tuple[bytes, float]:
+    def _decode_review_frame(
+        self, context: Mapping[str, Any], index: int, anchor: float
+    ) -> tuple[bytes, float]:
         import cv2
         import numpy as np
+
         from .hdf5_reader import RecordingReader, list_hdf5_paths
 
         with self.retriever._connect() as connection:
@@ -637,9 +681,12 @@ class FeedbackService:
             raise ValueError("The anchored source frame is unavailable")
         observation = json.loads(row["observation_json"])
         timestamp = float(row["t_video_s"])
-        if (not math.isfinite(timestamp) or not math.isclose(timestamp, anchor, abs_tol=1e-6, rel_tol=0)
-                or int(observation["frame_idx_global"]) != index
-                or float(observation["t_video_s"]) != timestamp):
+        if (
+            not math.isfinite(timestamp)
+            or not math.isclose(timestamp, anchor, abs_tol=1e-6, rel_tol=0)
+            or int(observation["frame_idx_global"]) != index
+            or float(observation["t_video_s"]) != timestamp
+        ):
             raise ValueError("The anchor time and database frame do not match")
         path = Path(row["source_path"]).resolve()
         if path.parent != context["raw"] or path.name != observation.get("source_hdf5"):
@@ -650,8 +697,11 @@ class FeedbackService:
         expected_hash = row["source_sha256"] or declaration.get("sha256")
         if not expected_hash or not re.fullmatch(r"[0-9a-f]{64}", expected_hash):
             raise ValueError("Original source content has no bound checksum")
-        if (row["source_sha256"] and declaration.get("sha256")
-                and row["source_sha256"] != declaration["sha256"]):
+        if (
+            row["source_sha256"]
+            and declaration.get("sha256")
+            and row["source_sha256"] != declaration["sha256"]
+        ):
             raise ValueError("Source checksums disagree")
         if self._binding_sha256(path) != expected_hash:
             raise ValueError("The original source chunk changed")
@@ -672,12 +722,18 @@ class FeedbackService:
                         matched = float(mapped[field]) == float(expected)
                     if not matched:
                         raise ValueError("Generated clock and native source identity disagree")
-        elif not math.isclose(float(observation["t_abs"])-float(context["clock"]["raw_time_origin_abs"]),
-                              timestamp, rel_tol=0, abs_tol=1e-6):
+        elif not math.isclose(
+            float(observation["t_abs"]) - float(context["clock"]["raw_time_origin_abs"]),
+            timestamp,
+            rel_tol=0,
+            abs_tol=1e-6,
+        ):
             raise ValueError("The native-relative source clock differs")
         if {p.name for p in list_hdf5_paths(context["raw"])} != set(context["inventory"]):
             raise ValueError("The native recording inventory changed")
-        identities = tuple(self._file_identity(context["raw"] / name) for name in sorted(context["inventory"]))
+        identities = tuple(
+            self._file_identity(context["raw"] / name) for name in sorted(context["inventory"])
+        )
         reader_key = (str(context["raw"]), identities)
         if self._review_reader_cache is None or self._review_reader_cache[0] != reader_key:
             reader = RecordingReader(context["raw"])
@@ -689,7 +745,12 @@ class FeedbackService:
         if cache_key not in self._review_png_cache:
             with reader.open_chunk(path) as handle:
                 times, images = handle.get("data/time"), handle.get("data/l_img")
-                if times is None or images is None or local_index >= len(times) or local_index >= len(images):
+                if (
+                    times is None
+                    or images is None
+                    or local_index >= len(times)
+                    or local_index >= len(images)
+                ):
                     raise ValueError("The requested native image does not exist")
                 if float(times[local_index]) != float(observation["t_abs"]):
                     raise ValueError("Native image timestamp differs from the bound observation")
@@ -724,7 +785,11 @@ class FeedbackService:
                         clip["keyframe_reason"] = "no_bound_native_anchor"
                         continue
                     try:
-                        if isinstance(index, bool) or int(index) != float(index) or not math.isfinite(float(anchor)):
+                        if (
+                            isinstance(index, bool)
+                            or int(index) != float(index)
+                            or not math.isfinite(float(anchor))
+                        ):
                             raise ValueError("Invalid native anchor")
                         if not float(clip["t_start_s"]) <= float(anchor) <= float(clip["t_end_s"]):
                             raise ValueError("The anchor is outside its review interval")
@@ -736,13 +801,29 @@ class FeedbackService:
                             except (OSError, ValueError, KeyError, TypeError) as exc:
                                 context_error = str(exc)
                                 raise
-                        png, timestamp = self._decode_review_frame(context, int(index), float(anchor))
-                        token = hashlib.sha256(json.dumps([run["global_run_id"], item.get("feedback_id"),
-                            clip.get("review_clip_id"), ordinal, int(index), timestamp], separators=(",", ":")).encode()).hexdigest()
+                        png, timestamp = self._decode_review_frame(
+                            context, int(index), float(anchor)
+                        )
+                        token = hashlib.sha256(
+                            json.dumps(
+                                [
+                                    run["global_run_id"],
+                                    item.get("feedback_id"),
+                                    clip.get("review_clip_id"),
+                                    ordinal,
+                                    int(index),
+                                    timestamp,
+                                ],
+                                separators=(",", ":"),
+                            ).encode()
+                        ).hexdigest()
                         authorized[token] = png
-                        clip.update(keyframe_available=True, keyframe_time_s=timestamp,
-                                    keyframe_frame_idx_global=int(index),
-                                    keyframe_url="/api/media/keyframe?"+urlencode({"clip_id":token}))
+                        clip.update(
+                            keyframe_available=True,
+                            keyframe_time_s=timestamp,
+                            keyframe_frame_idx_global=int(index),
+                            keyframe_url="/api/media/keyframe?" + urlencode({"clip_id": token}),
+                        )
                         clip.pop("keyframe_reason", None)
                     except (ImportError, OSError, ValueError, KeyError, TypeError, IndexError):
                         clip["keyframe_reason"] = "original_source_unavailable_or_unbound"
@@ -758,13 +839,28 @@ class FeedbackService:
                 raise ValueError("Original review frame is unavailable")
             return self._review_images[clip_id]
 
-    def _current_motion_comparison(self, run: Mapping[str, Any], reference: Mapping[str, Any]) -> dict:
+    def _current_motion_comparison(
+        self, run: Mapping[str, Any], reference: Mapping[str, Any]
+    ) -> dict:
         """Compare current DB observations; an archive never borrows observed reference values."""
-        from .motion_comparison import add_stroke_length, artifact_sha256, build_motion_windows, compare_motion_windows, validate_window_build
+        from .motion_comparison import (
+            add_stroke_length,
+            artifact_sha256,
+            build_motion_windows,
+            compare_motion_windows,
+            validate_window_build,
+        )
 
-        unavailable = {"schema": "motion_comparison_v1", "available": False,
-                       "status": "unavailable", "reason": "current_motion_source_unbound",
-                       "global_run_id": run["global_run_id"], "windows": [], "episodes": [], "per_phase": {}}
+        unavailable = {
+            "schema": "motion_comparison_v1",
+            "available": False,
+            "status": "unavailable",
+            "reason": "current_motion_source_unbound",
+            "global_run_id": run["global_run_id"],
+            "windows": [],
+            "episodes": [],
+            "per_phase": {},
+        }
         unavailable["artifact_sha256"] = artifact_sha256(unavailable)
         try:
             context = self._bound_review_context(run)
@@ -775,8 +871,11 @@ class FeedbackService:
                 "phases": stages / "01_core_frames/phase_intervals.csv",
                 "clock": context["core_path"],
             }
-            identities = [self._file_identity(self.retriever.db_path),
-                          self._file_identity(context["phase_path"]), self._file_identity(context["core_path"])]
+            identities = [
+                self._file_identity(self.retriever.db_path),
+                self._file_identity(context["phase_path"]),
+                self._file_identity(context["core_path"]),
+            ]
             if self.cohort_benchmark_path:
                 identities.append(self._file_identity(self.cohort_benchmark_path))
             if sidecar.is_file():
@@ -788,34 +887,53 @@ class FeedbackService:
             with self.retriever._connect() as connection:
                 records = connection.execute(
                     "SELECT frame_idx,t_video_s,phase_id,observation_json FROM frames "
-                    "WHERE global_run_id=? ORDER BY frame_idx", (run["global_run_id"],),
+                    "WHERE global_run_id=? ORDER BY frame_idx",
+                    (run["global_run_id"],),
                 ).fetchall()
             frames = []
             for index, record in enumerate(records):
                 row = json.loads(record["observation_json"])
-                if (record["frame_idx"] != index or row.get("frame_idx_global") != index
-                        or row.get("t_video_s") != record["t_video_s"]
-                        or row.get("phase_id") != record["phase_id"]):
+                if (
+                    record["frame_idx"] != index
+                    or row.get("frame_idx_global") != index
+                    or row.get("t_video_s") != record["t_video_s"]
+                    or row.get("phase_id") != record["phase_id"]
+                ):
                     raise ValueError("Current database observation identity differs")
                 frames.append(row)
             if len(frames) != context["clock"].get("frame_count"):
                 raise ValueError("Motion frame count differs from the bound recording clock")
             provenance = {
-                "pose_source": "canonical_vision_pose", "position_unit": "m",
+                "pose_source": "canonical_vision_pose",
+                "position_unit": "m",
                 "phase_source_kind": "model_phase_prediction",
                 "phase_model_sha256": context["phase"].get("checkpoint_sha256"),
                 "clock_source": context["clock"]["source"],
                 "source_artifacts": [
-                    {"kind": "frames", "path": str(self.retriever.db_path.resolve()),
-                     "sha256": self._binding_sha256(self.retriever.db_path)},
-                    {"kind": "phases", "path": str(context["phase_path"]), "sha256": context["phase_sha256"]},
-                    {"kind": "clock", "path": str(context["core_path"]),
-                     "sha256": self._binding_sha256(context["core_path"])},
+                    {
+                        "kind": "frames",
+                        "path": str(self.retriever.db_path.resolve()),
+                        "sha256": self._binding_sha256(self.retriever.db_path),
+                    },
+                    {
+                        "kind": "phases",
+                        "path": str(context["phase_path"]),
+                        "sha256": context["phase_sha256"],
+                    },
+                    {
+                        "kind": "clock",
+                        "path": str(context["core_path"]),
+                        "sha256": self._binding_sha256(context["core_path"]),
+                    },
                 ],
             }
-            current = build_motion_windows(frames, global_run_id=run["global_run_id"],
-                participant_id=run.get("participant_id") or None, provenance=provenance,
-                protocol=reference["protocol"])
+            current = build_motion_windows(
+                frames,
+                global_run_id=run["global_run_id"],
+                participant_id=run.get("participant_id") or None,
+                provenance=provenance,
+                protocol=reference["protocol"],
+            )
             origin = "current_database_observations_archive_fallback"
             length_origin = None
             if sidecar.is_file():
@@ -823,52 +941,94 @@ class FeedbackService:
                 validate_window_build(saved)
                 # Verify the archive using its own grid before adapting current
                 # observations to the selected reference. Never rewrite it.
-                current = build_motion_windows(frames, global_run_id=run["global_run_id"],
-                    participant_id=run.get("participant_id") or None, provenance=provenance,
-                    protocol=saved["protocol"])
+                current = build_motion_windows(
+                    frames,
+                    global_run_id=run["global_run_id"],
+                    participant_id=run.get("participant_id") or None,
+                    provenance=provenance,
+                    protocol=saved["protocol"],
+                )
                 saved_provenance = saved["provenance"]
-                for key in ("pose_source", "position_unit", "phase_source_kind", "phase_model_sha256", "clock_source"):
+                for key in (
+                    "pose_source",
+                    "position_unit",
+                    "phase_source_kind",
+                    "phase_model_sha256",
+                    "clock_source",
+                ):
                     if saved_provenance.get(key) != provenance[key]:
-                        raise ValueError("Saved motion source contract differs from current authority")
+                        raise ValueError(
+                            "Saved motion source contract differs from current authority"
+                        )
                 declarations = saved_provenance["source_artifacts"]
-                if len(declarations) != 3 or {s["kind"] for s in declarations} != set(expected_sources):
+                if len(declarations) != 3 or {s["kind"] for s in declarations} != set(
+                    expected_sources
+                ):
                     raise ValueError("Saved motion source inventory differs")
                 for declaration in declarations:
                     path = expected_sources[declaration["kind"]].resolve()
-                    if (Path(declaration["path"]).resolve() != path
-                            or self._binding_sha256(path) != declaration["sha256"]):
+                    if (
+                        Path(declaration["path"]).resolve() != path
+                        or self._binding_sha256(path) != declaration["sha256"]
+                    ):
                         raise ValueError("Saved motion artifact differs from the current pipeline")
                 if saved.get("stroke_length_metadata") is not None:
                     current = add_stroke_length(current, frames)
                     for key in ("stroke_length_metadata", "stroke_lengths"):
                         if saved.get(key) != current.get(key):
-                            raise ValueError("Saved stroke lengths differ from current database observations")
+                            raise ValueError(
+                                "Saved stroke lengths differ from current database observations"
+                            )
                     length_origin = "bound_pipeline_sidecar_verified_against_current_database"
-                for key in ("global_run_id", "participant_id", "protocol_sha256", "input_rows_sha256",
-                            "source_frame_count", "native_time_origin_abs", "native_duration_s", "windows"):
+                for key in (
+                    "global_run_id",
+                    "participant_id",
+                    "protocol_sha256",
+                    "input_rows_sha256",
+                    "source_frame_count",
+                    "native_time_origin_abs",
+                    "native_duration_s",
+                    "windows",
+                ):
                     if saved.get(key) != current.get(key):
-                        raise ValueError("Saved motion values differ from current database observations")
+                        raise ValueError(
+                            "Saved motion values differ from current database observations"
+                        )
                 current = saved
                 origin = "bound_pipeline_sidecar_verified_against_current_database"
                 if saved["protocol"] != reference["protocol"]:
-                    current = build_motion_windows(frames, global_run_id=run["global_run_id"],
-                        participant_id=run.get("participant_id") or None, provenance=provenance,
-                        protocol=reference["protocol"])
+                    current = build_motion_windows(
+                        frames,
+                        global_run_id=run["global_run_id"],
+                        participant_id=run.get("participant_id") or None,
+                        provenance=provenance,
+                        protocol=reference["protocol"],
+                    )
                     origin = "current_database_reference_grid_after_archive_validation"
                     length_origin = None
             length_unavailable = None
-            if (any(item.get("stroke_length_metadata") is not None for item in reference["recordings"])
-                    and current.get("stroke_length_metadata") is None):
+            if (
+                any(
+                    item.get("stroke_length_metadata") is not None
+                    for item in reference["recordings"]
+                )
+                and current.get("stroke_length_metadata") is None
+            ):
                 try:
                     current = add_stroke_length(current, frames)
                     length_origin = "current_database_complete_strokes"
                 except ValueError as error:
                     length_unavailable = str(error)
-            result = compare_motion_windows(current, reference, participant_id=run.get("participant_id") or None)
+            result = compare_motion_windows(
+                current, reference, participant_id=run.get("participant_id") or None
+            )
             for episode in result.get("length_episodes", []):
-                anchors = [s for s in current.get("stroke_lengths", [])
-                           if s["stroke_id"] in episode["source_stroke_ids"]
-                           and episode["native_start_s"] < s["native_end_s"] <= episode["native_end_s"]]
+                anchors = [
+                    s
+                    for s in current.get("stroke_lengths", [])
+                    if s["stroke_id"] in episode["source_stroke_ids"]
+                    and episode["native_start_s"] < s["native_end_s"] <= episode["native_end_s"]
+                ]
                 if anchors:
                     anchor = min(anchors, key=lambda s: s["native_end_s"])
                     index = anchor["source_end_row"]
@@ -891,11 +1051,13 @@ class FeedbackService:
         with self.retriever._connect() as connection:
             artifact = connection.execute(
                 "SELECT path, sha256 FROM generated_artifacts WHERE global_run_id = ? "
-                "AND artifact_type = 'stroke_build'", (run["global_run_id"],),
+                "AND artifact_type = 'stroke_build'",
+                (run["global_run_id"],),
             ).fetchone()
             phase_source = connection.execute(
                 "SELECT path, sha256 FROM source_files WHERE global_run_id = ? "
-                "AND source_type = 'model_phase_prediction'", (run["global_run_id"],),
+                "AND source_type = 'model_phase_prediction'",
+                (run["global_run_id"],),
             ).fetchone()
         stages = self.artifact_root / "stages"
         artifact_path = None
@@ -911,7 +1073,9 @@ class FeedbackService:
         audit = json.loads(audit_path.read_text(encoding="utf-8"))
         canonical = json.dumps(
             {key: value for key, value in audit.items() if key != "generated_at"},
-            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         ).encode("utf-8")
         if hashlib.sha256(canonical).hexdigest() != run.get("source_manifest_hash"):
             raise ValueError("Source audit does not match the database manifest hash")
@@ -934,7 +1098,9 @@ class FeedbackService:
         if not (strict_historical or strict_model):
             return False  # Preserve explicit synthetic and historical low-level contracts.
         if artifact_path is None or not artifact_path.is_relative_to(self.artifact_root):
-            raise ValueError("Strict source artifacts are not bound inside the database artifact root")
+            raise ValueError(
+                "Strict source artifacts are not bound inside the database artifact root"
+            )
         if self._binding_sha256(artifact_path) != artifact["sha256"]:
             raise ValueError("The database-bound stroke artifact changed")
         provenance = ray.get("provenance") or {}
@@ -942,7 +1108,10 @@ class FeedbackService:
             raise ValueError("Ray geometry provenance differs from the database-bound R4 receipt")
         core_path = stages / "01_core_frames" / "extraction_manifest.json"
         core = json.loads(core_path.read_text(encoding="utf-8"))
-        if core.get("geometry_provenance") != authority or core.get("global_run_id") != run["global_run_id"]:
+        if (
+            core.get("geometry_provenance") != authority
+            or core.get("global_run_id") != run["global_run_id"]
+        ):
             raise ValueError("Current frame provenance differs from the database-bound R4 receipt")
         clock = core.get("clock_alignment")
         if not isinstance(clock, dict) or provenance.get("clock_alignment") != clock:
@@ -957,7 +1126,9 @@ class FeedbackService:
             if phase.get("clock") != clock:
                 raise ValueError("Frame clock differs from the database-bound phase clock")
         if clock.get("source") in {"explicit_frame_alignment", "generated_hdf5_native_alignment"}:
-            if not clock.get("path") or self._binding_sha256(Path(clock["path"])) != clock.get("sha256"):
+            if not clock.get("path") or self._binding_sha256(Path(clock["path"])) != clock.get(
+                "sha256"
+            ):
                 raise ValueError("The bound frame-alignment source changed")
         if clock.get("source") == "generated_hdf5_native_alignment":
             from .hdf5_clock import MANIFEST_NAME, SCHEMA, SOURCE
@@ -973,19 +1144,27 @@ class FeedbackService:
                 raise ValueError("The bound generated HDF5 clock manifest changed")
             generated = json.loads(manifest_path.read_text(encoding="utf-8"))
             inventory = generated.get("source_inventory")
-            inventory_digest = hashlib.sha256(json.dumps(
-                inventory, sort_keys=True, separators=(",", ":"),
-            ).encode("utf-8")).hexdigest()
+            inventory_digest = hashlib.sha256(
+                json.dumps(
+                    inventory,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).hexdigest()
             if (
-                generated.get("schema") != SCHEMA or generated.get("source") != SOURCE
+                generated.get("schema") != SCHEMA
+                or generated.get("source") != SOURCE
                 or generated.get("alignment_file") != alignment_path.name
                 or generated.get("alignment_sha256") != clock.get("sha256")
                 or generated.get("frame_count") != clock.get("frame_count")
-                or not isinstance(inventory, list) or not inventory
+                or not isinstance(inventory, list)
+                or not inventory
                 or inventory_digest != generated.get("source_inventory_sha256")
                 or inventory_digest != clock.get("source_inventory_sha256")
-                or not clock.get("source_raw_run_dir") or not generated.get("raw_run_dir")
-                or Path(generated["raw_run_dir"]).resolve() != Path(clock["source_raw_run_dir"]).resolve()
+                or not clock.get("source_raw_run_dir")
+                or not generated.get("raw_run_dir")
+                or Path(generated["raw_run_dir"]).resolve()
+                != Path(clock["source_raw_run_dir"]).resolve()
                 or generated.get("training_reference_clock") is not False
                 or clock.get("training_reference_clock") is not False
                 or clock.get("native_correspondence_verified") is not True
@@ -998,7 +1177,10 @@ class FeedbackService:
         }
         for name, expected_path in expected_paths.items():
             declared = inputs.get(name) or {}
-            if not declared.get("path") or Path(declared["path"]).resolve() != expected_path.resolve():
+            if (
+                not declared.get("path")
+                or Path(declared["path"]).resolve() != expected_path.resolve()
+            ):
                 raise ValueError(f"Ray {name} are not the current recording's stage artifact")
             if self._binding_sha256(expected_path) != declared.get("sha256"):
                 raise ValueError(f"Ray {name} hash differs from the current stage artifact")
@@ -1014,10 +1196,7 @@ class FeedbackService:
 
     def _case_context(self) -> dict[str, Any]:
         index = next(
-            (
-                i for i, row in enumerate(self.available_runs)
-                if row.get("run_id") == self.run_id
-            ),
+            (i for i, row in enumerate(self.available_runs) if row.get("run_id") == self.run_id),
             0,
         )
         next_url = (
@@ -1034,33 +1213,33 @@ class FeedbackService:
 
     @staticmethod
     def _study_clips(item: Mapping[str, Any]) -> list[dict[str, Any]]:
-        source = list(
-            item.get("review_clips") or item.get("evidence_segments") or []
-        )
+        source = list(item.get("review_clips") or item.get("evidence_segments") or [])
         if not source:
-            source = [{
-                "t_start_s": item.get("t_start_s"),
-                "t_end_s": item.get("t_end_s"),
-            }]
+            source = [
+                {
+                    "t_start_s": item.get("t_start_s"),
+                    "t_end_s": item.get("t_end_s"),
+                }
+            ]
         padding = 3.0 if str(item.get("category") or "") == "exposure" else 5.0
         clips: list[dict[str, Any]] = []
         for row in source:
             start = max(0.0, float(row.get("t_start_s") or 0.0))
             end = max(start, float(row.get("t_end_s") or start))
             anchor = row.get("anchor_t_s")
-            clips.append({
-                "t_start_s": start,
-                "t_end_s": end,
-                "playback_start_s": max(0.0, start - padding),
-                "playback_end_s": end + padding,
-                "signal_time_s": (
-                    float(anchor) if anchor is not None else (start + end) / 2.0
-                ),
-                "exact_signal_frame": anchor is not None,
-                "signal_frame_idx": row.get("anchor_frame_idx_global"),
-                "anatomy": row.get("anatomy") or item.get("anatomy"),
-                "phase": row.get("phase") or item.get("phase"),
-            })
+            clips.append(
+                {
+                    "t_start_s": start,
+                    "t_end_s": end,
+                    "playback_start_s": max(0.0, start - padding),
+                    "playback_end_s": end + padding,
+                    "signal_time_s": (float(anchor) if anchor is not None else (start + end) / 2.0),
+                    "exact_signal_frame": anchor is not None,
+                    "signal_frame_idx": row.get("anchor_frame_idx_global"),
+                    "anatomy": row.get("anatomy") or item.get("anatomy"),
+                    "phase": row.get("phase") or item.get("phase"),
+                }
+            )
         return clips
 
     @staticmethod
@@ -1074,9 +1253,7 @@ class FeedbackService:
                     "The simulator indicated a possible protected-structure "
                     "boundary signal that warrants visual review."
                 ),
-                "selection": (
-                    "Moments are grouped by anatomy and linked to recorded video."
-                ),
+                "selection": ("Moments are grouped by anatomy and linked to recorded video."),
                 "limitation": limitation,
             }
         if category == "technique":
@@ -1104,9 +1281,7 @@ class FeedbackService:
                 "The system looked for moments when surrounding bone may have "
                 "limited a direct view of the working point."
             ),
-            "selection": (
-                "Nearby signals are combined into short context clips."
-            ),
+            "selection": ("Nearby signals are combined into short context clips."),
             "limitation": limitation,
         }
 
@@ -1179,19 +1354,31 @@ class FeedbackService:
         bootstrap = self.bootstrap()
         feedback = []
         for item in self._study_items():
-            feedback.append({
-                **{
-                    key: item.get(key)
-                    for key in (
-                        "feedback_id", "title", "category", "priority", "message",
-                        "observed_issue", "why_it_matters", "recommended_action",
-                        "evidence_summary", "evidence_status", "claim_boundary",
-                        "phase", "t_start_s", "t_end_s",
-                    )
-                },
-                "clips": self._study_clips(item),
-                "method_details": self._method_details(item),
-            })
+            feedback.append(
+                {
+                    **{
+                        key: item.get(key)
+                        for key in (
+                            "feedback_id",
+                            "title",
+                            "category",
+                            "priority",
+                            "message",
+                            "observed_issue",
+                            "why_it_matters",
+                            "recommended_action",
+                            "evidence_summary",
+                            "evidence_status",
+                            "claim_boundary",
+                            "phase",
+                            "t_start_s",
+                            "t_end_s",
+                        )
+                    },
+                    "clips": self._study_clips(item),
+                    "method_details": self._method_details(item),
+                }
+            )
         store.add_event(
             participant_id=participant_id,
             run_id=self.run_id,
@@ -1226,15 +1413,19 @@ class FeedbackService:
             "expert_proposed_moments": self.public_moments(participant_id),
         }
 
-    def _public_moment(
-        self, participant_id: str, row: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    def _public_moment(self, participant_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
         public = {
             key: row.get(key)
             for key in (
-                "moment_id", "t_video_s", "category", "observation",
-                "coaching_message", "system_coverage", "importance",
-                "interface_version", "created_at",
+                "moment_id",
+                "t_video_s",
+                "category",
+                "observation",
+                "coaching_message",
+                "system_coverage",
+                "importance",
+                "interface_version",
+                "created_at",
             )
         }
         audio = row.get("audio") or {}
@@ -1259,9 +1450,7 @@ class FeedbackService:
             for row in self._study().moments(participant_id, self.run_id)
         ]
 
-    def add_moment(
-        self, participant_id: str, value: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    def add_moment(self, participant_id: str, value: Mapping[str, Any]) -> dict[str, Any]:
         store = self._study()
         participant_id = normalize_participant_id(participant_id)
         session = store.progress(participant_id, self.run_id)
@@ -1322,27 +1511,21 @@ class FeedbackService:
         )
         return {"ok": True, "moment_id": moment_id}
 
-    def complete_study(
-        self, participant_id: str, answers: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    def complete_study(self, participant_id: str, answers: Mapping[str, Any]) -> dict[str, Any]:
         store = self._study()
         participant_id = normalize_participant_id(participant_id)
         use_intent = str(answers.get("would_use") or "")
         if use_intent not in {"yes", "with_changes", "no", "unsure"}:
             raise ValueError("Select whether you would use this workflow")
         validated = {
-            "workflow_clarity": self._scale(
-                answers.get("workflow_clarity"), "Workflow clarity"
-            ),
+            "workflow_clarity": self._scale(answers.get("workflow_clarity"), "Workflow clarity"),
             "feedback_usefulness": self._scale(
                 answers.get("feedback_usefulness"), "Feedback usefulness"
             ),
             "debrief_fit": self._scale(answers.get("debrief_fit"), "Debrief fit"),
             "would_use": use_intent,
             "most_useful": str(answers.get("most_useful") or "").strip()[:4000],
-            "missing_or_concerning": str(
-                answers.get("missing_or_concerning") or ""
-            ).strip()[:4000],
+            "missing_or_concerning": str(answers.get("missing_or_concerning") or "").strip()[:4000],
         }
         session = store.complete(
             participant_id=participant_id,
@@ -1409,9 +1592,7 @@ def parse_byte_range(value: str | None, size: int) -> tuple[int, int] | None:
     return start, min(end, size - 1)
 
 
-def _handler(
-    service: FeedbackService, ui_dir: Path
-) -> type[BaseHTTPRequestHandler]:
+def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHandler]:
     assets = {
         "/": (ui_dir / "index.html", "text/html; charset=utf-8"),
         "/index.html": (ui_dir / "index.html", "text/html; charset=utf-8"),
@@ -1439,17 +1620,13 @@ def _handler(
         def _body(self, maximum: int = 65536) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
             if length < 1 or length > maximum:
-                raise ValueError(
-                    f"Request body must be between 1 and {maximum} bytes"
-                )
+                raise ValueError(f"Request body must be between 1 and {maximum} bytes")
             value = json.loads(self.rfile.read(length).decode("utf-8"))
             if not isinstance(value, dict):
                 raise ValueError("Request body must be a JSON object")
             return value
 
-        def _file(
-            self, path: Path | None, mime_type: str, *, send_body: bool = True
-        ) -> None:
+        def _file(self, path: Path | None, mime_type: str, *, send_body: bool = True) -> None:
             if path is None or not path.is_file():
                 self._json(HTTPStatus.NOT_FOUND, {"error": "Media not available"})
                 return
@@ -1463,9 +1640,7 @@ def _handler(
                 self.end_headers()
                 return
             start, end = requested or (0, size - 1)
-            self.send_response(
-                HTTPStatus.PARTIAL_CONTENT if requested else HTTPStatus.OK
-            )
+            self.send_response(HTTPStatus.PARTIAL_CONTENT if requested else HTTPStatus.OK)
             self.send_header("Content-Type", mime_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(end - start + 1))
@@ -1496,9 +1671,7 @@ def _handler(
             query = parse_qs(parsed.query)
             participant_id = (query.get("participant_id") or [""])[0]
             moment_id = (query.get("moment_id") or [""])[0]
-            path, mime_type = service._study().audio(
-                participant_id, service.run_id, moment_id
-            )
+            path, mime_type = service._study().audio(participant_id, service.run_id, moment_id)
             self._file(path, mime_type, send_body=send_body)
 
         def _keyframe(self, parsed, *, send_body: bool = True) -> None:
@@ -1524,18 +1697,18 @@ def _handler(
             parsed = urlparse(self.path)
             try:
                 if parsed.path == "/api/health":
-                    self._json(HTTPStatus.OK, {
-                        "ok": True,
-                        "mode": service.mode,
-                        "run_id": service.run_id,
-                        "interface_version": service.interface_version,
-                        "available_runs": service.available_runs,
-                    })
+                    self._json(
+                        HTTPStatus.OK,
+                        {
+                            "ok": True,
+                            "mode": service.mode,
+                            "run_id": service.run_id,
+                            "interface_version": service.interface_version,
+                            "available_runs": service.available_runs,
+                        },
+                    )
                     return
-                if (
-                    parsed.path == "/api/bootstrap"
-                    and service.mode == "recommendations"
-                ):
+                if parsed.path == "/api/bootstrap" and service.mode == "recommendations":
                     self._json(HTTPStatus.OK, service.bootstrap())
                     return
                 if parsed.path == "/api/media/video":
@@ -1615,22 +1788,24 @@ def _handler(
                     details = body.get("details")
                     if details is not None and not isinstance(details, dict):
                         raise ValueError("details must be an object")
-                    self._json(HTTPStatus.OK, service.log_event(
-                        participant_id,
-                        str(body["stimulus_id"]) if body.get("stimulus_id") else None,
-                        str(body.get("event_type") or ""),
-                        details,
-                    ))
-                    return
-                if parsed.path == "/api/expert-study/coaching-moment":
                     self._json(
-                        HTTPStatus.OK, service.add_moment(participant_id, body)
+                        HTTPStatus.OK,
+                        service.log_event(
+                            participant_id,
+                            str(body["stimulus_id"]) if body.get("stimulus_id") else None,
+                            str(body.get("event_type") or ""),
+                            details,
+                        ),
                     )
                     return
+                if parsed.path == "/api/expert-study/coaching-moment":
+                    self._json(HTTPStatus.OK, service.add_moment(participant_id, body))
+                    return
                 if parsed.path == "/api/expert-study/delete-coaching-moment":
-                    self._json(HTTPStatus.OK, service.delete_moment(
-                        participant_id, str(body.get("moment_id") or "")
-                    ))
+                    self._json(
+                        HTTPStatus.OK,
+                        service.delete_moment(participant_id, str(body.get("moment_id") or "")),
+                    )
                     return
                 self._json(HTTPStatus.NOT_FOUND, {"error": "Not found"})
             except (ValueError, KeyError, json.JSONDecodeError) as exc:

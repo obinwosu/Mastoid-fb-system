@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 
 def load_cohort_benchmark(path: Path | None) -> dict[str, Any] | None:
@@ -13,9 +14,7 @@ def load_cohort_benchmark(path: Path | None) -> dict[str, Any] | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _phase_intervals(
-    phases: Sequence[Mapping[str, Any]], name: str
-) -> list[dict[str, Any]]:
+def _phase_intervals(phases: Sequence[Mapping[str, Any]], name: str) -> list[dict[str, Any]]:
     """Keep disjoint episodes separate rather than inventing an envelope interval."""
     return [
         {**dict(row), "phase": name, "review_clip_id": row.get("phase_id")}
@@ -43,33 +42,37 @@ def _merge_review_clips(
             phase = row.get("phase")
             if phase is not None and phase not in clip["phases"]:
                 clip["phases"].append(phase)
-            if float(row.get("strength_score") or 0.0) > float(
-                clip.get("strength_score") or 0.0
-            ):
+            if float(row.get("strength_score") or 0.0) > float(clip.get("strength_score") or 0.0):
                 for key in (
-                    "anchor_t_s", "anchor_frame_idx_global",
+                    "anchor_t_s",
+                    "anchor_frame_idx_global",
                     "anchor_blocked_contact_fraction",
-                    "anchor_registered_contact_voxel_count", "strength_score",
+                    "anchor_registered_contact_voxel_count",
+                    "strength_score",
                 ):
                     clip[key] = row.get(key)
             continue
-        clips.append({
-            "review_clip_id": f"exposure_review_clip:{len(clips) + 1:03d}",
-            "t_start_s": start,
-            "t_end_s": end,
-            "source_episode_ids": [episode_id],
-            "source_episode_count": 1,
-            "phases": [row.get("phase")] if row.get("phase") is not None else [],
-            **{
-                key: row.get(key)
-                for key in (
-                    "anchor_t_s", "anchor_frame_idx_global",
-                    "anchor_blocked_contact_fraction",
-                    "anchor_registered_contact_voxel_count", "strength_score",
-                )
-                if row.get(key) is not None
-            },
-        })
+        clips.append(
+            {
+                "review_clip_id": f"exposure_review_clip:{len(clips) + 1:03d}",
+                "t_start_s": start,
+                "t_end_s": end,
+                "source_episode_ids": [episode_id],
+                "source_episode_count": 1,
+                "phases": [row.get("phase")] if row.get("phase") is not None else [],
+                **{
+                    key: row.get(key)
+                    for key in (
+                        "anchor_t_s",
+                        "anchor_frame_idx_global",
+                        "anchor_blocked_contact_fraction",
+                        "anchor_registered_contact_voxel_count",
+                        "strength_score",
+                    )
+                    if row.get(key) is not None
+                },
+            }
+        )
     return clips
 
 
@@ -85,14 +88,12 @@ def build_session_coaching_plan(
 
     items: list[dict[str, Any]] = []
     raw_overshoots = sorted(
-        (
-            row for row in events
-            if str(row.get("event_type")) == "simulator_overshoot"
-        ),
+        (row for row in events if str(row.get("event_type")) == "simulator_overshoot"),
         key=lambda row: float(row["t_start_s"]),
     )
     overshoots = [
-        row for row in raw_overshoots
+        row
+        for row in raw_overshoots
         if bool((row.get("attributes") or {}).get("coaching_eligible", True))
     ]
     if overshoots:
@@ -109,72 +110,71 @@ def build_session_coaching_plan(
             anatomy_counts[anatomy] = anatomy_counts.get(anatomy, 0) + 1
         safety_segments: list[dict[str, Any]] = []
         for row in overshoots:
-            event_segments = list(
-                (row.get("attributes") or {}).get("coaching_segments") or []
-            )
+            event_segments = list((row.get("attributes") or {}).get("coaching_segments") or [])
             if event_segments:
                 safety_segments.extend(dict(segment) for segment in event_segments)
             else:
-                safety_segments.append({
-                    "segment_id": f"{row['event_id']}:fallback",
-                    "t_start_s": float(row["t_start_s"]),
-                    "t_end_s": float(row["t_end_s"]),
-                    "phase": row.get("phase"),
-                    "anatomy": row.get("anatomy"),
-                })
-        items.append({
-            "feedback_id": "coaching:safety_contacts",
-            "category": "safety",
-            "priority": "high",
-            "title": "Review a possible safety-boundary signal",
-            "message": (
-                f"Pause and review the {anatomy_label} boundary before drilling "
-                "further."
-            ),
-            "observed_issue": (
-                "The simulator identified a possible "
-                f"{anatomy_label} boundary signal during {phase_label} drilling."
-            ),
-            "why_it_matters": (
-                "A possible protected-structure signal deserves prompt visual "
-                "review. The finding may not be apparent from the video alone."
-            ),
-            "recommended_action": (
-                f"Use the linked moment and anatomy view to verify the {anatomy_label} "
-                "boundary; if the signal is confirmed, re-establish the boundary "
-                "before drilling further."
-            ),
-            "evidence_summary": (
-                f"The simulator identified {len(safety_segments)} "
-                "protected-structure review moment"
-                f"{'s' if len(safety_segments) != 1 else ''}."
-            ),
-            "technical_facts": {
-                "episode_count": len(overshoots),
-                "raw_episode_count": len(raw_overshoots),
-                "review_moment_count": len(safety_segments),
-                "anatomy_counts": anatomy_counts,
-                "first_event_id": first["event_id"],
-                "coaching_gate": (
-                    (first.get("attributes") or {}).get("coaching_gate")
+                safety_segments.append(
+                    {
+                        "segment_id": f"{row['event_id']}:fallback",
+                        "t_start_s": float(row["t_start_s"]),
+                        "t_end_s": float(row["t_end_s"]),
+                        "phase": row.get("phase"),
+                        "anatomy": row.get("anatomy"),
+                    }
+                )
+        items.append(
+            {
+                "feedback_id": "coaching:safety_contacts",
+                "category": "safety",
+                "priority": "high",
+                "title": "Review a possible safety-boundary signal",
+                "message": (
+                    f"Pause and review the {anatomy_label} boundary before drilling further."
                 ),
-            },
-            "t_start_s": float(first["t_start_s"]),
-            "t_end_s": float(first["t_end_s"]),
-            "phase": first.get("phase"),
-            "anatomy": first.get("anatomy"),
-            "evidence_status": "simulator_supported",
-            "source_type": "canonical_simulator_events",
-            "source_ids": [str(row["event_id"]) for row in overshoots],
-            "evidence_segments": safety_segments,
-            "claim_boundary": (
-                "This is a simulator signal for review. It does not by itself "
-                "confirm visible boundary contact, clinical injury, or intent."
-            ),
-        })
+                "observed_issue": (
+                    "The simulator identified a possible "
+                    f"{anatomy_label} boundary signal during {phase_label} drilling."
+                ),
+                "why_it_matters": (
+                    "A possible protected-structure signal deserves prompt visual "
+                    "review. The finding may not be apparent from the video alone."
+                ),
+                "recommended_action": (
+                    f"Use the linked moment and anatomy view to verify the {anatomy_label} "
+                    "boundary; if the signal is confirmed, re-establish the boundary "
+                    "before drilling further."
+                ),
+                "evidence_summary": (
+                    f"The simulator identified {len(safety_segments)} "
+                    "protected-structure review moment"
+                    f"{'s' if len(safety_segments) != 1 else ''}."
+                ),
+                "technical_facts": {
+                    "episode_count": len(overshoots),
+                    "raw_episode_count": len(raw_overshoots),
+                    "review_moment_count": len(safety_segments),
+                    "anatomy_counts": anatomy_counts,
+                    "first_event_id": first["event_id"],
+                    "coaching_gate": ((first.get("attributes") or {}).get("coaching_gate")),
+                },
+                "t_start_s": float(first["t_start_s"]),
+                "t_end_s": float(first["t_end_s"]),
+                "phase": first.get("phase"),
+                "anatomy": first.get("anatomy"),
+                "evidence_status": "simulator_supported",
+                "source_type": "canonical_simulator_events",
+                "source_ids": [str(row["event_id"]) for row in overshoots],
+                "evidence_segments": safety_segments,
+                "claim_boundary": (
+                    "This is a simulator signal for review. It does not by itself "
+                    "confirm visible boundary contact, clinical injury, or intent."
+                ),
+            }
+        )
 
     benchmark = dict(cohort_benchmark or {})
-    antrum = ((benchmark.get("phases") or {}).get("antrum") or {})
+    antrum = (benchmark.get("phases") or {}).get("antrum") or {}
     observed = antrum.get("observed") or {}
     q25 = antrum.get("experienced_q25") or {}
     q75 = antrum.get("experienced_q75") or {}
@@ -182,161 +182,222 @@ def build_session_coaching_plan(
     shorter = (
         observed.get("mean_stroke_length") is not None
         and q25.get("mean_stroke_length") is not None
-        and float(observed["mean_stroke_length"])
-        < float(q25["mean_stroke_length"])
+        and float(observed["mean_stroke_length"]) < float(q25["mean_stroke_length"])
     )
     more_frequent = (
         observed.get("stroke_rate_per_s") is not None
         and q75.get("stroke_rate_per_s") is not None
-        and float(observed["stroke_rate_per_s"])
-        > float(q75["stroke_rate_per_s"])
+        and float(observed["stroke_rate_per_s"]) > float(q75["stroke_rate_per_s"])
     )
     lower_efficiency = (
         observed.get("voxel_removal_efficiency") is not None
         and q25.get("voxel_removal_efficiency") is not None
-        and float(observed["voxel_removal_efficiency"])
-        < float(q25["voxel_removal_efficiency"])
+        and float(observed["voxel_removal_efficiency"]) < float(q25["voxel_removal_efficiency"])
     )
     if antrum_intervals and shorter and more_frequent:
-        items.append({
-            "feedback_id": "coaching:antrum_stroke_pattern",
-            "category": "technique",
-            "priority": "medium",
-            "title": "Use longer strokes in the antrum",
-            "message": "In the antrum, use fewer, longer sweeps.",
-            "observed_issue": (
-                "Antrum strokes were shorter and more frequent than the "
-                "experienced-user reference range."
-            ),
-            "why_it_matters": (
-                "The same phase also showed less progress per unit of active "
-                "drilling time than the experienced-user reference range."
-                if lower_efficiency else
-                "The pattern was more fragmented than the experienced-user "
-                "reference range."
-            ),
-            "recommended_action": (
-                "Use longer, continuous sweeps while keeping the working area visible."
-            ),
-            "evidence_summary": (
-                "Antrum strokes were shorter and more frequent than the "
-                "experienced-user range."
-            ),
-            "technical_facts": {
-                "observed_mean_stroke_length": observed["mean_stroke_length"],
-                "experienced_q25_mean_stroke_length": q25["mean_stroke_length"],
-                "observed_stroke_rate_per_s": observed["stroke_rate_per_s"],
-                "experienced_q75_stroke_rate_per_s": q75["stroke_rate_per_s"],
-                "observed_voxel_removal_efficiency": observed.get(
-                    "voxel_removal_efficiency"
+        items.append(
+            {
+                "feedback_id": "coaching:antrum_stroke_pattern",
+                "category": "technique",
+                "priority": "medium",
+                "title": "Use longer strokes in the antrum",
+                "message": "In the antrum, use fewer, longer sweeps.",
+                "observed_issue": (
+                    "Antrum strokes were shorter and more frequent than the "
+                    "experienced-user reference range."
                 ),
-                "experienced_q25_voxel_removal_efficiency": q25.get(
-                    "voxel_removal_efficiency"
+                "why_it_matters": (
+                    "The same phase also showed less progress per unit of active "
+                    "drilling time than the experienced-user reference range."
+                    if lower_efficiency
+                    else "The pattern was more fragmented than the experienced-user "
+                    "reference range."
                 ),
-                "experienced_trial_n": antrum.get("experienced_trial_n"),
-            },
-            "t_start_s": float(antrum_intervals[0]["t_start_s"]),
-            "t_end_s": float(antrum_intervals[0]["t_end_s"]),
-            "evidence_segments": antrum_intervals,
-            "review_clips": antrum_intervals,
-            "phase_interval_count": len(antrum_intervals),
-            "phase": "antrum",
-            "anatomy": None,
-            "evidence_status": "descriptive_cohort_comparison",
-            "source_type": "experienced_group_phase_benchmark",
-            "source_ids": [row["phase_id"] for row in antrum_intervals if row.get("phase_id")],
-            "claim_boundary": benchmark.get("claim_boundary"),
-        })
+                "recommended_action": (
+                    "Use longer, continuous sweeps while keeping the working area visible."
+                ),
+                "evidence_summary": (
+                    "Antrum strokes were shorter and more frequent than the experienced-user range."
+                ),
+                "technical_facts": {
+                    "observed_mean_stroke_length": observed["mean_stroke_length"],
+                    "experienced_q25_mean_stroke_length": q25["mean_stroke_length"],
+                    "observed_stroke_rate_per_s": observed["stroke_rate_per_s"],
+                    "experienced_q75_stroke_rate_per_s": q75["stroke_rate_per_s"],
+                    "observed_voxel_removal_efficiency": observed.get("voxel_removal_efficiency"),
+                    "experienced_q25_voxel_removal_efficiency": q25.get("voxel_removal_efficiency"),
+                    "experienced_trial_n": antrum.get("experienced_trial_n"),
+                },
+                "t_start_s": float(antrum_intervals[0]["t_start_s"]),
+                "t_end_s": float(antrum_intervals[0]["t_end_s"]),
+                "evidence_segments": antrum_intervals,
+                "review_clips": antrum_intervals,
+                "phase_interval_count": len(antrum_intervals),
+                "phase": "antrum",
+                "anatomy": None,
+                "evidence_status": "descriptive_cohort_comparison",
+                "source_type": "experienced_group_phase_benchmark",
+                "source_ids": [row["phase_id"] for row in antrum_intervals if row.get("phase_id")],
+                "claim_boundary": benchmark.get("claim_boundary"),
+            }
+        )
 
     if motion_comparison is not None:
         from .motion_comparison import COMPARISON_SCHEMA, PHASES, artifact_sha256
 
-        if (motion_comparison.get("schema") != COMPARISON_SCHEMA
-                or motion_comparison.get("artifact_sha256") != artifact_sha256(motion_comparison)):
+        if motion_comparison.get("schema") != COMPARISON_SCHEMA or motion_comparison.get(
+            "artifact_sha256"
+        ) != artifact_sha256(motion_comparison):
             raise ValueError("Motion coaching requires an intact window comparison artifact")
         if motion_comparison.get("available"):
-            episodes = sorted((dict(row) for row in motion_comparison.get("episodes", [])
-                               if row["phase"] in PHASES), key=lambda row: float(row["t_start_s"]))
+            episodes = sorted(
+                (
+                    dict(row)
+                    for row in motion_comparison.get("episodes", [])
+                    if row["phase"] in PHASES
+                ),
+                key=lambda row: float(row["t_start_s"]),
+            )
             if episodes:
                 first = episodes[0]
-                phases_present = [phase for phase in PHASES if any(row["phase"] == phase for row in episodes)]
+                phases_present = [
+                    phase for phase in PHASES if any(row["phase"] == phase for row in episodes)
+                ]
                 clips = [{**row, "review_clip_id": row["episode_id"]} for row in episodes]
-                items.append({
-                    "feedback_id": "coaching:motion_reference",
-                    "category": "technique", "priority": "low",
-                    "title": "Review lower tool-motion speed",
-                    "message": "Review the local task and tool movement alongside the same-phase reference.",
-                    "observed_issue": (
-                        "One or more five-second windows had lower observed tool-motion speed "
-                        "than the experienced-participant reference."
-                    ),
-                    "why_it_matters": "The difference identifies a review interval; it does not establish poor technique.",
-                    "recommended_action": "Review the video and task context before interpreting this difference.",
-                    "evidence_summary": (
-                        f"{len(episodes)} review interval(s), using native-time vision poses and "
-                        "coverage-qualified comparisons within each clip's phase."
-                    ),
-                    "technical_facts": {
-                        "protocol": motion_comparison["protocol"],
-                        "reference": motion_comparison["reference_summary"],
-                        "phase_references": {phase: motion_comparison["per_phase"][phase] for phase in phases_present},
-                        "reference_sha256": motion_comparison["reference_sha256"],
-                        "window_build_sha256": motion_comparison["window_build_sha256"],
-                        "window_stride_s": motion_comparison["protocol"]["stride_s"],
-                    },
-                    "t_start_s": first["t_start_s"], "t_end_s": first["t_end_s"],
-                    "phase": "session", "phases": phases_present, "anatomy": None,
-                    "evidence_status": "descriptive_cohort_comparison",
-                    "source_type": "native_vision_motion_windows",
-                    "source_ids": [row["episode_id"] for row in episodes],
-                    "evidence_segments": episodes, "review_clips": clips,
-                    "claim_boundary": motion_comparison["claim_boundary"],
-                })
+                items.append(
+                    {
+                        "feedback_id": "coaching:motion_reference",
+                        "category": "technique",
+                        "priority": "low",
+                        "title": "Review lower tool-motion speed",
+                        "message": (
+                            "Review the local task and tool movement alongside the same-phase "
+                            "reference."
+                        ),
+                        "observed_issue": (
+                            "One or more five-second windows had lower observed tool-motion speed "
+                            "than the experienced-participant reference."
+                        ),
+                        "why_it_matters": (
+                            "The difference identifies a review interval; it does not establish"
+                            " poor technique."
+                        ),
+                        "recommended_action": (
+                            "Review the video and task context before interpreting this difference."
+                        ),
+                        "evidence_summary": (
+                            f"{len(episodes)} review interval(s), "
+                            "using native-time vision poses and "
+                            "coverage-qualified comparisons within each clip's phase."
+                        ),
+                        "technical_facts": {
+                            "protocol": motion_comparison["protocol"],
+                            "reference": motion_comparison["reference_summary"],
+                            "phase_references": {
+                                phase: motion_comparison["per_phase"][phase]
+                                for phase in phases_present
+                            },
+                            "reference_sha256": motion_comparison["reference_sha256"],
+                            "window_build_sha256": motion_comparison["window_build_sha256"],
+                            "window_stride_s": motion_comparison["protocol"]["stride_s"],
+                        },
+                        "t_start_s": first["t_start_s"],
+                        "t_end_s": first["t_end_s"],
+                        "phase": "session",
+                        "phases": phases_present,
+                        "anatomy": None,
+                        "evidence_status": "descriptive_cohort_comparison",
+                        "source_type": "native_vision_motion_windows",
+                        "source_ids": [row["episode_id"] for row in episodes],
+                        "evidence_segments": episodes,
+                        "review_clips": clips,
+                        "claim_boundary": motion_comparison["claim_boundary"],
+                    }
+                )
 
-        episodes = sorted((dict(row) for row in motion_comparison.get("length_episodes", [])
-                           if row["phase"] in PHASES), key=lambda row: float(row["t_start_s"]))
+        episodes = sorted(
+            (
+                dict(row)
+                for row in motion_comparison.get("length_episodes", [])
+                if row["phase"] in PHASES
+            ),
+            key=lambda row: float(row["t_start_s"]),
+        )
         if episodes:
             first = episodes[0]
-            phases_present = [phase for phase in PHASES if any(row["phase"] == phase for row in episodes)]
+            phases_present = [
+                phase for phase in PHASES if any(row["phase"] == phase for row in episodes)
+            ]
             length_policy = motion_comparison.get("length_review_policy") or {}
             minimum_windows = int(length_policy.get("persistence_windows", 3))
             minimum_strokes = int(length_policy.get("min_distinct_strokes", 3))
-            window_requirement = ("one qualifying five-second window" if minimum_windows == 1
-                                  else f"{minimum_windows} consecutive five-second windows")
-            stroke_requirement = ("one eligible complete stroke" if minimum_strokes == 1
-                                  else f"{minimum_strokes} distinct eligible complete strokes")
-            items.append({
-                "feedback_id": "coaching:short_strokes", "category": "technique", "priority": "medium",
-                "title": "Review shorter strokes",
-                "message": "Review whether the local task allows longer, continuous strokes.",
-                "observed_issue": "One or more five-second windows contained shorter complete strokes than the same-phase expert lower quartile.",
-                "why_it_matters": "The pattern can identify fragmented movement, but nearby anatomy and the local task may justify short strokes.",
-                "recommended_action": "Review the highlighted video. Where the anatomy and task permit, consider longer, continuous strokes.",
-                "evidence_summary": f"{len(episodes)} interval(s) below the same-phase expert Q25, with at least {stroke_requirement} in {window_requirement}.",
-                "technical_facts": {
-                    "metric": "mean_stroke_length_mm", "unit": "mm",
-                    "policy": motion_comparison.get("length_review_policy"),
-                    "phase_references": {phase: motion_comparison["per_phase"][phase]["mean_stroke_length_mm"] for phase in phases_present},
-                    "reference_sha256": motion_comparison["reference_sha256"],
-                    "window_build_sha256": motion_comparison["window_build_sha256"],
-                    "frequency_used": False,
-                },
-                "t_start_s": first["t_start_s"], "t_end_s": first["t_end_s"],
-                "phase": "session", "phases": phases_present, "anatomy": None,
-                "evidence_status": "descriptive_cohort_comparison", "source_type": "complete_recorded_stroke_length",
-                "source_ids": [row["episode_id"] for row in episodes],
-                "evidence_segments": episodes,
-                "review_clips": [{**row, "review_clip_id": row["episode_id"]} for row in episodes],
-                "claim_boundary": motion_comparison["claim_boundary"],
-            })
+            window_requirement = (
+                "one qualifying five-second window"
+                if minimum_windows == 1
+                else f"{minimum_windows} consecutive five-second windows"
+            )
+            stroke_requirement = (
+                "one eligible complete stroke"
+                if minimum_strokes == 1
+                else f"{minimum_strokes} distinct eligible complete strokes"
+            )
+            items.append(
+                {
+                    "feedback_id": "coaching:short_strokes",
+                    "category": "technique",
+                    "priority": "medium",
+                    "title": "Review shorter strokes",
+                    "message": "Review whether the local task allows longer, continuous strokes.",
+                    "observed_issue": (
+                        "One or more five-second windows contained shorter complete strokes "
+                        "than the same-phase expert lower quartile."
+                    ),
+                    "why_it_matters": (
+                        "The pattern can identify fragmented movement, but nearby anatomy and "
+                        "the local task may justify short strokes."
+                    ),
+                    "recommended_action": (
+                        "Review the highlighted video. Where the anatomy and task permit, "
+                        "consider longer, continuous strokes."
+                    ),
+                    "evidence_summary": (
+                        f"{len(episodes)} interval(s) below the same-phase expert Q25, "
+                        f"with at least {stroke_requirement} in {window_requirement}."
+                    ),
+                    "technical_facts": {
+                        "metric": "mean_stroke_length_mm",
+                        "unit": "mm",
+                        "policy": motion_comparison.get("length_review_policy"),
+                        "phase_references": {
+                            phase: motion_comparison["per_phase"][phase]["mean_stroke_length_mm"]
+                            for phase in phases_present
+                        },
+                        "reference_sha256": motion_comparison["reference_sha256"],
+                        "window_build_sha256": motion_comparison["window_build_sha256"],
+                        "frequency_used": False,
+                    },
+                    "t_start_s": first["t_start_s"],
+                    "t_end_s": first["t_end_s"],
+                    "phase": "session",
+                    "phases": phases_present,
+                    "anatomy": None,
+                    "evidence_status": "descriptive_cohort_comparison",
+                    "source_type": "complete_recorded_stroke_length",
+                    "source_ids": [row["episode_id"] for row in episodes],
+                    "evidence_segments": episodes,
+                    "review_clips": [
+                        {**row, "review_clip_id": row["episode_id"]} for row in episodes
+                    ],
+                    "claim_boundary": motion_comparison["claim_boundary"],
+                }
+            )
 
     example = (
         under_ledge_screening.get("coaching_example")
-        if under_ledge_screening.get("available") else None
+        if under_ledge_screening.get("available")
+        else None
     )
-    coaching_segments = list(
-        under_ledge_screening.get("coaching_episodes") or []
-    )
+    coaching_segments = list(under_ledge_screening.get("coaching_episodes") or [])
     # Low-support episodes and runs that fail the registration-quality gate stay
     # visible in the technical evidence screen, but are not auto-promoted to a
     # trainee coaching problem.
@@ -355,72 +416,69 @@ def build_session_coaching_plan(
             "t_start_s": float(episode["t_start_s"]),
             "t_end_s": float(episode["t_end_s"]),
             "phase": episode.get("phase"),
-            "selection_rule": (
-                "positive_frame_count_x_mean_blocked_contact_fraction"
-            ),
+            "selection_rule": ("positive_frame_count_x_mean_blocked_contact_fraction"),
         }
     if example and exposure_segments:
         review_clip_gap_s = 5.0
         review_clips = _merge_review_clips(exposure_segments, review_clip_gap_s)
         total_duration_s = sum(
-            max(0.0, float(row["t_end_s"]) - float(row["t_start_s"]))
-            for row in exposure_segments
+            max(0.0, float(row["t_end_s"]) - float(row["t_start_s"])) for row in exposure_segments
         )
-        items.append({
-            "feedback_id": "coaching:working_corridor",
-            "category": "exposure",
-            "priority": "medium",
-            "title": "Widen before drilling deeper",
-            "message": (
-                "Widen the working corridor and restore a direct view before "
-                "drilling deeper."
-            ),
-            "observed_issue": (
-                "In the linked drilling moments, residual bone may have limited "
-                "the direct view of the burr tip and contact point."
-            ),
-            "why_it_matters": (
-                "Reduced visibility can make it harder to identify and maintain a "
-                "protected boundary, increasing the risk of unintended bone removal. "
-                "This general risk mechanism does not establish that visibility "
-                "caused any recorded contact in this session."
-            ),
-            "recommended_action": (
-                "Review the linked clips, then widen the exposure and confirm a "
-                "clear view of the burr tip and contact point before drilling deeper."
-                if screening_only else
-                "Widen the exposure and confirm a clear view of the burr tip and "
-                "contact point before drilling deeper."
-            ),
-            "evidence_summary": (
-                "The recorded view and simulator anatomy support reviewing these "
-                "locations."
-            ),
-            "technical_facts": {
-                "selection_rule": example.get("selection_rule"),
-                "candidate_episode_count": (
-                    under_ledge_screening.get("counts") or {}
-                ).get("candidate_episode_count"),
-                "high_support_candidate_episode_count": len(exposure_segments),
-                "candidate_total_duration_s": round(total_duration_s, 3),
-                "review_clip_count": len(review_clips),
-                "review_clip_merge_gap_s": review_clip_gap_s,
-                "screening_only": screening_only,
-            },
-            "t_start_s": float(example["t_start_s"]),
-            "t_end_s": float(example["t_end_s"]),
-            "phase": "multiple phases",
-            "anatomy": None,
-            "evidence_status": "automatic_geometric_screening_candidate",
-            "source_type": "under_ledge_ray_v3",
-            "source_ids": [str(row["episode_id"]) for row in exposure_segments],
-            "evidence_segments": exposure_segments,
-            "review_clips": review_clips,
-            "claim_boundary": (
-                "These locations are prompts for visual review. They do not "
-                "establish that visibility caused an error."
-            ),
-        })
+        items.append(
+            {
+                "feedback_id": "coaching:working_corridor",
+                "category": "exposure",
+                "priority": "medium",
+                "title": "Widen before drilling deeper",
+                "message": (
+                    "Widen the working corridor and restore a direct view before drilling deeper."
+                ),
+                "observed_issue": (
+                    "In the linked drilling moments, residual bone may have limited "
+                    "the direct view of the burr tip and contact point."
+                ),
+                "why_it_matters": (
+                    "Reduced visibility can make it harder to identify and maintain a "
+                    "protected boundary, increasing the risk of unintended bone removal. "
+                    "This general risk mechanism does not establish that visibility "
+                    "caused any recorded contact in this session."
+                ),
+                "recommended_action": (
+                    "Review the linked clips, then widen the exposure and confirm a "
+                    "clear view of the burr tip and contact point before drilling deeper."
+                    if screening_only
+                    else "Widen the exposure and confirm a clear view of the burr tip and "
+                    "contact point before drilling deeper."
+                ),
+                "evidence_summary": (
+                    "The recorded view and simulator anatomy support reviewing these locations."
+                ),
+                "technical_facts": {
+                    "selection_rule": example.get("selection_rule"),
+                    "candidate_episode_count": (under_ledge_screening.get("counts") or {}).get(
+                        "candidate_episode_count"
+                    ),
+                    "high_support_candidate_episode_count": len(exposure_segments),
+                    "candidate_total_duration_s": round(total_duration_s, 3),
+                    "review_clip_count": len(review_clips),
+                    "review_clip_merge_gap_s": review_clip_gap_s,
+                    "screening_only": screening_only,
+                },
+                "t_start_s": float(example["t_start_s"]),
+                "t_end_s": float(example["t_end_s"]),
+                "phase": "multiple phases",
+                "anatomy": None,
+                "evidence_status": "automatic_geometric_screening_candidate",
+                "source_type": "under_ledge_ray_v3",
+                "source_ids": [str(row["episode_id"]) for row in exposure_segments],
+                "evidence_segments": exposure_segments,
+                "review_clips": review_clips,
+                "claim_boundary": (
+                    "These locations are prompts for visual review. They do not "
+                    "establish that visibility caused an error."
+                ),
+            }
+        )
 
     order = {"high": 0, "medium": 1, "low": 2}
     predicted_phases = any(
@@ -445,4 +503,3 @@ def build_session_coaching_plan(
             ),
         ),
     }
-

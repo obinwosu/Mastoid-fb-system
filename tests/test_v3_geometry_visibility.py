@@ -1,4 +1,5 @@
 """V3 source-unit checks and explicit missing-camera visibility behavior."""
+
 from __future__ import annotations
 
 import hashlib
@@ -26,20 +27,25 @@ def v3_fixture(tmp_path):
     poses[:, 2] = 1
     poses[:, 6] = 1
     volume = poses.copy()
-    volume[:, :3] = [-6*.049202688, 0, 0]
+    volume[:, :3] = [-6 * 0.049202688, 0, 0]
     images = np.full((3, 32, 32, 3), 220, dtype=np.uint8)
     images[:, 13:19, 13:19] = 0
     camera = np.zeros((4, 7))
     camera[:, 6] = 1
     with h5py.File(path, "w") as h:
-        h["vision_data/continuous_data/time"] = [0., 1., 2.]
+        h["vision_data/continuous_data/time"] = [0.0, 1.0, 2.0]
         h["vision_data/continuous_data/l_img"] = images
-        h["vision_data/continuous_data/depth"] = np.ones((3,32,32))
+        h["vision_data/continuous_data/depth"] = np.ones((3, 32, 32))
         h["vision_data/continuous_data/pose_mastoidectomy_drill"] = poses
         h["vision_data/continuous_data/pose_mastoidectomy_volume"] = volume
-        h["physics_data/continuous_data/high_frequency_poses/main_camera_pose/time_stamp"] = [0., .1, 1.9, 2.]
+        h["physics_data/continuous_data/high_frequency_poses/main_camera_pose/time_stamp"] = [
+            0.0,
+            0.1,
+            1.9,
+            2.0,
+        ]
         h["physics_data/continuous_data/high_frequency_poses/main_camera_pose/pose"] = camera
-        h["physics_data/intermittent_data/voxels_removed/voxel_time_stamp"] = [0.]
+        h["physics_data/intermittent_data/voxels_removed/voxel_time_stamp"] = [0.0]
         h["physics_data/intermittent_data/voxels_removed/voxel_removed"] = [[0, 2, 2, 2]]
         h["metadata_v3/README"] = (
             "All position information is in meters unless specified otherwise. "
@@ -47,20 +53,35 @@ def v3_fixture(tmp_path):
             "Poses are defined to be T_world_obj. Depth in CV convention "
             "(corrected by extrinsic, T_cv_ambf)."
         )
-        h["metadata_v3/voxel_volume"] = .009
+        h["metadata_v3/voxel_volume"] = 0.009
         h["metadata_v3/voxel_volume"].attrs["units"] = "mm^3, millimeters cubed"
-        h["metadata_v3/camera_intrinsic"] = [[20,0,16],[0,20,16],[0,0,1]]
+        h["metadata_v3/camera_intrinsic"] = [[20, 0, 16], [0, 20, 16], [0, 0, 1]]
         h["metadata_v3/camera_extrinsic"] = np.eye(4)
     adf = tmp_path / "generated.yaml"
-    adf.write_text("volumes: [volume]\nvolume:\n  location:\n    position: {x: -6, y: 0, z: 0}\n    orientation: {r: 0, p: 0, y: 0}\n")
-    profile = {"adf_profile": str(adf), "phase_signal_geometry": {
-        "schema": "r4_anatomy_model_geometry_v1",
-        "recorder_scale_m_per_simulator_unit": .049202688, "edt_distance_scale_mm": .2,
-    }}
-    frames = [{"source_hdf5": path.name, "source_frame_idx": i,
-               **{f"volume_{a}": float(value) for a,value in zip("xyz", volume[i,:3])},
-               **{f"volume_q{a}": float(value) for a,value in zip("xyzw", volume[i,3:])}}
-              for i in range(3)]
+    adf.write_text(
+        "volumes: [volume]\nvolume:\n  location:\n    position: {x: -6, y: 0, z: 0}\n"
+        "    orientation: {r: 0, p: 0, y: 0}\n"
+    )
+    profile = {
+        "adf_profile": str(adf),
+        "phase_signal_geometry": {
+            "schema": "r4_anatomy_model_geometry_v1",
+            "recorder_scale_m_per_simulator_unit": 0.049202688,
+            "edt_distance_scale_mm": 0.2,
+        },
+    }
+    frames = [
+        {
+            "source_hdf5": path.name,
+            "source_frame_idx": i,
+            **{f"volume_{a}": float(value) for a, value in zip("xyz", volume[i, :3], strict=False)},
+            **{
+                f"volume_q{a}": float(value)
+                for a, value in zip("xyzw", volume[i, 3:], strict=False)
+            },
+        }
+        for i in range(3)
+    ]
     return raw, path, profile, frames
 
 
@@ -69,7 +90,7 @@ def test_v3_volume_source_guard_preserves_native_volume_and_unverified_registrat
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     receipt = validate_v3_volume_contract(frames, profile, raw_run_dir=raw)
     assert receipt["status"] == "volume_source_contract_matched"
-    assert receipt["native_voxel_volume_mm3"] == .009
+    assert receipt["native_voxel_volume_mm3"] == 0.009
     assert receipt["native_volume_divided_by_edt_spacing_cubed"] == pytest.approx(1.125)
     assert receipt["recording_geometry_verified"] is False
     assert receipt["camera_tool_registration_status"] == "not_validated_by_volume_contract"
@@ -80,11 +101,11 @@ def test_v3_volume_source_guard_preserves_native_volume_and_unverified_registrat
 def test_v3_volume_source_guard_rejects_changed_unit_or_pose_contract(v3_fixture, attack):
     raw, path, profile, frames = v3_fixture
     if attack == "position":
-        frames[1]["volume_x"] += .001
+        frames[1]["volume_x"] += 0.001
     elif attack == "quaternion":
         frames[1].update(volume_qx=1, volume_qw=0)
     elif attack == "scale":
-        profile["phase_signal_geometry"]["recorder_scale_m_per_simulator_unit"] = .02
+        profile["phase_signal_geometry"]["recorder_scale_m_per_simulator_unit"] = 0.02
     else:
         with h5py.File(path, "r+") as h:
             if attack == "README":

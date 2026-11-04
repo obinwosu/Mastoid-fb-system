@@ -7,23 +7,23 @@ with detecting these events.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
 import math
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import median
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
-from ..frame_pipeline.strokes import StrokeBuild
 from ..frame_pipeline.edt_enrichment import (
     SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM,
     SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME,
     SAFETY_COACHING_VOLUME_MIN_EDT_MM,
 )
+from ..frame_pipeline.strokes import StrokeBuild
 from ..models import EvidenceEvent, EvidenceStatus
 from ..registry import RunRecord
-
 
 RULE_VERSION = "event_rules_v1_canonical_phase"
 OVERSHOOT_GAP_S = 10.0
@@ -98,7 +98,10 @@ def phase_interval_at(
 
 
 def phase_id_for(
-    t_s: float, phases: Sequence[Mapping[str, Any]], *, name: str | None = None,
+    t_s: float,
+    phases: Sequence[Mapping[str, Any]],
+    *,
+    name: str | None = None,
     explicit_id: Any = None,
 ) -> str | None:
     """Prefer a recorded interval identity and reject dangling references."""
@@ -125,7 +128,9 @@ def _chunks(
     for key in sorted(groups, key=lambda item: tuple(str(value) for value in item)):
         current: list[dict[str, Any]] = []
         previous: float | None = None
-        for row in sorted(groups[key], key=lambda item: (item["t_video_s"], item["frame_idx_global"])):
+        for row in sorted(
+            groups[key], key=lambda item: (item["t_video_s"], item["frame_idx_global"])
+        ):
             now = float(row["t_video_s"])
             if current and previous is not None and now - previous > gap_s:
                 result.append(current)
@@ -163,8 +168,11 @@ def _frame_event(
         anatomy=anatomy,
         attributes={
             **dict(attributes or {}),
-            **{key: chunk[0][key] for key in ("phase_id", "phase_source", "model_phase")
-               if key in chunk[0]},
+            **{
+                key: chunk[0][key]
+                for key in ("phase_id", "phase_source", "model_phase")
+                if key in chunk[0]
+            },
         },
     )
 
@@ -182,8 +190,7 @@ def _overshoot_attributes(
     distances = [_finite(row.get(distance_column)) for row in chunk]
     distances = [value for value in distances if value is not None]
     coaching_rows = [
-        row for row in chunk
-        if anatomy in _split(row.get("voxel_safety_signal_structures"))
+        row for row in chunk if anatomy in _split(row.get("voxel_safety_signal_structures"))
     ]
     coaching_chunks = _chunks(
         coaching_rows,
@@ -193,21 +200,14 @@ def _overshoot_attributes(
     count_column = f"voxel_inside_{anatomy}_count"
     coaching_segments = []
     for segment_index, segment in enumerate(coaching_chunks, 1):
-        segment_distances = [
-            _finite(row.get(distance_column)) for row in segment
-        ]
-        segment_distances = [
-            value for value in segment_distances if value is not None
-        ]
+        segment_distances = [_finite(row.get(distance_column)) for row in segment]
+        segment_distances = [value for value in segment_distances if value is not None]
+
         def strength(row: Mapping[str, Any]) -> tuple[float, float, float]:
             inside_count = int(row.get(count_column) or 0)
             edt = _finite(row.get(distance_column))
-            depth_ratio = max(0.0, -(edt or 0.0)) / abs(
-                SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
-            )
-            volume_ratio = (
-                inside_count / SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
-            )
+            depth_ratio = max(0.0, -(edt or 0.0)) / abs(SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM)
+            volume_ratio = inside_count / SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
             return max(depth_ratio, volume_ratio), volume_ratio, depth_ratio
 
         anchor = max(segment, key=strength)
@@ -219,36 +219,37 @@ def _overshoot_attributes(
             and anchor_edt <= SAFETY_COACHING_VOLUME_MIN_EDT_MM
         )
         depth_triggered = (
-            anchor_edt is not None
-            and anchor_edt < SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
+            anchor_edt is not None and anchor_edt < SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
         )
         trigger_branch = (
-            "deep_and_volume" if depth_triggered and volume_triggered else
-            "deep" if depth_triggered else "volume_with_penetration"
+            "deep_and_volume"
+            if depth_triggered and volume_triggered
+            else "deep"
+            if depth_triggered
+            else "volume_with_penetration"
         )
-        coaching_segments.append({
-            "segment_id": (
-                f"{record.global_run_id}:safety_segment:"
-                f"{counter:04d}:{segment_index:02d}"
-            ),
-            "t_start_s": min(float(row["t_video_s"]) for row in segment),
-            "t_end_s": max(float(row["t_video_s"]) for row in segment),
-            "phase": segment[0].get("phase"),
-            "anatomy": anatomy,
-            "source_frame_count": len({
-                int(row["frame_idx_global"]) for row in segment
-            }),
-            "max_inside_voxel_count_per_frame": max(
-                int(row.get(count_column) or 0) for row in segment
-            ),
-            "min_edt_mm": min(segment_distances) if segment_distances else None,
-            "anchor_t_s": float(anchor["t_video_s"]),
-            "anchor_frame_idx_global": int(anchor["frame_idx_global"]),
-            "anchor_inside_voxel_count": anchor_count,
-            "anchor_min_edt_mm": anchor_edt,
-            "trigger_branch": trigger_branch,
-            "strength_score": round(strength(anchor)[0], 4),
-        })
+        coaching_segments.append(
+            {
+                "segment_id": (
+                    f"{record.global_run_id}:safety_segment:{counter:04d}:{segment_index:02d}"
+                ),
+                "t_start_s": min(float(row["t_video_s"]) for row in segment),
+                "t_end_s": max(float(row["t_video_s"]) for row in segment),
+                "phase": segment[0].get("phase"),
+                "anatomy": anatomy,
+                "source_frame_count": len({int(row["frame_idx_global"]) for row in segment}),
+                "max_inside_voxel_count_per_frame": max(
+                    int(row.get(count_column) or 0) for row in segment
+                ),
+                "min_edt_mm": min(segment_distances) if segment_distances else None,
+                "anchor_t_s": float(anchor["t_video_s"]),
+                "anchor_frame_idx_global": int(anchor["frame_idx_global"]),
+                "anchor_inside_voxel_count": anchor_count,
+                "anchor_min_edt_mm": anchor_edt,
+                "trigger_branch": trigger_branch,
+                "strength_score": round(strength(anchor)[0], 4),
+            }
+        )
     return {
         "label": "voxel_edt_le_zero",
         "n_source_frames": len({row["frame_idx_global"] for row in chunk}),
@@ -257,9 +258,7 @@ def _overshoot_attributes(
         "removed_voxels_sum": sum(int(row["frame_removed_voxels"]) for row in chunk),
         "min_edt_mm": min(distances) if distances else None,
         "coaching_eligible": bool(coaching_segments),
-        "coaching_source_frame_count": len({
-            int(row["frame_idx_global"]) for row in coaching_rows
-        }),
+        "coaching_source_frame_count": len({int(row["frame_idx_global"]) for row in coaching_rows}),
         "coaching_segments": coaching_segments,
         "coaching_gate": {
             "logic": "volume_and_minimum_penetration_or_deep_single_voxel",
@@ -275,7 +274,9 @@ def _overshoot_attributes(
     }
 
 
-def _build_overshoot_events(frames: Sequence[Mapping[str, Any]], record: RunRecord) -> list[EvidenceEvent]:
+def _build_overshoot_events(
+    frames: Sequence[Mapping[str, Any]], record: RunRecord
+) -> list[EvidenceEvent]:
     observations: list[dict[str, Any]] = []
     for frame in frames:
         if not bool(frame.get("voxel_overshoot")):
@@ -308,7 +309,9 @@ def _build_overshoot_events(frames: Sequence[Mapping[str, Any]], record: RunReco
     return events
 
 
-def _build_boundary_events(frames: Sequence[Mapping[str, Any]], record: RunRecord) -> list[EvidenceEvent]:
+def _build_boundary_events(
+    frames: Sequence[Mapping[str, Any]], record: RunRecord
+) -> list[EvidenceEvent]:
     observations: list[dict[str, Any]] = []
     for frame in frames:
         if int(frame.get("frame_removed_voxels") or 0) <= 0:
@@ -358,22 +361,34 @@ def _build_boundary_events(frames: Sequence[Mapping[str, Any]], record: RunRecor
     return events
 
 
-def _build_visibility_events(frames: Sequence[Mapping[str, Any]], record: RunRecord) -> list[EvidenceEvent]:
+def _build_visibility_events(
+    frames: Sequence[Mapping[str, Any]], record: RunRecord
+) -> list[EvidenceEvent]:
     definitions = (
         (
             "under_ledge_candidate",
-            [dict(row) for row in frames if str(row.get("under_ledge") or "none") in {"mild", "clear"}],
+            [
+                dict(row)
+                for row in frames
+                if str(row.get("under_ledge") or "none") in {"mild", "clear"}
+            ],
             ("phase",),
         ),
         (
             "tip_occlusion",
-            [dict(row) for row in frames if str(row.get("tip_visibility") or "") in OCCLUSION_STATES],
+            [
+                dict(row)
+                for row in frames
+                if str(row.get("tip_visibility") or "") in OCCLUSION_STATES
+            ],
             ("phase", "tip_visibility"),
         ),
     )
     events: list[EvidenceEvent] = []
     for event_type, observations, keys in definitions:
-        for counter, chunk in enumerate(_chunks(observations, key_fields=keys, gap_s=VISIBILITY_GAP_S), 1):
+        for counter, chunk in enumerate(
+            _chunks(observations, key_fields=keys, gap_s=VISIBILITY_GAP_S), 1
+        ):
             attributes: dict[str, Any] = {
                 "n_source_frames": len({row["frame_idx_global"] for row in chunk}),
                 "source_frame_start": min(int(row["frame_idx_global"]) for row in chunk),
@@ -432,7 +447,9 @@ def _build_performance_bouts(
         start = float(row["start_time_video"])
         phase = str(row.get("phase_id") or row["phase"])
         gap = start - previous_end if previous_end is not None else None
-        if current and (phase != previous_phase or (gap is not None and gap > PERFORMANCE_BOUT_GAP_S)):
+        if current and (
+            phase != previous_phase or (gap is not None and gap > PERFORMANCE_BOUT_GAP_S)
+        ):
             chunks.append(current)
             current = []
         current.append(row)
@@ -467,11 +484,19 @@ def _build_performance_bouts(
                     "label": "descriptive_metrics_only",
                     "n_source_strokes": len(chunk),
                     "active_stroke_time_s": active_time,
-                    "stroke_rate_per_active_s": len(chunk) / active_time if active_time > 0 else None,
-                    "removed_voxels_per_active_s": removed / active_time if active_time > 0 else None,
-                    "stroke_velocity_median": _summary(row.get("legacy_velocity_m_s") for row in chunk),
+                    "stroke_rate_per_active_s": len(chunk) / active_time
+                    if active_time > 0
+                    else None,
+                    "removed_voxels_per_active_s": removed / active_time
+                    if active_time > 0
+                    else None,
+                    "stroke_velocity_median": _summary(
+                        row.get("legacy_velocity_m_s") for row in chunk
+                    ),
                     "stroke_jerk_median": _summary(row.get("legacy_jerk") for row in chunk),
-                    "stroke_curvature_median": _summary(row.get("legacy_curvature") for row in chunk),
+                    "stroke_curvature_median": _summary(
+                        row.get("legacy_curvature") for row in chunk
+                    ),
                     "efficiency_judgment": "not_calibrated",
                     "claim_scope": "descriptive_motion_productivity_evidence",
                 },
@@ -480,14 +505,17 @@ def _build_performance_bouts(
     return events
 
 
-def _build_motion_contexts(events: Sequence[EvidenceEvent], strokes: StrokeBuild) -> list[dict[str, Any]]:
+def _build_motion_contexts(
+    events: Sequence[EvidenceEvent], strokes: StrokeBuild
+) -> list[dict[str, Any]]:
     metric_lookup = _metric_by_stroke(strokes)
     contexts = []
     for event in events:
         if event.event_type not in {"simulator_overshoot", "boundary_work"}:
             continue
         overlapping = [
-            row for row in strokes.strokes
+            row
+            for row in strokes.strokes
             if float(row["start_time_video"]) <= event.t_end_s
             and float(row["end_time_video"]) >= event.t_start_s
         ]
@@ -505,7 +533,9 @@ def _build_motion_contexts(events: Sequence[EvidenceEvent], strokes: StrokeBuild
                 "t_end_s": event.t_end_s,
                 "n_source_strokes": len(overlapping),
                 "source_evidence_ids": [str(row["stroke_evidence_id"]) for row in overlapping],
-                "stroke_velocity_median": _summary(row.get("legacy_velocity_m_s") for row in values),
+                "stroke_velocity_median": _summary(
+                    row.get("legacy_velocity_m_s") for row in values
+                ),
                 "stroke_jerk_median": _summary(row.get("legacy_jerk") for row in values),
                 "stroke_curvature_median": _summary(row.get("legacy_curvature") for row in values),
                 "role": "post_hoc_motion_context",
@@ -527,7 +557,9 @@ def build_events(
     for source_row in strokes.frames:
         row = dict(source_row)
         row["phase_id"] = phase_id_for(
-            float(row["t_video_s"]), phases, name=str(row["phase"]),
+            float(row["t_video_s"]),
+            phases,
+            name=str(row["phase"]),
             explicit_id=row.get("phase_id"),
         )
         frames.append(row)
@@ -543,13 +575,14 @@ def build_events(
     for event in events:
         counts[event.event_type] = counts.get(event.event_type, 0) + 1
     coaching_safety_events = [
-        event for event in events
+        event
+        for event in events
         if event.event_type == "simulator_overshoot"
         and bool(event.attributes.get("coaching_eligible"))
     ]
     manifest = {
         "schema": "deterministic_event_build_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
         "global_run_id": record.global_run_id,
@@ -558,8 +591,7 @@ def build_events(
         "motion_context_count": len(contexts),
         "safety_coaching_eligible_event_count": len(coaching_safety_events),
         "safety_coaching_segment_count": sum(
-            len(event.attributes.get("coaching_segments") or [])
-            for event in coaching_safety_events
+            len(event.attributes.get("coaching_segments") or []) for event in coaching_safety_events
         ),
         "construction_disclosure": {
             "issue_detection": "deterministic_rules",
@@ -573,12 +605,8 @@ def build_events(
             "safety_coaching_min_inside_voxels_per_structure_per_frame": (
                 SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
             ),
-            "safety_coaching_volume_branch_max_edt_mm": (
-                SAFETY_COACHING_VOLUME_MIN_EDT_MM
-            ),
-            "safety_coaching_deep_edt_threshold_mm": (
-                SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
-            ),
+            "safety_coaching_volume_branch_max_edt_mm": (SAFETY_COACHING_VOLUME_MIN_EDT_MM),
+            "safety_coaching_deep_edt_threshold_mm": (SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM),
             "safety_coaching_segment_gap_s": SAFETY_COACHING_SEGMENT_GAP_S,
             "boundary_near_mm": BOUNDARY_NEAR_MM,
             "boundary_gap_s": BOUNDARY_GAP_S,
@@ -622,4 +650,3 @@ def write_event_build(output_dir: Path, build: EventBuild) -> None:
     (output_dir / "event_manifest.json").write_text(
         json.dumps(build.manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-

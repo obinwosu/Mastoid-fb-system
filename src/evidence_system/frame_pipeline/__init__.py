@@ -12,6 +12,12 @@ from .edt_enrichment import (
     enrich_removed_voxels_with_edt,
     write_edt_build,
 )
+from .strokes import (
+    StrokeBuild,
+    build_strokes,
+    compare_legacy_strokes,
+    write_stroke_build,
+)
 from .tip_edt import (
     TipEdtBuild,
     compare_legacy_tip_edt,
@@ -23,12 +29,6 @@ from .visibility import (
     compare_legacy_visibility,
     enrich_visibility,
     write_visibility_build,
-)
-from .strokes import (
-    StrokeBuild,
-    build_strokes,
-    compare_legacy_strokes,
-    write_stroke_build,
 )
 
 __all__ = [
@@ -53,4 +53,3 @@ __all__ = [
     "compare_legacy_strokes",
     "write_stroke_build",
 ]
-

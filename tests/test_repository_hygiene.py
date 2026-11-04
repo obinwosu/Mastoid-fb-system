@@ -2,22 +2,41 @@
 
 from __future__ import annotations
 
-import re
 import hashlib
+import re
 import subprocess
 import unittest
 from pathlib import Path, PurePosixPath
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
-# Explicit user authorization (2026-11-04): carry these frozen references with
-# the project for migration. No other real data or changed bytes are exempt.
-AUTHORIZED_REFERENCE_HASHES = {
-    "references/r4_motion_windows_v2.json": "5291f70328806f5899c21bc6bf61e9c509c70d98069c99502df405c94c3664b9",
-    "references/r4_motion_windows_v3.json": "16dea829688b5eecdfe66698cf3c60e41386bc463070a3587952dd2132a7f071",
-    "references/r4_motion_windows_v4.json": "14f68ad459bad32d56fd48ad1a8da6cb05d4d72e47db1855bd16b5a0158e880b",
-    "references/r4_motion_windows_v6.json": "1377c2badee4a11bce18319cb0c2c5a01d0c35b6d2ff2d24c39255e7e1e589f2",
+# Explicit user authorization (2026-11-04): carry these frozen runtime resources
+# with the project for migration. No other data or changed bytes are exempt.
+AUTHORIZED_RESOURCE_HASHES = {
+    "references/r4_motion_windows_v2.json": (
+        "5291f70328806f5899c21bc6bf61e9c509c70d98069c99502df405c94c3664b9"
+    ),
+    "references/r4_motion_windows_v3.json": (
+        "16dea829688b5eecdfe66698cf3c60e41386bc463070a3587952dd2132a7f071"
+    ),
+    "references/r4_motion_windows_v4.json": (
+        "14f68ad459bad32d56fd48ad1a8da6cb05d4d72e47db1855bd16b5a0158e880b"
+    ),
+    "references/r4_motion_windows_v6.json": (
+        "1377c2badee4a11bce18319cb0c2c5a01d0c35b6d2ff2d24c39255e7e1e589f2"
+    ),
+    "references/geometry_corrections_v3.csv": (
+        "eb635245a9c1b2f7dc4df007a59ba3f8958a75ba08a0826765444947e8c2e080"
+    ),
+    "models/e71_full_recording_holdout/model.pt": (
+        "501f8d264bd74952e637e29ba9a86d18eff9561bfc14ac84059c3f618972e6cf"
+    ),
+    "models/e71_full_recording_holdout/manifest.json": (
+        "9c25d07d7f862e7975ac296d66b1b2bf83577453aaf59b70867dd3256c0b661e"
+    ),
+    "models/e71_full_recording_holdout/neural_preprocessing.json": (
+        "812bbc0d55eb2b75365df20e9f13d3b306daf3b37e1c496e513bf7d8f5aeee0b"
+    ),
 }
 
 FORBIDDEN_FILE_SUFFIXES = (
@@ -51,9 +70,7 @@ FORBIDDEN_FILE_SUFFIXES = (
 WINDOWS_ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+)"
 )
-POSIX_USER_ABSOLUTE_PATH = re.compile(
-    r"(?<![A-Za-z0-9])/(?:Users|home|mnt|Volumes)/[^\s\"']+"
-)
+POSIX_USER_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9])/(?:Users|home|mnt|Volumes)/[^\s\"']+")
 CODED_PARTICIPANT_TRIAL_ID = re.compile(
     r"(?<![A-Za-z0-9.])P[0-9]{2}(?:_T[0-9]{2})?\b", re.IGNORECASE
 )
@@ -73,8 +90,7 @@ def repository_candidates() -> list[Path]:
         ],
         cwd=REPOSITORY_ROOT,
         check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if result.returncode != 0:
         raise AssertionError(
@@ -84,9 +100,7 @@ def repository_candidates() -> list[Path]:
 
     relative_paths = result.stdout.decode("utf-8").split("\0")
     return [
-        REPOSITORY_ROOT.joinpath(*PurePosixPath(value).parts)
-        for value in relative_paths
-        if value
+        REPOSITORY_ROOT.joinpath(*PurePosixPath(value).parts) for value in relative_paths if value
     ]
 
 
@@ -129,9 +143,14 @@ class RepositoryHygieneTests(unittest.TestCase):
                 continue
             if not path.is_file():
                 continue
-            if relative in AUTHORIZED_REFERENCE_HASHES:
-                if hashlib.sha256(path.read_bytes()).hexdigest() != AUTHORIZED_REFERENCE_HASHES[relative]:
-                    problems.append(f"{relative}: frozen reference differs from its authorized digest")
+            if relative in AUTHORIZED_RESOURCE_HASHES:
+                if (
+                    hashlib.sha256(path.read_bytes()).hexdigest()
+                    != AUTHORIZED_RESOURCE_HASHES[relative]
+                ):
+                    problems.append(
+                        f"{relative}: frozen resource differs from its authorized digest"
+                    )
                 continue
             if any(lower_name.endswith(suffix) for suffix in FORBIDDEN_FILE_SUFFIXES):
                 problems.append(f"{relative}: forbidden binary/data extension")
@@ -157,9 +176,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             ):
                 match = pattern.search(text)
                 if match:
-                    problems.append(
-                        f"{relative}:{line_number(text, match.start())}: {label}"
-                    )
+                    problems.append(f"{relative}:{line_number(text, match.start())}: {label}")
 
         self.assertFalse(
             problems,

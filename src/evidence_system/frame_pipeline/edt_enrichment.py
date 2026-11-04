@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 import math
 import os
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
-from .core_frames import CoreFrameBuild, _git_commit, _require_numeric_stack
 from ..registry import RunRecord
 from ..source_config import ResolvedRunSources
-
+from .core_frames import CoreFrameBuild, _git_commit, _require_numeric_stack
 
 SENSITIVE_STRUCTURES = {
     "Bony_Labyrinth": "BonyLabyrinth",
@@ -39,22 +39,16 @@ SAFETY_COACHING_VOLUME_MIN_EDT_MM = -0.1
 SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM = -1.0
 
 
-def passes_safety_coaching_gate(
-    inside_voxel_count: int, min_edt_mm: float | None
-) -> bool:
+def passes_safety_coaching_gate(inside_voxel_count: int, min_edt_mm: float | None) -> bool:
     """Return whether one structure/frame passes the provisional coaching gate."""
 
     if min_edt_mm is None or not math.isfinite(float(min_edt_mm)):
         return False
     minimum = float(min_edt_mm)
     return (
-        (
-            int(inside_voxel_count)
-            >= SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
-            and minimum <= SAFETY_COACHING_VOLUME_MIN_EDT_MM
-        )
-        or minimum < SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
-    )
+        int(inside_voxel_count) >= SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
+        and minimum <= SAFETY_COACHING_VOLUME_MIN_EDT_MM
+    ) or minimum < SAFETY_COACHING_DEEP_EDT_THRESHOLD_MM
 
 
 @dataclass
@@ -92,6 +86,7 @@ def load_anatomy_profile(project_root: Path, anatomy_key: str) -> dict[str, Any]
 def read_edt_file(path: Path) -> tuple[Any, tuple[int, int, int]]:
     _, np = _require_numeric_stack()
     with path.open("rb") as handle:
+
         def next_token() -> str:
             char = handle.read(1)
             while char and char in b" \t\r\n":
@@ -150,7 +145,8 @@ def enrich_removed_voxels_with_edt(
 ) -> EdtFrameBuild:
     _, np = _require_numeric_stack()
     profile = (
-        anatomy_profile if anatomy_profile is not None
+        anatomy_profile
+        if anatomy_profile is not None
         else load_anatomy_profile(project_root, record.anatomy_key)
     )
     if profile["edt_profile"] != record.edt_profile:
@@ -186,9 +182,7 @@ def enrich_removed_voxels_with_edt(
     for short_name, item in grids.items():
         grid, resolution = read_edt_file(item["path"])
         if resolution != first_resolution:
-            raise ValueError(
-                f"EDT resolution mismatch in {item['path'].name}: {resolution}"
-            )
+            raise ValueError(f"EDT resolution mismatch in {item['path'].name}: {resolution}")
         raw = np.full(len(x), np.nan, dtype=np.float32)
         raw[in_bounds] = grid[z[in_bounds], y[in_bounds], x[in_bounds]]
         del grid
@@ -261,7 +255,7 @@ def enrich_removed_voxels_with_edt(
     safety_signal_frames = sum(bool(row["voxel_safety_signal"]) for row in frame_rows)
     manifest = {
         "schema": "voxel_edt_enrichment_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "git_commit": _git_commit(project_root),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
@@ -284,9 +278,7 @@ def enrich_removed_voxels_with_edt(
         "voxel_overshoot_frame_count": overshoot_frames,
         "voxel_safety_signal_frame_count": safety_signal_frames,
         "safety_coaching_gate": {
-            "logic": (
-                "volume_and_minimum_penetration_or_deep_single_voxel"
-            ),
+            "logic": ("volume_and_minimum_penetration_or_deep_single_voxel"),
             "min_inside_voxels_per_structure_per_frame": (
                 SAFETY_COACHING_MIN_INSIDE_VOXELS_PER_FRAME
             ),
@@ -334,7 +326,7 @@ def compare_legacy_voxel_edt(build: EdtFrameBuild, legacy_path: Path) -> dict[st
             return None
         return result if math.isfinite(result) else None
 
-    for new, old in zip(build.frames, legacy):
+    for new, old in zip(build.frames, legacy, strict=False):
         for column in columns:
             new_value = numeric_or_none(new.get(column))
             old_value = numeric_or_none(old.get(column))
@@ -348,9 +340,7 @@ def compare_legacy_voxel_edt(build: EdtFrameBuild, legacy_path: Path) -> dict[st
                 if error > 1e-9:
                     mismatches[column] += 1
                     differing_frames.add(int(new["frame_idx_global"]))
-        old_bool = str(old.get("voxel_overshoot", "")).strip().lower() in {
-            "1", "true", "t", "yes"
-        }
+        old_bool = str(old.get("voxel_overshoot", "")).strip().lower() in {"1", "true", "t", "yes"}
         if old_bool != bool(new["voxel_overshoot"]):
             mismatches["voxel_overshoot"] += 1
             differing_frames.add(int(new["frame_idx_global"]))
@@ -360,8 +350,7 @@ def compare_legacy_voxel_edt(build: EdtFrameBuild, legacy_path: Path) -> dict[st
             mismatches["voxel_overshoot_structures"] += 1
             differing_frames.add(int(new["frame_idx_global"]))
     overshoot_exact = (
-        mismatches["voxel_overshoot"] == 0
-        and mismatches["voxel_overshoot_structures"] == 0
+        mismatches["voxel_overshoot"] == 0 and mismatches["voxel_overshoot_structures"] == 0
     )
     return {
         "available": True,
@@ -400,9 +389,23 @@ def _write_csv(
 def write_edt_build(output_dir: Path, build: EdtFrameBuild, regression: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "frame_observations_edt.csv", build.frames)
-    _write_csv(output_dir / "removed_voxel_edt.csv", build.removed_voxels,
-               empty_fields=("removed_voxel_id", "global_run_id", "frame_idx_global", "t_abs",
-                             "t_video_s", "x", "y", "z", "edt_x", "edt_y", "edt_z"))
+    _write_csv(
+        output_dir / "removed_voxel_edt.csv",
+        build.removed_voxels,
+        empty_fields=(
+            "removed_voxel_id",
+            "global_run_id",
+            "frame_idx_global",
+            "t_abs",
+            "t_video_s",
+            "x",
+            "y",
+            "z",
+            "edt_x",
+            "edt_y",
+            "edt_z",
+        ),
+    )
     (output_dir / "edt_manifest.json").write_text(
         json.dumps(build.manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -417,12 +420,14 @@ def write_edt_build(output_dir: Path, build: EdtFrameBuild, regression: dict[str
         f"- Out-of-bounds removed voxels: {build.manifest['removed_voxels_out_of_bounds']}",
         f"- Simulator overshoot frames: {build.manifest['voxel_overshoot_frame_count']}",
         f"- Safety-coaching qualified frames: {build.manifest['voxel_safety_signal_frame_count']}",
-        f"- Ready for visibility enrichment: **{build.manifest['ready_for_visibility_enrichment']}**",
+        "- Ready for visibility enrichment: "
+        f"**{build.manifest['ready_for_visibility_enrichment']}**",
         "",
         "## Validation-only legacy comparison",
         "",
         f"- Exact distance parity: **{regression.get('all_match')}**",
-        f"- Overshoot labels and structures exact: **{regression.get('overshoot_semantics_exact')}**",
+        "- Overshoot labels and structures exact: "
+        f"**{regression.get('overshoot_semantics_exact')}**",
         f"- Frames with any EDT-distance difference: {regression.get('differing_frame_count')}",
         f"- Differing frame indices: {regression.get('differing_frame_indices')}",
         "",
@@ -430,6 +435,4 @@ def write_edt_build(output_dir: Path, build: EdtFrameBuild, regression: dict[str
         "",
         "The legacy EDT table is a regression target, not an enrichment input.",
     ]
-    (output_dir / "VOXEL_EDT_AUDIT.md").write_text(
-        "\n".join(lines) + "\n", encoding="utf-8"
-    )
+    (output_dir / "VOXEL_EDT_AUDIT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

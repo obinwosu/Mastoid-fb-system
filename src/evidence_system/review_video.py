@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .hdf5_clock import SOURCE, read_hdf5_frame_inventory, validate_generated_alignment
 from .hdf5_reader import RecordingReader
@@ -36,8 +37,10 @@ def _require_video_dependencies() -> tuple[Any, Any, Any]:
 
 def _index_source_frames(raw_run_dir: Path) -> list[FrameReference]:
     rows, _ = read_hdf5_frame_inventory(raw_run_dir)
-    return [FrameReference(row["t_abs"], raw_run_dir / row["source_hdf5"], row["source_frame_idx"])
-            for row in rows]
+    return [
+        FrameReference(row["t_abs"], raw_run_dir / row["source_hdf5"], row["source_frame_idx"])
+        for row in rows
+    ]
 
 
 def _nearest_source_indices(source_times: Any, target_times: Any, np: Any) -> Any:
@@ -74,27 +77,47 @@ def build_review_video(
     source_times_abs = np.asarray([row.timestamp_s for row in references], dtype=float)
     zero_time = float(source_times_abs[0])
     source_times = (
-        source_times_abs - zero_time if frame_times_video is None
+        source_times_abs - zero_time
+        if frame_times_video is None
         else np.asarray(frame_times_video, dtype=float)
     )
     if (clock_manifest or {}).get("source") == SOURCE:
         clock = dict(clock_manifest or {})
         if frame_times_video is None or not clock.get("native_correspondence_verified"):
-            raise ValueError("Generated native review-video clock needs verified aligned frame times")
+            raise ValueError(
+                "Generated native review-video clock needs verified aligned frame times"
+            )
         checked = validate_generated_alignment(
             clock["path"],
-            [{"source_hdf5": row.source_path.name, "source_frame_idx": row.source_index,
-              "t_abs": row.timestamp_s} for row in references],
+            [
+                {
+                    "source_hdf5": row.source_path.name,
+                    "source_frame_idx": row.source_index,
+                    "t_abs": row.timestamp_s,
+                }
+                for row in references
+            ],
             sources.raw_run_dir,
         )
-        if (float(fps) != checked["fps"] or clock.get("duration_s") != checked["duration_s"]
-                or clock.get("generated_manifest_sha256") != checked["generated_manifest_sha256"]
-                or not np.array_equal(source_times, source_times_abs - zero_time)):
-            raise ValueError("Generated native review-video clock or fps differs from its source receipt")
-    if (source_times.shape != source_times_abs.shape
-            or not np.isfinite(source_times).all() or not np.isfinite(source_times_abs).all()
-            or np.any(np.diff(source_times) < 0) or np.any(source_times < 0)):
-        raise ValueError("Review-video clock must provide one finite nondecreasing time per native frame")
+        if (
+            float(fps) != checked["fps"]
+            or clock.get("duration_s") != checked["duration_s"]
+            or clock.get("generated_manifest_sha256") != checked["generated_manifest_sha256"]
+            or not np.array_equal(source_times, source_times_abs - zero_time)
+        ):
+            raise ValueError(
+                "Generated native review-video clock or fps differs from its source receipt"
+            )
+    if (
+        source_times.shape != source_times_abs.shape
+        or not np.isfinite(source_times).all()
+        or not np.isfinite(source_times_abs).all()
+        or np.any(np.diff(source_times) < 0)
+        or np.any(source_times < 0)
+    ):
+        raise ValueError(
+            "Review-video clock must provide one finite nondecreasing time per native frame"
+        )
     if frame_times_video is not None and (
         np.any(np.diff(source_times_abs) <= 0) or np.any(np.diff(source_times) <= 0)
     ):
@@ -165,7 +188,8 @@ def build_review_video(
         "source_hdf5_count": len({row.source_path for row in references}),
         "duration_s": duration_s,
         "timeline_origin": (
-            "canonical_frame_video_clock" if frame_times_video is not None
+            "canonical_frame_video_clock"
+            if frame_times_video is not None
             else "first_HDF5_data/time_timestamp"
         ),
         "clock_alignment": dict(clock_manifest or {}),
@@ -185,7 +209,9 @@ def build_review_video(
     manifest_path = output_dir / "review_video_manifest.json"
     if reader.schema == "v3":
         manifest["source_image_dataset"] = reader.dataset_path("data/l_img")
-        manifest["color_rule"] = "write vision_data/continuous_data/l_img directly; do not swap red and blue"
+        manifest["color_rule"] = (
+            "write vision_data/continuous_data/l_img directly; do not swap red and blue"
+        )
         manifest["hdf5_reader"] = reader.manifest()
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
@@ -223,13 +249,15 @@ def validate_review_video(
             reference = references[int(source_indices[output_index])]
             with reader.open_chunk(reference.source_path) as handle:
                 source_bgr = np.asarray(handle["data/l_img"][reference.source_index])
-            correct_errors.append(float(np.mean(np.abs(
-                decoded_bgr.astype(np.float32) - source_bgr.astype(np.float32)
-            ))))
+            correct_errors.append(
+                float(
+                    np.mean(np.abs(decoded_bgr.astype(np.float32) - source_bgr.astype(np.float32)))
+                )
+            )
             swapped = source_bgr[:, :, ::-1]
-            swapped_errors.append(float(np.mean(np.abs(
-                decoded_bgr.astype(np.float32) - swapped.astype(np.float32)
-            ))))
+            swapped_errors.append(
+                float(np.mean(np.abs(decoded_bgr.astype(np.float32) - swapped.astype(np.float32))))
+            )
     finally:
         capture.release()
     mean_correct = float(np.mean(correct_errors))
@@ -247,4 +275,3 @@ def validate_review_video(
         "mean_absolute_error_if_red_blue_swapped": mean_swapped,
         "color_order_check_passed": mean_correct < mean_swapped,
     }
-

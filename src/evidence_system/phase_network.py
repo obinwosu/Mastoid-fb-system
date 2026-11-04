@@ -24,6 +24,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
+
 from __future__ import annotations
 
 import torch
@@ -31,25 +32,28 @@ from torch import nn
 from torch.nn import functional as F
 
 SETTINGS = {
-    "Width": 32, "Dropout": 0.5, "RefinementStages": 3,
-    "PredictionGenerationDilations": [[2**(9-i), 2**i] for i in range(10)],
+    "Width": 32,
+    "Dropout": 0.5,
+    "RefinementStages": 3,
+    "PredictionGenerationDilations": [[2 ** (9 - i), 2**i] for i in range(10)],
     "RefinementDilations": [2**i for i in range(10)],
 }
 
 
 class DualDilatedBlock(nn.Module):
     """The MS-TCN++ prediction-generation dual-dilation residual layer."""
+
     def __init__(self, width, first_dilation, second_dilation, dropout):
         super().__init__()
         self.first = nn.Conv1d(width, width, 3, padding=first_dilation, dilation=first_dilation)
         self.second = nn.Conv1d(width, width, 3, padding=second_dilation, dilation=second_dilation)
-        self.fusion = nn.Conv1d(2*width, width, 1)
+        self.fusion = nn.Conv1d(2 * width, width, 1)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
-        branches = torch.cat((self.first(x)*mask, self.second(x)*mask), dim=1)
+        branches = torch.cat((self.first(x) * mask, self.second(x) * mask), dim=1)
         hidden = self.dropout(F.relu(self.fusion(branches)))
-        return (x+hidden)*mask
+        return (x + hidden) * mask
 
 
 class RefinementBlock(nn.Module):
@@ -60,8 +64,8 @@ class RefinementBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask):
-        hidden = F.relu(self.temporal(x))*mask
-        return (x+self.dropout(self.pointwise(hidden)))*mask
+        hidden = F.relu(self.temporal(x)) * mask
+        return (x + self.dropout(self.pointwise(hidden))) * mask
 
 
 class PredictionGeneration(nn.Module):
@@ -69,41 +73,50 @@ class PredictionGeneration(nn.Module):
         super().__init__()
         width = SETTINGS["Width"]
         self.input_projection = nn.Conv1d(input_width, width, 1)
-        self.blocks = nn.ModuleList([
-            DualDilatedBlock(width, first, second, SETTINGS["Dropout"])
-            for first, second in SETTINGS["PredictionGenerationDilations"]])
+        self.blocks = nn.ModuleList(
+            [
+                DualDilatedBlock(width, first, second, SETTINGS["Dropout"])
+                for first, second in SETTINGS["PredictionGenerationDilations"]
+            ]
+        )
         self.output_projection = nn.Conv1d(width, 3, 1)
 
     def forward(self, x, mask):
-        hidden = self.input_projection(x)*mask
+        hidden = self.input_projection(x) * mask
         for block in self.blocks:
             hidden = block(hidden, mask)
-        return self.output_projection(hidden)*mask
+        return self.output_projection(hidden) * mask
 
 
 class Refinement(nn.Module):
     """A refinement receives only the previous stage's class probabilities."""
+
     def __init__(self):
         super().__init__()
         width = SETTINGS["Width"]
         self.input_projection = nn.Conv1d(3, width, 1)
-        self.blocks = nn.ModuleList([
-            RefinementBlock(width, dilation, SETTINGS["Dropout"])
-            for dilation in SETTINGS["RefinementDilations"]])
+        self.blocks = nn.ModuleList(
+            [
+                RefinementBlock(width, dilation, SETTINGS["Dropout"])
+                for dilation in SETTINGS["RefinementDilations"]
+            ]
+        )
         self.output_projection = nn.Conv1d(width, 3, 1)
 
     def forward(self, probabilities, mask):
-        hidden = self.input_projection(probabilities)*mask
+        hidden = self.input_projection(probabilities) * mask
         for block in self.blocks:
             hidden = block(hidden, mask)
-        return self.output_projection(hidden)*mask
+        return self.output_projection(hidden) * mask
 
 
 class MSTCNPP(nn.Module):
     def __init__(self, input_width=96):
         super().__init__()
         self.prediction_generation = PredictionGeneration(input_width)
-        self.refinements = nn.ModuleList([Refinement() for _ in range(SETTINGS["RefinementStages"])])
+        self.refinements = nn.ModuleList(
+            [Refinement() for _ in range(SETTINGS["RefinementStages"])]
+        )
 
     def forward(self, x, valid_mask=None):
         """Return all stage logits [stage,batch,time,class]; no cross-record state."""
@@ -112,9 +125,9 @@ class MSTCNPP(nn.Module):
         if valid_mask.shape != x.shape[:2] or valid_mask.dtype != torch.bool:
             raise ValueError("valid_mask must be a Boolean batch x time tensor")
         mask = valid_mask[:, None, :].to(x.dtype)
-        logits = self.prediction_generation(x.transpose(1, 2)*mask, mask)
+        logits = self.prediction_generation(x.transpose(1, 2) * mask, mask)
         stages = [logits.transpose(1, 2)]
         for refinement in self.refinements:
-            logits = refinement(logits.softmax(dim=1)*mask, mask)
+            logits = refinement(logits.softmax(dim=1) * mask, mask)
             stages.append(logits.transpose(1, 2))
         return torch.stack(stages)

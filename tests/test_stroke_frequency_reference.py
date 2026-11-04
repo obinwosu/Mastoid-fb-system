@@ -1,43 +1,60 @@
 """Recorded stroke counts keep distinct window and drilling-time denominators."""
 
+import sys
 from copy import deepcopy
 from pathlib import Path
-import sys
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from evidence_system.motion_comparison import (
-    LEGACY_PROTOCOL, add_stroke_frequency, artifact_sha256, build_motion_windows, validate_window_build,
+    LEGACY_PROTOCOL,
+    add_stroke_frequency,
+    artifact_sha256,
+    build_motion_windows,
+    validate_window_build,
 )
 
 
-def source_rows(*, origin=1000., video_scale=1.):
+def source_rows(*, origin=1000.0, video_scale=1.0):
     # Seven source strokes end at integer native seconds. A left-boundary row
     # belongs to the preceding stroke, distinguishing overlap from end counts.
     return [
-        {"t_abs": origin + i / 4, "t_video_s": 100 + video_scale * i / 4,
-         "drill_x": i / 2000, "drill_y": 0., "drill_z": 0.,
-         "phase": "antrum", "phase_id": "phase:antrum",
-         "frame_removed_mm3": 0., "is_drilling_frame": True,
-         "stroke_id": (max(i, 1) - 1) // 4,
-         "stroke_end_flag": i > 0 and i % 4 == 0}
+        {
+            "t_abs": origin + i / 4,
+            "t_video_s": 100 + video_scale * i / 4,
+            "drill_x": i / 2000,
+            "drill_y": 0.0,
+            "drill_z": 0.0,
+            "phase": "antrum",
+            "phase_id": "phase:antrum",
+            "frame_removed_mm3": 0.0,
+            "is_drilling_frame": True,
+            "stroke_id": (max(i, 1) - 1) // 4,
+            "stroke_end_flag": i > 0 and i % 4 == 0,
+        }
         for i in range(29)
     ]
 
 
 def windows(rows):
-    return build_motion_windows(rows, global_run_id="generated:reference",
+    return build_motion_windows(
+        rows,
+        global_run_id="generated:reference",
         protocol=LEGACY_PROTOCOL,
-        participant_id="generated_expert", provenance={
-            "pose_source": "canonical_vision_pose", "position_unit": "m",
-            "phase_source_kind": "manual_frame_phase", "clock_source": "generated_native_clock",
+        participant_id="generated_expert",
+        provenance={
+            "pose_source": "canonical_vision_pose",
+            "position_unit": "m",
+            "phase_source_kind": "manual_frame_phase",
+            "clock_source": "generated_native_clock",
             "source_artifacts": [
                 {"kind": "frames", "path": "generated_frames.csv", "sha256": "a" * 64},
                 {"kind": "phases", "path": "generated_phases.csv", "sha256": "b" * 64},
             ],
-        })
+        },
+    )
 
 
 def test_endpoint_counts_and_overlapping_ids_have_distinct_numerators():
@@ -57,14 +74,20 @@ def test_endpoint_counts_and_overlapping_ids_have_distinct_numerators():
 
 
 def test_native_denominators_and_old_measurements_are_preserved_without_mutation():
-    rows = source_rows(video_scale=2.)
+    rows = source_rows(video_scale=2.0)
     original = windows(rows)
     untouched = deepcopy(original)
     enriched = add_stroke_frequency(original, rows)
     assert original == untouched
     for old, new in zip(original["windows"], enriched["windows"], strict=True):
         assert {key: new[key] for key in old} == old
-    for key in ("input_rows_sha256", "protocol", "protocol_sha256", "measurement_contract", "provenance"):
+    for key in (
+        "input_rows_sha256",
+        "protocol",
+        "protocol_sha256",
+        "measurement_contract",
+        "provenance",
+    ):
         assert enriched[key] == original[key]
     first = enriched["windows"][0]
     assert first["t_end_s"] - first["t_start_s"] == 10
@@ -108,23 +131,30 @@ def test_no_drilling_time_is_missing_rate_not_zero_frequency():
 def test_nonfinite_legacy_turns_retain_counts_but_are_not_reference_eligible():
     rows = source_rows()
     for row in rows:
-        row.update(drill_x=0., stroke_id=0, stroke_end_flag=False)
+        row.update(drill_x=0.0, stroke_id=0, stroke_end_flag=False)
     rows[-1]["stroke_end_flag"] = True
     enriched = add_stroke_frequency(windows(rows), rows)
     metadata = enriched["stroke_frequency_metadata"]
     assert metadata["source_status"] == "nonfinite_legacy_turn_angles"
     assert metadata["nonfinite_turn_angle_count"] > 0
     assert enriched["windows"][-1]["stroke_end_count"] == 1
-    assert enriched["windows"][-1]["stroke_frequency_hz"] == .2
-    assert all(not row["stroke_frequency_eligible"] and not row["stroke_rate_eligible"]
-               for row in enriched["windows"])
+    assert enriched["windows"][-1]["stroke_frequency_hz"] == 0.2
+    assert all(
+        not row["stroke_frequency_eligible"] and not row["stroke_rate_eligible"]
+        for row in enriched["windows"]
+    )
     validate_window_build(enriched)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("stroke_frequency_hz", 99.), ("stroke_rate_per_s", 99.),
-    ("stroke_end_count", -1), ("stroke_drilling_time_s", 6.),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("stroke_frequency_hz", 99.0),
+        ("stroke_rate_per_s", 99.0),
+        ("stroke_end_count", -1),
+        ("stroke_drilling_time_s", 6.0),
+    ],
+)
 def test_resigned_arithmetic_tampering_is_rejected(field, value):
     rows = source_rows()
     enriched = add_stroke_frequency(windows(rows), rows)
@@ -134,9 +164,14 @@ def test_resigned_arithmetic_tampering_is_rejected(field, value):
         validate_window_build(enriched)
 
 
-@pytest.mark.parametrize("field,value", [
-    ("stroke_end_flag", None), ("is_drilling_frame", "unknown"), ("stroke_id", None),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("stroke_end_flag", None),
+        ("is_drilling_frame", "unknown"),
+        ("stroke_id", None),
+    ],
+)
 def test_missing_or_ambiguous_source_values_are_not_invented(field, value):
     rows = source_rows()
     original = windows(rows)

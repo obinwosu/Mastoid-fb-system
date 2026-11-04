@@ -60,9 +60,7 @@ def build_evidence(
     audit = build_source_audit(record, sources, hash_hdf5=False)
     audit["geometry_provenance"] = geometry_snapshot.manifest
     if not audit["ready_for_frame_extraction"]:
-        raise RuntimeError(
-            "Source audit failed: " + ", ".join(audit["blocking_items"])
-        )
+        raise RuntimeError("Source audit failed: " + ", ".join(audit["blocking_items"]))
     write_source_audit(stages / "00_source_audit", audit)
 
     core = extract_core_frames(record, sources, project_root=project_root)
@@ -70,7 +68,9 @@ def build_evidence(
         from .frame_pipeline.phase_geometry import validate_v3_volume_contract
 
         geometry_snapshot.manifest["v3_volume_contract"] = validate_v3_volume_contract(
-            core.frames, geometry_snapshot.profile, raw_run_dir=sources.raw_run_dir,
+            core.frames,
+            geometry_snapshot.profile,
+            raw_run_dir=sources.raw_run_dir,
         )
     core.manifest["geometry_provenance"] = geometry_snapshot.manifest
     core_regression = compare_legacy_core_frames(
@@ -79,7 +79,10 @@ def build_evidence(
     write_core_frame_build(stages / "01_core_frames", core, core_regression)
 
     edt = enrich_removed_voxels_with_edt(
-        core, record, sources, project_root=project_root,
+        core,
+        record,
+        sources,
+        project_root=project_root,
         anatomy_profile=geometry_snapshot.profile,
     )
     edt.manifest["geometry_provenance"] = geometry_snapshot.manifest
@@ -89,7 +92,10 @@ def build_evidence(
     write_edt_build(stages / "02_edt_enrichment", edt, edt_regression)
 
     tip = enrich_tip_edt(
-        edt, record, sources, project_root=project_root,
+        edt,
+        record,
+        sources,
+        project_root=project_root,
         anatomy_profile=geometry_snapshot.profile,
     )
     tip.manifest["geometry_provenance"] = geometry_snapshot.manifest
@@ -105,11 +111,18 @@ def build_evidence(
         from .phase_detection import infer_phases
 
         phase_dir = stages / "03_phase_detection"
-        identity_fields = ("frame_idx_global", "source_hdf5", "source_frame_idx", "t_abs", "t_video_s")
+        identity_fields = (
+            "frame_idx_global",
+            "source_hdf5",
+            "source_frame_idx",
+            "t_abs",
+            "t_video_s",
+        )
         native_identities = [tuple(row[key] for key in identity_fields) for row in tip.frames]
         original_tip_fields = set(tip.frames[0])
         phase = infer_phases(
-            tip.frames, record,
+            tip.frames,
+            record,
             bundle_dir=sources.phase_model_bundle,
             output_dir=phase_dir,
             geometry_profile=tip.manifest.get("phase_signal_geometry"),
@@ -117,11 +130,16 @@ def build_evidence(
         )
         if len(phase.frames) != len(tip.frames):
             raise ValueError("Phase inference changed the native frame inventory")
-        for before, after in zip(native_identities, phase.frames):
+        for before, after in zip(native_identities, phase.frames, strict=False):
             if before != tuple(after[key] for key in identity_fields):
                 raise ValueError("Phase inference changed source frame identity or clock")
-        phase_fields = (set(phase.frames[0])-original_tip_fields) | {"phase", "phase_annotation_id"}
-        for core_row, edt_row, predicted in zip(core.frames, edt.frames, phase.frames):
+        phase_fields = (set(phase.frames[0]) - original_tip_fields) | {
+            "phase",
+            "phase_annotation_id",
+        }
+        for core_row, edt_row, predicted in zip(
+            core.frames, edt.frames, phase.frames, strict=False
+        ):
             assigned = {key: predicted[key] for key in phase_fields}
             core_row.update(assigned)
             edt_row.update(assigned)
@@ -144,25 +162,25 @@ def build_evidence(
         audit["phase_annotation"] = {
             "path": str(phase_manifest_path),
             "sha256": hashlib.sha256(phase_manifest_path.read_bytes()).hexdigest(),
-            "valid": True, "row": None, "source_kind": "model_phase_prediction",
-            "status": "completed_model_prediction", "human_annotation_read": False,
-            "frame_count": len(phase.frames), "manifest": phase.manifest,
+            "valid": True,
+            "row": None,
+            "source_kind": "model_phase_prediction",
+            "status": "completed_model_prediction",
+            "human_annotation_read": False,
+            "frame_count": len(phase.frames),
+            "manifest": phase.manifest,
         }
         audit["source_classification"]["model_phase_prediction"] = str(phase_manifest_path)
         audit["checks"]["phase_model_predictions_validated"] = True
         write_source_audit(stages / "00_source_audit", audit)
 
-    visibility = enrich_visibility(
-        tip, record, sources, project_root=project_root
-    )
+    visibility = enrich_visibility(tip, record, sources, project_root=project_root)
     visibility.manifest["geometry_provenance"] = geometry_snapshot.manifest
     visibility_regression = compare_legacy_visibility(
         visibility,
         sources.raw_run_dir / "frame_level_spatial_all_frames_visibility.csv",
     )
-    write_visibility_build(
-        stages / "04_visibility", visibility, visibility_regression
-    )
+    write_visibility_build(stages / "04_visibility", visibility, visibility_regression)
 
     strokes = build_strokes(visibility, record, project_root=project_root)
     strokes.manifest["geometry_provenance"] = geometry_snapshot.manifest
@@ -170,17 +188,27 @@ def build_evidence(
     write_stroke_build(stages / "05_strokes", strokes, stroke_regression)
 
     # Speed/removal use raw poses; Length reuses complete recorded strokes.
-    from .motion_comparison import add_stroke_length, artifact_sha256, build_motion_windows, write_motion_artifact
+    from .motion_comparison import (
+        add_stroke_length,
+        artifact_sha256,
+        build_motion_windows,
+        write_motion_artifact,
+    )
 
     motion_path = stages / "09_motion_comparison" / "motion_windows.json"
     motion = build_motion_windows(
-        strokes.frames, global_run_id=record.global_run_id,
+        strokes.frames,
+        global_run_id=record.global_run_id,
         participant_id=record.participant_id or None,
         provenance={
-            "pose_source": "canonical_vision_pose", "position_unit": "m",
+            "pose_source": "canonical_vision_pose",
+            "position_unit": "m",
             "phase_source_kind": core.manifest["phase_source_kind"],
-            "phase_model_sha256": (_file_sha256(sources.phase_model_bundle / "model.pt")
-                                   if sources.phase_model_bundle is not None else None),
+            "phase_model_sha256": (
+                _file_sha256(sources.phase_model_bundle / "model.pt")
+                if sources.phase_model_bundle is not None
+                else None
+            ),
             "clock_source": core.manifest["clock_alignment"].get("source"),
             "anatomy_key": record.anatomy_key,
             "source_artifacts": [
@@ -215,16 +243,26 @@ def build_evidence(
         )
         try:
             ray = build_under_ledge_ray(
-                strokes.frames, strokes.removed_voxels, record, sources,
-                project_root=project_root, geometry_profile=geometry,
+                strokes.frames,
+                strokes.removed_voxels,
+                record,
+                sources,
+                project_root=project_root,
+                geometry_profile=geometry,
                 anatomy_profile=geometry_snapshot.profile,
             )
         except Exception:
             (ray_dir / "ray_v3_status.json").write_text(
-                json.dumps({
-                    "run_id": record.run_id, "status": "failed",
-                    "reason": "ray_stage_failed", "message": "Exposure screening failed; inspect the build error.",
-                }) + "\n", encoding="utf-8",
+                json.dumps(
+                    {
+                        "run_id": record.run_id,
+                        "status": "failed",
+                        "reason": "ray_stage_failed",
+                        "message": "Exposure screening failed; inspect the build error.",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
             )
             raise
         ray.manifest["clock_alignment"] = core.manifest["clock_alignment"]
@@ -239,20 +277,25 @@ def build_evidence(
         }
         write_ray_build(ray_dir, ray)
         ray_status = {
-            "schema": "under_ledge_stage_status_v1", "run_id": record.run_id,
-            "status": "completed", "result_dir": str(ray_dir),
+            "schema": "under_ledge_stage_status_v1",
+            "run_id": record.run_id,
+            "status": "completed",
+            "result_dir": str(ray_dir),
             "candidate_episode_count": ray.manifest["candidate_episode_count"],
             "coaching_eligible_episode_count": ray.manifest["coaching_eligible_episode_count"],
         }
     else:
         ray_dir.mkdir(parents=True, exist_ok=True)
         ray_status = {
-            "schema": "under_ledge_stage_status_v1", "run_id": record.run_id,
-            "status": "not_run", "reason": "validated_signal_geometry_not_configured",
+            "schema": "under_ledge_stage_status_v1",
+            "run_id": record.run_id,
+            "status": "not_run",
+            "reason": "validated_signal_geometry_not_configured",
             "message": "Under-ledge analysis was not run: calibrated geometry is required.",
         }
     (ray_dir / "ray_v3_status.json").write_text(
-        json.dumps(ray_status, indent=2) + "\n", encoding="utf-8",
+        json.dumps(ray_status, indent=2) + "\n",
+        encoding="utf-8",
     )
 
     events = build_events(strokes, core.phase_intervals, record)
@@ -260,12 +303,8 @@ def build_evidence(
     write_event_build(stages / "06_events", events)
     relations = build_relations(events, record)
     relations.manifest["geometry_provenance"] = geometry_snapshot.manifest
-    relation_regression = compare_legacy_graph(
-        relations, record.golden_reference_path
-    )
-    write_relation_build(
-        stages / "07_relations", relations, relation_regression
-    )
+    relation_regression = compare_legacy_graph(relations, record.golden_reference_path)
+    write_relation_build(stages / "07_relations", relations, relation_regression)
 
     assert_geometry_sources_unchanged(geometry_snapshot)
     database_path = result_dir / "evidence.sqlite3"
@@ -286,7 +325,10 @@ def build_evidence(
     video_manifest = None
     if build_video:
         video_manifest = build_review_video(
-            record, sources, result_dir, fps=video_fps,
+            record,
+            sources,
+            result_dir,
+            fps=video_fps,
             frame_times_video=[row["t_video_s"] for row in core.frames],
             clock_manifest=core.manifest["clock_alignment"],
         )
@@ -309,11 +351,11 @@ def build_evidence(
         "under_ledge_detection": ray_status,
         "motion_windows": str(motion_path),
         "review_video": (
-            str(result_dir / str(video_manifest["video_file"]))
-            if video_manifest else None
+            str(result_dir / str(video_manifest["video_file"])) if video_manifest else None
         ),
     }
     (result_dir / "build_summary.json").write_text(
-        json.dumps(summary, indent=2) + "\n", encoding="utf-8",
+        json.dumps(summary, indent=2) + "\n",
+        encoding="utf-8",
     )
     return summary

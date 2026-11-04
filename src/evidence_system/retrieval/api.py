@@ -5,38 +5,63 @@ No method accepts SQL, a filesystem path, or an unconstrained table/column name.
 
 from __future__ import annotations
 
-from collections import Counter
-from contextlib import contextmanager
 import json
-from pathlib import Path
 import sqlite3
-from typing import Any, Callable, Iterator, Mapping, Sequence
-
+from collections import Counter
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
 
 MAX_ROWS = 500
 
 TOOL_DESCRIPTIONS = {
     "get_run_summary": ("Retrieve compact run, phase, and evidence counts.", ["run_id"]),
-    "get_phase_summary": ("Aggregate evidence across every interval of one phase label.", ["run_id", "phase"]),
+    "get_phase_summary": (
+        "Aggregate evidence across every interval of one phase label.",
+        ["run_id", "phase"],
+    ),
     "get_events": ("Filter canonical events by type, phase, status, or time overlap.", ["run_id"]),
-    "get_event_details": ("Retrieve one event, its evidence IDs, relations, and motion context.", ["event_id"]),
+    "get_event_details": (
+        "Retrieve one event, its evidence IDs, relations, and motion context.",
+        ["event_id"],
+    ),
     "get_event_relations": ("Retrieve the factual subgraph incident to one event.", ["event_id"]),
     "get_recurrent_patterns": ("Count repeated event-type/anatomy/phase combinations.", ["run_id"]),
-    "get_motion_context": ("Retrieve post-hoc stroke summaries attached to an event.", ["event_id"]),
+    "get_motion_context": (
+        "Retrieve post-hoc stroke summaries attached to an event.",
+        ["event_id"],
+    ),
     "get_source_frames": ("Page through source frames supporting one event.", ["event_id"]),
     "get_source_strokes": ("Page through source strokes supporting one event.", ["event_id"]),
-    "get_review_clip": ("Retrieve a generated review clip or explicit unavailable status.", ["event_id"]),
-    "compare_phases": ("Compare compact statistics across one to four phase labels.", ["run_id", "phases"]),
-    "get_expert_reference": ("Retrieve registered expert reference or explicit abstention.", ["run_id"]),
-    "get_validated_coaching_rule": ("Retrieve only expert-validated coaching rules.", ["event_type"]),
+    "get_review_clip": (
+        "Retrieve a generated review clip or explicit unavailable status.",
+        ["event_id"],
+    ),
+    "compare_phases": (
+        "Compare compact statistics across one to four phase labels.",
+        ["run_id", "phases"],
+    ),
+    "get_expert_reference": (
+        "Retrieve registered expert reference or explicit abstention.",
+        ["run_id"],
+    ),
+    "get_validated_coaching_rule": (
+        "Retrieve only expert-validated coaching rules.",
+        ["event_type"],
+    ),
 }
 
 TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_run_summary": {"run_id": "string"},
     "get_phase_summary": {"run_id": "string", "phase": "string"},
     "get_events": {
-        "run_id": "string", "event_types": "string[]", "phase": "string",
-        "evidence_status": "string", "t_start_s": "number", "t_end_s": "number",
+        "run_id": "string",
+        "event_types": "string[]",
+        "phase": "string",
+        "evidence_status": "string",
+        "t_start_s": "number",
+        "t_end_s": "number",
         "limit": "integer",
     },
     "get_event_details": {"event_id": "string"},
@@ -44,7 +69,9 @@ TOOL_INPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "get_recurrent_patterns": {"run_id": "string"},
     "get_motion_context": {"event_id": "string"},
     "get_source_frames": {
-        "event_id": "string", "limit": "integer", "offset": "integer",
+        "event_id": "string",
+        "limit": "integer",
+        "offset": "integer",
         "include_observation": "boolean",
     },
     "get_source_strokes": {"event_id": "string", "limit": "integer", "offset": "integer"},
@@ -138,7 +165,8 @@ class EvidenceRetriever:
     def _event_row(connection: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
         event_id = str(row["event_id"])
         evidence = connection.execute(
-            "SELECT evidence_id, evidence_type FROM event_evidence WHERE event_id = ? ORDER BY evidence_id",
+            "SELECT evidence_id, evidence_type FROM event_evidence "
+            "WHERE event_id = ? ORDER BY evidence_id",
             (event_id,),
         ).fetchall()
         return {
@@ -160,7 +188,11 @@ class EvidenceRetriever:
     def get_run_summary(self, run_id: str) -> dict[str, Any]:
         with self._connect() as connection:
             global_run_id = self._global_run_id(connection, run_id)
-            run = dict(connection.execute("SELECT * FROM runs WHERE global_run_id = ?", (global_run_id,)).fetchone())
+            run = dict(
+                connection.execute(
+                    "SELECT * FROM runs WHERE global_run_id = ?", (global_run_id,)
+                ).fetchone()
+            )
             counts = {}
             for table in ("frames", "strokes", "events", "relations", "motion_contexts"):
                 counts[table] = int(
@@ -171,14 +203,16 @@ class EvidenceRetriever:
             event_counts = {
                 row["event_type"]: int(row["n"])
                 for row in connection.execute(
-                    "SELECT event_type, COUNT(*) AS n FROM events WHERE global_run_id = ? GROUP BY event_type ORDER BY event_type",
+                    "SELECT event_type, COUNT(*) AS n FROM events WHERE global_run_id = ? "
+                    "GROUP BY event_type ORDER BY event_type",
                     (global_run_id,),
                 )
             }
             status_counts = {
                 row["evidence_status"]: int(row["n"])
                 for row in connection.execute(
-                    "SELECT evidence_status, COUNT(*) AS n FROM events WHERE global_run_id = ? GROUP BY evidence_status ORDER BY evidence_status",
+                    "SELECT evidence_status, COUNT(*) AS n FROM events WHERE global_run_id = ? "
+                    "GROUP BY evidence_status ORDER BY evidence_status",
                     (global_run_id,),
                 )
             }
@@ -186,8 +220,10 @@ class EvidenceRetriever:
                 {
                     **dict(row),
                     "segment_role": (
-                        "pre_drilling_context" if row["phase_name"] == "pre_drilling" else
-                        "predicted_drilling_phase" if row["phase_source_kind"] == "model_phase_prediction"
+                        "pre_drilling_context"
+                        if row["phase_name"] == "pre_drilling"
+                        else "predicted_drilling_phase"
+                        if row["phase_source_kind"] == "model_phase_prediction"
                         else "annotated_drilling_phase"
                     ),
                 }
@@ -252,8 +288,10 @@ class EvidenceRetriever:
                 parameters.append(float(t_end_s))
             parameters.append(limit)
             rows = connection.execute(
-                "SELECT e.*, p.phase_name FROM events e LEFT JOIN phases p ON p.phase_id = e.phase_id "
-                f"WHERE {' AND '.join(clauses)} ORDER BY e.t_start_s, e.event_type, e.event_id LIMIT ?",
+                "SELECT e.*, p.phase_name FROM events e "
+                "LEFT JOIN phases p ON p.phase_id = e.phase_id "
+                f"WHERE {' AND '.join(clauses)} "
+                "ORDER BY e.t_start_s, e.event_type, e.event_id LIMIT ?",
                 parameters,
             ).fetchall()
             events = [self._event_row(connection, row) for row in rows]
@@ -261,8 +299,11 @@ class EvidenceRetriever:
                 "tool": "get_events",
                 "run_id": run_id,
                 "filters": {
-                    "event_types": list(event_types or []), "phase": phase,
-                    "evidence_status": evidence_status, "t_start_s": t_start_s, "t_end_s": t_end_s,
+                    "event_types": list(event_types or []),
+                    "phase": phase,
+                    "evidence_status": evidence_status,
+                    "t_start_s": t_start_s,
+                    "t_end_s": t_end_s,
                 },
                 "count": len(events),
                 "events": events,
@@ -271,25 +312,30 @@ class EvidenceRetriever:
 
     def get_event_relations(self, event_id: str) -> dict[str, Any]:
         with self._connect() as connection:
-            exists = connection.execute("SELECT 1 FROM events WHERE event_id = ?", (event_id,)).fetchone()
+            exists = connection.execute(
+                "SELECT 1 FROM events WHERE event_id = ?", (event_id,)
+            ).fetchone()
             if exists is None:
                 raise KeyError(f"Unknown event_id: {event_id}")
             outgoing = [
-                dict(row) for row in connection.execute(
-                    "SELECT * FROM relations WHERE source_id = ? ORDER BY relation_type, target_id", (event_id,)
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM relations WHERE source_id = ? ORDER BY relation_type, target_id",
+                    (event_id,),
                 )
             ]
             incoming = [
-                dict(row) for row in connection.execute(
-                    "SELECT * FROM relations WHERE target_id = ? ORDER BY relation_type, source_id", (event_id,)
+                dict(row)
+                for row in connection.execute(
+                    "SELECT * FROM relations WHERE target_id = ? ORDER BY relation_type, source_id",
+                    (event_id,),
                 )
             ]
             for row in [*outgoing, *incoming]:
                 row["attributes"] = _decode(row.pop("attributes_json"), {})
                 row["provisional"] = bool(row["provisional"])
             motion_ids = [
-                row["target_id"] for row in outgoing
-                if row["relation_type"] == "has_motion_context"
+                row["target_id"] for row in outgoing if row["relation_type"] == "has_motion_context"
             ]
             context_relations = []
             for motion_id in motion_ids:
@@ -320,7 +366,8 @@ class EvidenceRetriever:
     def get_motion_context(self, event_id: str) -> dict[str, Any]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM motion_contexts WHERE event_id = ? ORDER BY motion_context_id", (event_id,)
+                "SELECT * FROM motion_contexts WHERE event_id = ? ORDER BY motion_context_id",
+                (event_id,),
             ).fetchall()
             contexts = [_decode(row["context_json"], {}) for row in rows]
             return {
@@ -329,7 +376,8 @@ class EvidenceRetriever:
                 "count": len(contexts),
                 "contexts": contexts,
                 "evidence_ids": [
-                    evidence_id for context in contexts
+                    evidence_id
+                    for context in contexts
                     for evidence_id in context.get("source_evidence_ids", [])
                 ],
             }
@@ -337,7 +385,8 @@ class EvidenceRetriever:
     def get_event_details(self, event_id: str) -> dict[str, Any]:
         with self._connect() as connection:
             row = connection.execute(
-                "SELECT e.*, p.phase_name FROM events e LEFT JOIN phases p ON p.phase_id = e.phase_id WHERE e.event_id = ?",
+                "SELECT e.*, p.phase_name FROM events e "
+                "LEFT JOIN phases p ON p.phase_id = e.phase_id WHERE e.event_id = ?",
                 (event_id,),
             ).fetchone()
             if row is None:
@@ -358,11 +407,15 @@ class EvidenceRetriever:
                 "frame_count": event["source_evidence_types"].get("frame", 0),
                 "stroke_count": event["source_evidence_types"].get("stroke", 0),
             },
-            "evidence_ids": list(dict.fromkeys([
-                event_id,
-                *event["source_evidence_ids"],
-                *relations["evidence_ids"],
-            ])),
+            "evidence_ids": list(
+                dict.fromkeys(
+                    [
+                        event_id,
+                        *event["source_evidence_ids"],
+                        *relations["evidence_ids"],
+                    ]
+                )
+            ),
         }
 
     def get_source_frames(
@@ -377,56 +430,79 @@ class EvidenceRetriever:
         offset = max(0, int(offset))
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT f.* FROM event_evidence ee JOIN frames f ON f.frame_evidence_id = ee.evidence_id "
-                "WHERE ee.event_id = ? AND ee.evidence_type = 'frame' ORDER BY f.t_video_s, f.frame_idx LIMIT ? OFFSET ?",
+                "SELECT f.* FROM event_evidence ee "
+                "JOIN frames f ON f.frame_evidence_id = ee.evidence_id "
+                "WHERE ee.event_id = ? AND ee.evidence_type = 'frame' "
+                "ORDER BY f.t_video_s, f.frame_idx LIMIT ? OFFSET ?",
                 (event_id, limit, offset),
             ).fetchall()
-            total = int(connection.execute(
-                "SELECT COUNT(*) FROM event_evidence WHERE event_id = ? AND evidence_type = 'frame'", (event_id,)
-            ).fetchone()[0])
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM event_evidence "
+                    "WHERE event_id = ? AND evidence_type = 'frame'",
+                    (event_id,),
+                ).fetchone()[0]
+            )
             frames = []
             for row in rows:
                 item = {
-                        "frame_evidence_id": row["frame_evidence_id"],
-                        "frame_idx": row["frame_idx"],
-                        "t_video_s": row["t_video_s"],
-                        "phase_id": row["phase_id"],
-                        "source_file_id": row["source_file_id"],
-                        "source_row": row["source_row"],
-                    }
+                    "frame_evidence_id": row["frame_evidence_id"],
+                    "frame_idx": row["frame_idx"],
+                    "t_video_s": row["t_video_s"],
+                    "phase_id": row["phase_id"],
+                    "source_file_id": row["source_file_id"],
+                    "source_row": row["source_row"],
+                }
                 if include_observation:
                     item["observation"] = _decode(row["observation_json"], {})
                 frames.append(item)
             return {
-                "tool": "get_source_frames", "event_id": event_id,
-                "total": total, "offset": offset, "count": len(frames), "frames": frames,
+                "tool": "get_source_frames",
+                "event_id": event_id,
+                "total": total,
+                "offset": offset,
+                "count": len(frames),
+                "frames": frames,
                 "evidence_ids": [row["frame_evidence_id"] for row in frames],
             }
 
-    def get_source_strokes(self, event_id: str, *, limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    def get_source_strokes(
+        self, event_id: str, *, limit: int = 200, offset: int = 0
+    ) -> dict[str, Any]:
         limit = self._limit(limit)
         offset = max(0, int(offset))
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT s.* FROM event_evidence ee JOIN strokes s ON s.stroke_evidence_id = ee.evidence_id "
-                "WHERE ee.event_id = ? AND ee.evidence_type = 'stroke' ORDER BY s.t_start_s, s.stroke_id LIMIT ? OFFSET ?",
+                "SELECT s.* FROM event_evidence ee "
+                "JOIN strokes s ON s.stroke_evidence_id = ee.evidence_id "
+                "WHERE ee.event_id = ? AND ee.evidence_type = 'stroke' "
+                "ORDER BY s.t_start_s, s.stroke_id LIMIT ? OFFSET ?",
                 (event_id, limit, offset),
             ).fetchall()
             strokes = [
                 {
                     "stroke_evidence_id": row["stroke_evidence_id"],
                     "stroke_id": row["stroke_id"],
-                    "t_start_s": row["t_start_s"], "t_end_s": row["t_end_s"],
+                    "t_start_s": row["t_start_s"],
+                    "t_end_s": row["t_end_s"],
                     "metrics": _decode(row["metrics_json"], {}),
                 }
                 for row in rows
             ]
-            total = int(connection.execute(
-                "SELECT COUNT(*) FROM event_evidence WHERE event_id = ? AND evidence_type = 'stroke'", (event_id,)
-            ).fetchone()[0])
+            total = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM event_evidence "
+                    "WHERE event_id = ? AND evidence_type = 'stroke'",
+                    (event_id,),
+                ).fetchone()[0]
+            )
             return {
-                "tool": "get_source_strokes", "event_id": event_id,
-                "total": total, "offset": offset, "count": len(strokes), "strokes": strokes,
+                "tool": "get_source_strokes",
+                "event_id": event_id,
+                "total": total,
+                "offset": offset,
+                "count": len(strokes),
+                "strokes": strokes,
                 "evidence_ids": [row["stroke_evidence_id"] for row in strokes],
             }
 
@@ -446,7 +522,8 @@ class EvidenceRetriever:
             placeholders = ",".join("?" for _ in phase_ids)
             frame_rows = connection.execute(
                 "SELECT frame_evidence_id, observation_json FROM frames "
-                f"WHERE phase_id IN ({placeholders}) ORDER BY frame_idx", phase_ids,
+                f"WHERE phase_id IN ({placeholders}) ORDER BY frame_idx",
+                phase_ids,
             ).fetchall()
             observations = [_decode(row["observation_json"], {}) for row in frame_rows]
             event_rows = connection.execute(
@@ -456,7 +533,8 @@ class EvidenceRetriever:
             ).fetchall()
             relation_rows = connection.execute(
                 f"SELECT * FROM relations WHERE source_id IN ({placeholders}) "
-                f"OR target_id IN ({placeholders}) ORDER BY relation_id", [*phase_ids, *phase_ids],
+                f"OR target_id IN ({placeholders}) ORDER BY relation_id",
+                [*phase_ids, *phase_ids],
             ).fetchall()
             phase_relations = []
             for relation in relation_rows:
@@ -467,9 +545,14 @@ class EvidenceRetriever:
             return {
                 "tool": "get_phase_summary",
                 "run_id": run_id,
-                "phase": dict(phase_rows[0]) if len(phase_rows) == 1 else {
-                    "phase_name": phase, "phase_id": None, "phase_ids": phase_ids,
-                    "interval_count": len(phase_rows), "continuous": False,
+                "phase": dict(phase_rows[0])
+                if len(phase_rows) == 1
+                else {
+                    "phase_name": phase,
+                    "phase_id": None,
+                    "phase_ids": phase_ids,
+                    "interval_count": len(phase_rows),
+                    "continuous": False,
                 },
                 "intervals": [dict(row) for row in phase_rows],
                 "interval_count": len(phase_rows),
@@ -477,8 +560,12 @@ class EvidenceRetriever:
                     float(row["t_end_s"]) - float(row["t_start_s"]) for row in phase_rows
                 ),
                 "frame_count": len(frame_rows),
-                "drilling_frame_count": sum(bool(row.get("is_drilling_frame")) for row in observations),
-                "removed_volume_mm3": sum(float(row.get("frame_removed_mm3") or 0) for row in observations),
+                "drilling_frame_count": sum(
+                    bool(row.get("is_drilling_frame")) for row in observations
+                ),
+                "removed_volume_mm3": sum(
+                    float(row.get("frame_removed_mm3") or 0) for row in observations
+                ),
                 "event_counts": {row["event_type"]: int(row["n"]) for row in event_rows},
                 "relations": phase_relations,
                 "evidence_ids": phase_ids,
@@ -489,7 +576,8 @@ class EvidenceRetriever:
             raise ValueError("compare_phases requires one to four phase names")
         summaries = [self.get_phase_summary(run_id, phase) for phase in phases]
         return {
-            "tool": "compare_phases", "run_id": run_id,
+            "tool": "compare_phases",
+            "run_id": run_id,
             "phases": [
                 {
                     "phase_id": row["phase"]["phase_id"],
@@ -503,18 +591,25 @@ class EvidenceRetriever:
                 }
                 for row in summaries
             ],
-            "evidence_ids": [evidence_id for row in summaries for evidence_id in row["evidence_ids"]],
+            "evidence_ids": [
+                evidence_id for row in summaries for evidence_id in row["evidence_ids"]
+            ],
         }
 
     def get_recurrent_patterns(self, run_id: str) -> dict[str, Any]:
         events = self.get_events(run_id, limit=MAX_ROWS)["events"]
-        counts = Counter((row["event_type"], row.get("anatomy") or "none", row.get("phase") or "none") for row in events)
+        counts = Counter(
+            (row["event_type"], row.get("anatomy") or "none", row.get("phase") or "none")
+            for row in events
+        )
         patterns = [
             {"event_type": key[0], "anatomy": key[1], "phase": key[2], "count": count}
-            for key, count in sorted(counts.items()) if count > 1
+            for key, count in sorted(counts.items())
+            if count > 1
         ]
         return {
-            "tool": "get_recurrent_patterns", "run_id": run_id,
+            "tool": "get_recurrent_patterns",
+            "run_id": run_id,
             "definition": "same event_type, anatomy, and phase occurring more than once",
             "patterns": patterns,
             "evidence_ids": [row["event_id"] for row in events],
@@ -522,9 +617,12 @@ class EvidenceRetriever:
 
     def get_review_clip(self, event_id: str) -> dict[str, Any]:
         with self._connect() as connection:
-            row = connection.execute("SELECT * FROM review_clips WHERE event_id = ?", (event_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM review_clips WHERE event_id = ?", (event_id,)
+            ).fetchone()
             return {
-                "tool": "get_review_clip", "event_id": event_id,
+                "tool": "get_review_clip",
+                "event_id": event_id,
                 "available": row is not None,
                 "clip": dict(row) if row is not None else None,
                 "status": row["status"] if row is not None else "not_generated",
@@ -535,16 +633,20 @@ class EvidenceRetriever:
         with self._connect() as connection:
             global_run_id = self._global_run_id(connection, run_id)
             return {
-                "tool": "get_expert_reference", "run_id": run_id,
+                "tool": "get_expert_reference",
+                "run_id": run_id,
                 "available": False,
-                "reason": "No expert feedback reference is registered; legacy graphs are validation-only.",
+                "reason": (
+                    "No expert feedback reference is registered; legacy graphs are validation-only."
+                ),
                 "evidence_ids": [global_run_id],
             }
 
     def get_validated_coaching_rule(self, event_type: str) -> dict[str, Any]:
         with self._connect() as connection:
             rows = connection.execute(
-                "SELECT rule_id, rule_json FROM knowledge_rules WHERE rule_status = 'expert_validated' ORDER BY rule_id"
+                "SELECT rule_id, rule_json FROM knowledge_rules "
+                "WHERE rule_status = 'expert_validated' ORDER BY rule_id"
             ).fetchall()
             matching = []
             for row in rows:
@@ -552,9 +654,10 @@ class EvidenceRetriever:
                 if value.get("event_type") == event_type:
                     matching.append({"rule_id": row["rule_id"], "rule": value})
             return {
-                "tool": "get_validated_coaching_rule", "event_type": event_type,
-                "available": bool(matching), "rules": matching,
+                "tool": "get_validated_coaching_rule",
+                "event_type": event_type,
+                "available": bool(matching),
+                "rules": matching,
                 "reason": None if matching else "No expert-validated coaching rule is available.",
                 "evidence_ids": [row["rule_id"] for row in matching],
             }
-

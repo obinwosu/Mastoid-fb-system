@@ -13,8 +13,9 @@ import hashlib
 import io
 import json
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from .hdf5_reader import RecordingReader, list_hdf5_paths
 
@@ -22,11 +23,18 @@ SCHEMA = "generated_hdf5_clock_v1"
 SOURCE = "generated_hdf5_native_alignment"
 MANIFEST_NAME = "hdf5_clock_manifest.json"
 ALIGNMENT_FIELDS = (
-    "frame_idx_global", "source_hdf5", "source_frame_idx", "t_abs", "video_time_s",
+    "frame_idx_global",
+    "source_hdf5",
+    "source_frame_idx",
+    "t_abs",
+    "video_time_s",
 )
 FRAME_DATASETS = (
-    "data/l_img", "data/depth", "data/pose_mastoidectomy_drill",
-    "data/pose_mastoidectomy_volume", "data/pose_main_camera",
+    "data/l_img",
+    "data/depth",
+    "data/pose_mastoidectomy_drill",
+    "data/pose_mastoidectomy_volume",
+    "data/pose_main_camera",
     "voxels_removed/voxel_removed",
 )
 
@@ -45,7 +53,10 @@ def _inventory_digest(inventory: Sequence[Mapping[str, Any]]) -> str:
 
 
 def read_hdf5_frame_inventory(
-    raw_run_dir: Path | str, *, hash_sources: bool = False, validate_images: bool = False,
+    raw_run_dir: Path | str,
+    *,
+    hash_sources: bool = False,
+    validate_images: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Index native frames; optionally hash all chunks and decode every RGB row.
 
@@ -79,13 +90,19 @@ def read_hdf5_frame_inventory(
                 if not isinstance(time_data, h5py.Dataset) or not isinstance(images, h5py.Dataset):
                     raise ValueError(f"Invalid native frame datasets in {path.name}")
                 times = np.asarray(time_data, dtype=np.float64).reshape(-1)
-                if (len(images.shape) != 4 or images.shape[-1] != 3
-                        or images.dtype != np.uint8 or any(size <= 0 for size in images.shape[1:])):
+                if (
+                    len(images.shape) != 4
+                    or images.shape[-1] != 3
+                    or images.dtype != np.uint8
+                    or any(size <= 0 for size in images.shape[1:])
+                ):
                     raise ValueError(f"Unsupported data/l_img shape/dtype in {path.name}")
                 if not len(times) or len(times) != images.shape[0]:
                     raise ValueError(f"Timestamp/frame mismatch or empty frame chunk: {path.name}")
                 if not np.isfinite(times).all() or np.any(np.diff(times) <= 0):
-                    raise ValueError(f"Native timestamps must be finite and strictly increasing: {path.name}")
+                    raise ValueError(
+                        f"Native timestamps must be finite and strictly increasing: {path.name}"
+                    )
                 if image_shape is not None and tuple(images.shape[1:]) != image_shape:
                     raise ValueError(f"RGB frame dimensions changed between chunks: {path.name}")
                 image_shape = tuple(images.shape[1:])
@@ -93,15 +110,19 @@ def read_hdf5_frame_inventory(
                     # Read every source RGB block so unreadable compressed chunks
                     # are detected before declaring an alignment ready for video.
                     for start in range(0, len(times), 16):
-                        np.asarray(images[start:start + 16])
+                        np.asarray(images[start : start + 16])
                 ranges.append((float(times[0]), float(times[-1]), path.name))
                 entry.update(
-                    frame_count=len(times), metadata_only=False,
+                    frame_count=len(times),
+                    metadata_only=False,
                     raw_time_bounds_abs=[float(times[0]), float(times[-1])],
-                    image_shape=list(image_shape), image_dtype=str(images.dtype),
+                    image_shape=list(image_shape),
+                    image_dtype=str(images.dtype),
                 )
-                rows.extend({"source_hdf5": path.name, "source_frame_idx": i, "t_abs": float(t)}
-                            for i, t in enumerate(times))
+                rows.extend(
+                    {"source_hdf5": path.name, "source_frame_idx": i, "t_abs": float(t)}
+                    for i, t in enumerate(times)
+                )
         if hash_sources:
             entry["sha256"] = sha256_file(path)
         after = path.stat()
@@ -109,7 +130,7 @@ def read_hdf5_frame_inventory(
             raise ValueError(f"HDF5 source changed while indexing: {path.name}")
         inventory.append(entry)
     ranges.sort()
-    for left, right in zip(ranges, ranges[1:]):
+    for left, right in zip(ranges, ranges[1:], strict=False):
         if right[0] <= left[1]:
             raise ValueError(f"Overlapping or duplicate chunk timestamps: {left[2]}, {right[2]}")
     rows.sort(key=lambda row: (row["t_abs"], row["source_hdf5"], row["source_frame_idx"]))
@@ -119,7 +140,9 @@ def read_hdf5_frame_inventory(
 
 
 def generate_hdf5_alignment(
-    raw_run_dir: Path | str, output_dir: Path | str, fps: float = 10.0,
+    raw_run_dir: Path | str,
+    output_dir: Path | str,
+    fps: float = 10.0,
 ) -> dict[str, Any]:
     """Write a new native-time alignment and provenance receipt under results.
 
@@ -138,7 +161,9 @@ def generate_hdf5_alignment(
     alignment = output / "alignment.csv"
     manifest_path = output / MANIFEST_NAME
     if alignment.exists() or manifest_path.exists():
-        raise FileExistsError("Generated clock outputs already exist; choose a new output directory")
+        raise FileExistsError(
+            "Generated clock outputs already exist; choose a new output directory"
+        )
     rows, inventory = read_hdf5_frame_inventory(raw, hash_sources=True, validate_images=True)
     reader = RecordingReader(raw)
     origin = rows[0]["t_abs"]
@@ -150,40 +175,67 @@ def generate_hdf5_alignment(
         writer.writerow(dict(row, frame_idx_global=index, video_time_s=row["t_abs"] - origin))
     content = buffer.getvalue().encode("utf-8")
     manifest = {
-        "schema": SCHEMA, "source": SOURCE, "raw_run_dir": str(raw),
-        "alignment_file": alignment.name, "alignment_sha256": hashlib.sha256(content).hexdigest(),
-        "alignment_columns": list(ALIGNMENT_FIELDS), "frame_count": len(rows),
-        "source_inventory": inventory, "source_inventory_sha256": _inventory_digest(inventory),
-        "raw_time_origin_abs": origin, "raw_time_bounds_abs": [origin, rows[-1]["t_abs"]],
-        "duration_s": duration, "duration_source": "last_native_frame_elapsed_time",
-        "fps": fps, "time_dataset": "data/time", "image_dataset": "data/l_img",
+        "schema": SCHEMA,
+        "source": SOURCE,
+        "raw_run_dir": str(raw),
+        "alignment_file": alignment.name,
+        "alignment_sha256": hashlib.sha256(content).hexdigest(),
+        "alignment_columns": list(ALIGNMENT_FIELDS),
+        "frame_count": len(rows),
+        "source_inventory": inventory,
+        "source_inventory_sha256": _inventory_digest(inventory),
+        "raw_time_origin_abs": origin,
+        "raw_time_bounds_abs": [origin, rows[-1]["t_abs"]],
+        "duration_s": duration,
+        "duration_source": "last_native_frame_elapsed_time",
+        "fps": fps,
+        "time_dataset": "data/time",
+        "image_dataset": "data/l_img",
         "clock_rule": "video_time_s = float64(data/time) - first sorted native timestamp",
         "frame_order": "raw_timestamp_then_source_filename_then_source_frame_index",
         "video_resampling": "uniform timeline at fps, nearest source frame, ties to earlier frame",
         "expected_output_frame_count": int(math.ceil(duration * fps)) + 1,
         "tail_rule": "ceil(duration_s * fps) + 1 video frames includes the final source frame",
-        "training_reference_clock": False, "world_frame_index_present": False,
-        "historical_video_or_csv_used": False, "reference_phase_used": False,
+        "training_reference_clock": False,
+        "world_frame_index_present": False,
+        "historical_video_or_csv_used": False,
+        "reference_phase_used": False,
         "all_source_rgb_frames_readable": True,
-        "source_identity_limit": "One directory is explicitly selected as one recording; disjoint sessions in one directory cannot be inferred from timestamps alone",
-        "model_clock_limit": "Native elapsed time is a new inference clock, not the historical world-video training reference clock; old scores and framewise parity do not transfer automatically",
+        "source_identity_limit": (
+            "One directory is explicitly selected as one recording; disjoint "
+            "sessions in one directory cannot be inferred from timestamps alone"
+        ),
+        "model_clock_limit": (
+            "Native elapsed time is a new inference clock, not the historical "
+            "world-video training reference clock; old scores and framewise parity "
+            "do not transfer automatically"
+        ),
     }
     if reader.schema == "v3":
         manifest["time_dataset"] = "vision_data/continuous_data/time"
         manifest["image_dataset"] = "vision_data/continuous_data/l_img"
-        manifest["clock_rule"] = "video_time_s = float64(vision_data/continuous_data/time) - first sorted native vision timestamp"
+        manifest["clock_rule"] = (
+            "video_time_s = float64(vision_data/continuous_data/time) - first sorted "
+            "native vision timestamp"
+        )
         manifest["hdf5_reader"] = reader.manifest()
     output.mkdir(parents=True, exist_ok=True)
     with alignment.open("xb") as stream:
         stream.write(content)
     with manifest_path.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
-    return {"alignment_path": str(alignment), "duration_s": duration,
-            "manifest_path": str(manifest_path), "fps": fps, "frame_count": len(rows)}
+    return {
+        "alignment_path": str(alignment),
+        "duration_s": duration,
+        "manifest_path": str(manifest_path),
+        "fps": fps,
+        "frame_count": len(rows),
+    }
 
 
 def validate_generated_alignment(
-    alignment_file: Path | str, frame_parts: Sequence[Mapping[str, Any]],
+    alignment_file: Path | str,
+    frame_parts: Sequence[Mapping[str, Any]],
     raw_run_dir: Path | str,
 ) -> dict[str, Any]:
     """Verify generated-clock identity against the currently extracted sources."""
@@ -191,11 +243,14 @@ def validate_generated_alignment(
     manifest_path = path.parent / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     raw = Path(raw_run_dir).expanduser().resolve()
-    if (manifest.get("schema") != SCHEMA or manifest.get("source") != SOURCE
-            or Path(manifest.get("raw_run_dir", "")).resolve() != raw
-            or manifest.get("alignment_file") != path.name
-            or manifest.get("alignment_columns") != list(ALIGNMENT_FIELDS)
-            or manifest.get("training_reference_clock") is not False):
+    if (
+        manifest.get("schema") != SCHEMA
+        or manifest.get("source") != SOURCE
+        or Path(manifest.get("raw_run_dir", "")).resolve() != raw
+        or manifest.get("alignment_file") != path.name
+        or manifest.get("alignment_columns") != list(ALIGNMENT_FIELDS)
+        or manifest.get("training_reference_clock") is not False
+    ):
         raise ValueError("Generated HDF5 clock manifest is not bound to this source directory")
     if sha256_file(path) != manifest.get("alignment_sha256"):
         raise ValueError("Generated HDF5 alignment checksum mismatch")
@@ -218,29 +273,46 @@ def validate_generated_alignment(
     origin = float(frame_parts[0]["t_abs"])
     for index, (row, native) in enumerate(zip(rows, frame_parts, strict=True)):
         t = float(native["t_abs"])
-        if (not math.isfinite(t) or int(row["frame_idx_global"]) != index
-                or row["source_hdf5"] != native["source_hdf5"]
-                or int(row["source_frame_idx"]) != int(native["source_frame_idx"])
-                or float(row["t_abs"]) != t or float(row["video_time_s"]) != t - origin):
-            raise ValueError(f"Generated HDF5 clock/native frame correspondence mismatch at row {index}")
+        if (
+            not math.isfinite(t)
+            or int(row["frame_idx_global"]) != index
+            or row["source_hdf5"] != native["source_hdf5"]
+            or int(row["source_frame_idx"]) != int(native["source_frame_idx"])
+            or float(row["t_abs"]) != t
+            or float(row["video_time_s"]) != t - origin
+        ):
+            raise ValueError(
+                f"Generated HDF5 clock/native frame correspondence mismatch at row {index}"
+            )
         if index and t <= float(frame_parts[index - 1]["t_abs"]):
             raise ValueError("Generated HDF5 clock requires strictly increasing native frames")
     last = float(frame_parts[-1]["t_abs"])
     fps = float(manifest["fps"])
-    if (manifest.get("raw_time_origin_abs") != origin
-            or manifest.get("raw_time_bounds_abs") != [origin, last]
-            or manifest.get("duration_s") != last - origin
-            or not math.isfinite(fps) or fps <= 0 or fps > 60
-            or manifest.get("expected_output_frame_count") != math.ceil((last - origin) * fps) + 1):
+    if (
+        manifest.get("raw_time_origin_abs") != origin
+        or manifest.get("raw_time_bounds_abs") != [origin, last]
+        or manifest.get("duration_s") != last - origin
+        or not math.isfinite(fps)
+        or fps <= 0
+        or fps > 60
+        or manifest.get("expected_output_frame_count") != math.ceil((last - origin) * fps) + 1
+    ):
         raise ValueError("Generated HDF5 clock time bounds or video parameters mismatch")
     return {
-        "source": SOURCE, "native_correspondence_verified": True,
+        "source": SOURCE,
+        "native_correspondence_verified": True,
         "generated_manifest_path": str(manifest_path),
         "generated_manifest_sha256": sha256_file(manifest_path),
         "source_inventory_sha256": manifest["source_inventory_sha256"],
-        "source_raw_run_dir": str(raw), "training_reference_clock": False,
-        "duration_s": manifest["duration_s"], "fps": fps,
+        "source_raw_run_dir": str(raw),
+        "training_reference_clock": False,
+        "duration_s": manifest["duration_s"],
+        "fps": fps,
         "duration_source": manifest["duration_source"],
         "model_clock_limit": manifest["model_clock_limit"],
-        "correspondence_validation": "All native source file hashes, exact CSV hash and every filename/local-index/float64-timestamp tuple verified against the current extraction",
+        "correspondence_validation": (
+            "All native source file hashes, exact CSV hash and every "
+            "filename/local-index/float64-timestamp tuple verified against the "
+            "current extraction"
+        ),
     }

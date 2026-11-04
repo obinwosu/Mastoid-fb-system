@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 import json
+from collections import Counter
+from collections.abc import Mapping, Sequence
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from ..events import EventBuild, event_to_dict
 from ..events.builder import phase_id_for
 from ..models import EvidenceEvent, EvidenceRelation
 from ..registry import RunRecord
-
 
 RULE_VERSION = "relation_rules_v1_factual_only"
 SOURCE_MANUAL_PHASE = "human_video_timepoint_annotation"
@@ -88,8 +88,11 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
             },
         }
     ]
-    model_phases = any(str(row.get("phase_source") or "").startswith("model_")
-                       or row.get("model_phase") is not None for row in events.phases)
+    model_phases = any(
+        str(row.get("phase_source") or "").startswith("model_")
+        or row.get("model_phase") is not None
+        for row in events.phases
+    )
     phase_source = SOURCE_MODEL_PHASE if model_phases else SOURCE_MANUAL_PHASE
     for source in (phase_source, SOURCE_VOXEL_EDT, SOURCE_STROKES, SOURCE_VISIBILITY):
         nodes.append({"id": f"source:{source}", "type": "evidence_source", "label": source})
@@ -99,8 +102,7 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
         phase_id = str(phase["phase_id"])
         nodes.append({"id": phase_id, "type": "phase", "attributes": dict(phase)})
         collector.add(run_node, "contains", phase_id)
-        collector.add(phase_id, "derived_from", f"source:{phase_source}",
-                      provisional=model_phases)
+        collector.add(phase_id, "derived_from", f"source:{phase_source}", provisional=model_phases)
 
     anatomy_ids: set[str] = set()
     for event in events.events:
@@ -109,12 +111,13 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
         collector.add(run_node, "contains", event.event_id)
         collector.add(event.event_id, "derived_from", f"source:{_source_for(event.event_type)}")
         interval_id = phase_id_for(
-            (event.t_start_s + event.t_end_s) / 2, events.phases,
-            name=event.phase, explicit_id=event.attributes.get("phase_id"),
+            (event.t_start_s + event.t_end_s) / 2,
+            events.phases,
+            name=event.phase,
+            explicit_id=event.attributes.get("phase_id"),
         )
         if interval_id is not None:
-            collector.add(event.event_id, "occurs_during", interval_id,
-                          provisional=model_phases)
+            collector.add(event.event_id, "occurs_during", interval_id, provisional=model_phases)
         entity = event.anatomy or event.attributes.get("boundary")
         if entity:
             entity_id = f"anatomy:{entity}"
@@ -123,7 +126,9 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
                 anatomy_ids.add(entity_id)
             collector.add(
                 event.event_id,
-                "simulator_overshoot_involves" if event.event_type == "simulator_overshoot" else "working_region_near",
+                "simulator_overshoot_involves"
+                if event.event_type == "simulator_overshoot"
+                else "working_region_near",
                 entity_id,
             )
 
@@ -131,7 +136,8 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
     boundary = [event for event in events.events if event.event_type == "boundary_work"]
     performance = [event for event in events.events if event.event_type == "performance_bout"]
     visibility = [
-        event for event in events.events
+        event
+        for event in events.events
         if event.event_type in {"under_ledge_candidate", "tip_occlusion"}
     ]
     for left in safety:
@@ -153,7 +159,8 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
         collector.add(context_id, "derived_from", f"source:{SOURCE_STROKES}")
         interval_id = phase_id_for(
             (float(context["t_start_s"]) + float(context["t_end_s"])) / 2,
-            events.phases, name=str(context.get("phase") or ""),
+            events.phases,
+            name=str(context.get("phase") or ""),
             explicit_id=context.get("phase_id"),
         )
         if interval_id is not None:
@@ -175,7 +182,7 @@ def build_relations(events: EventBuild, record: RunRecord) -> RelationBuild:
     }
     manifest = {
         "schema": "deterministic_relation_build_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "run_id": record.run_id,
         "global_run_id": record.global_run_id,
         "rule_version": RULE_VERSION,
@@ -198,9 +205,11 @@ def relation_to_dict(relation: EvidenceRelation) -> dict[str, Any]:
 
 
 def _legacy_phase(value: str | None) -> str | None:
-    return {"early_surface": "early_surface", "antrum_entry": "antrum", "deep_landmark": "incus"}.get(
-        str(value), value
-    )
+    return {
+        "early_surface": "early_surface",
+        "antrum_entry": "antrum",
+        "deep_landmark": "incus",
+    }.get(str(value), value)
 
 
 def compare_legacy_graph(build: RelationBuild, legacy_path: Path) -> dict[str, Any]:
@@ -209,17 +218,27 @@ def compare_legacy_graph(build: RelationBuild, legacy_path: Path) -> dict[str, A
         return {"available": False, "legacy_path": str(legacy_path)}
     legacy = json.loads(legacy_path.read_text(encoding="utf-8"))
     new_events = [
-        node for node in build.graph["nodes"]
-        if node["type"] in {
-            "simulator_overshoot", "boundary_work", "performance_bout",
-            "under_ledge_candidate", "tip_occlusion",
+        node
+        for node in build.graph["nodes"]
+        if node["type"]
+        in {
+            "simulator_overshoot",
+            "boundary_work",
+            "performance_bout",
+            "under_ledge_candidate",
+            "tip_occlusion",
         }
     ]
     old_events = [
-        node for node in legacy["nodes"]
-        if node["type"] in {
-            "simulator_overshoot", "boundary_work", "performance_bout",
-            "under_ledge_candidate", "tip_occlusion",
+        node
+        for node in legacy["nodes"]
+        if node["type"]
+        in {
+            "simulator_overshoot",
+            "boundary_work",
+            "performance_bout",
+            "under_ledge_candidate",
+            "tip_occlusion",
         }
     ]
 
@@ -235,8 +254,11 @@ def compare_legacy_graph(build: RelationBuild, legacy_path: Path) -> dict[str, A
         if not extra and isinstance(attrs.get("attributes"), Mapping):
             extra = attrs["attributes"].get("boundary")
         return (
-            str(node["type"]), str(phase), str(extra or ""),
-            round(float(start), 3), round(float(end), 3),
+            str(node["type"]),
+            str(phase),
+            str(extra or ""),
+            round(float(start), 3),
+            round(float(end), 3),
         )
 
     old_signatures = Counter(signature(node, old=True) for node in old_events)
@@ -248,22 +270,32 @@ def compare_legacy_graph(build: RelationBuild, legacy_path: Path) -> dict[str, A
     old_relations = Counter(edge["relation"] for edge in legacy["edges"])
     new_relations = Counter(edge["relation_type"] for edge in build.graph["edges"])
 
-    def merged_boundary_geometry(nodes: Sequence[Mapping[str, Any]], *, old: bool) -> list[tuple[str, float, float]]:
+    def merged_boundary_geometry(
+        nodes: Sequence[Mapping[str, Any]], *, old: bool
+    ) -> list[tuple[str, float, float]]:
         grouped: dict[str, list[tuple[float, float]]] = {}
         for node in nodes:
             if node["type"] != "boundary_work":
                 continue
             attrs = node.get("attributes") or {}
             nested = attrs.get("attributes") or {}
-            boundary_name = str(attrs.get("boundary") or nested.get("boundary") or attrs.get("anatomy") or "")
-            start_key, end_key = (("t_start", "t_end") if old else ("t_start_s", "t_end_s"))
-            grouped.setdefault(boundary_name, []).append((float(attrs[start_key]), float(attrs[end_key])))
+            boundary_name = str(
+                attrs.get("boundary") or nested.get("boundary") or attrs.get("anatomy") or ""
+            )
+            start_key, end_key = ("t_start", "t_end") if old else ("t_start_s", "t_end_s")
+            grouped.setdefault(boundary_name, []).append(
+                (float(attrs[start_key]), float(attrs[end_key]))
+            )
         result = []
         for boundary_name, intervals in sorted(grouped.items()):
             current_start: float | None = None
             current_end: float | None = None
             for start, end in sorted(intervals):
-                if current_start is not None and current_end is not None and start - current_end > 10.0:
+                if (
+                    current_start is not None
+                    and current_end is not None
+                    and start - current_end > 10.0
+                ):
                     result.append((boundary_name, round(current_start, 3), round(current_end, 3)))
                     current_start, current_end = start, end
                 else:
@@ -288,11 +320,13 @@ def compare_legacy_graph(build: RelationBuild, legacy_path: Path) -> dict[str, A
         "new_node_counts": dict(new_counts),
         "legacy_relation_counts": dict(old_relations),
         "new_relation_counts": dict(new_relations),
-        "boundary_geometry_equivalent_ignoring_legacy_phase_clip": old_boundary_geometry == new_boundary_geometry,
+        "boundary_geometry_equivalent_ignoring_legacy_phase_clip": old_boundary_geometry
+        == new_boundary_geometry,
         "legacy_boundary_geometry": old_boundary_geometry,
         "new_boundary_geometry": new_boundary_geometry,
         "known_phase_semantics_difference": (
-            "New phase nodes retain exact human annotation bounds; the legacy graph used observed drilling coverage."
+            "New phase nodes retain exact human annotation bounds; "
+            "the legacy graph used observed drilling coverage."
         ),
         "known_motion_semantics_difference": (
             "Overlap relations use full-precision timestamps; older comparison "

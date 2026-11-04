@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
 import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
+from ..registry import RunRecord
+from ..source_config import ResolvedRunSources
 from .core_frames import _git_commit, _require_numeric_stack
 from .edt_enrichment import EdtFrameBuild, load_anatomy_profile, read_edt_file
 from .phase_geometry import resolve_phase_geometry
-from ..registry import RunRecord
-from ..source_config import ResolvedRunSources
-
 
 TIP_STRUCTURES = {
     "Bone": "Bone",
@@ -89,7 +89,8 @@ def enrich_tip_edt(
 ) -> TipEdtBuild:
     _, np = _require_numeric_stack()
     profile = (
-        anatomy_profile if anatomy_profile is not None
+        anatomy_profile
+        if anatomy_profile is not None
         else load_anatomy_profile(project_root, record.anatomy_key)
     )
     phase_geometry = resolve_phase_geometry(
@@ -115,9 +116,7 @@ def enrich_tip_edt(
         volume_quaternion = np.broadcast_to(
             phase_geometry["volume_quaternion_xyzw"], (len(frames), 4)
         ).copy()
-    local_m = _inverse_quaternion_rotate(
-        drill_position - volume_position, volume_quaternion
-    )
+    local_m = _inverse_quaternion_rotate(drill_position - volume_position, volume_quaternion)
     meters_per_sim = float(profile["meters_per_simulator_unit"])
     local_sim = local_m / meters_per_sim
     dimensions = profile["volume_dimensions_sim"]
@@ -159,7 +158,7 @@ def enrich_tip_edt(
     outside_count = int(np.sum(~inside))
     manifest = {
         "schema": "tip_edt_enrichment_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "git_commit": _git_commit(project_root),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
@@ -209,7 +208,7 @@ def compare_legacy_tip_edt(build: TipEdtBuild, legacy_path: Path) -> dict[str, A
         return result if math.isfinite(result) else None
 
     differing_frames: set[int] = set()
-    for new, old in zip(build.frames, legacy):
+    for new, old in zip(build.frames, legacy, strict=False):
         for column in numeric_columns:
             left, right = number(new.get(column)), number(old.get(column))
             if left is None or right is None:
@@ -267,12 +266,13 @@ def write_tip_edt_build(output_dir: Path, build: TipEdtBuild, regression: dict[s
         f"- Tip inside volume: {build.manifest['tip_inside_volume_frame_count']}",
         f"- Tip outside volume: {build.manifest['tip_outside_volume_frame_count']}",
         f"- Exact legacy regression: **{regression.get('all_match')}**",
-        f"- EDT indices and distances exact: **{regression.get('edt_indices_and_distances_exact')}**",
+        "- EDT indices and distances exact: "
+        f"**{regression.get('edt_indices_and_distances_exact')}**",
         f"- Local coordinates within 2e-7: **{regression.get('local_coordinates_within_2e_7')}**",
         f"- Legacy-equivalent result: **{regression.get('legacy_equivalent')}**",
-        f"- Frames with local-coordinate differences above 1e-9: {regression.get('differing_frame_count')}",
+        "- Frames with local-coordinate differences above 1e-9: "
+        f"{regression.get('differing_frame_count')}",
         "",
         "The legacy table is validation-only and was opened after construction.",
     ]
     (output_dir / "TIP_EDT_AUDIT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-

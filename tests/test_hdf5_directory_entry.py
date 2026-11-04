@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +20,7 @@ PADDED_SEPARATED_ID = f"P{98:03d}_T{97:03d}"
 
 def entry_module():
     from evidence_system import directory_pipeline
+
     return directory_pipeline
 
 
@@ -57,7 +58,9 @@ def test_input_recording_itself_is_discovered_once_and_no_hdf5_is_rejected(tmp_p
         entry_module().discover_recordings(empty)
 
 
-@pytest.mark.parametrize("name", [PADDED_GENERATED_ID, PADDED_SEPARATED_ID, "generated_anatX_" + PADDED_GENERATED_ID])
+@pytest.mark.parametrize(
+    "name", [PADDED_GENERATED_ID, PADDED_SEPARATED_ID, "generated_anatX_" + PADDED_GENERATED_ID]
+)
 def test_historical_suffix_ids_are_normalized_without_leading_zeros(tmp_path, name):
     assert entry_module().run_id_for_directory(tmp_path / name) == GENERATED_ID
 
@@ -76,21 +79,29 @@ def runtime_file(folder):
     (folder / "bundle").mkdir(exist_ok=True)
     (folder / "corrections.csv").write_text("generated test authority placeholder")
     path = folder / "runtime.json"
-    path.write_text(json.dumps({
-        "schema": "hdf5_directory_runtime_v1",
-        "simulator_root": str(folder / "simulator"),
-        "correction_table": str(folder / "corrections.csv"),
-        "phase_model_bundle": str(folder / "bundle"),
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "schema": "hdf5_directory_runtime_v1",
+                "simulator_root": str(folder / "simulator"),
+                "correction_table": str(folder / "corrections.csv"),
+                "phase_model_bundle": str(folder / "bundle"),
+            }
+        )
+    )
     return path
 
 
-def test_default_root_config_resolves_relative_assets_from_installation_not_cwd(tmp_path, monkeypatch):
+def test_default_root_config_resolves_relative_assets_from_installation_not_cwd(
+    tmp_path, monkeypatch
+):
     project = tmp_path / "relocated app"
     project.mkdir()
     payload = {
-        "schema": "hdf5_directory_runtime_v1", "simulator_root": "assets/simulator",
-        "edt_root": "separate grids", "correction_table": "data/corrections.csv",
+        "schema": "hdf5_directory_runtime_v1",
+        "simulator_root": "assets/simulator",
+        "edt_root": "separate grids",
+        "correction_table": "data/corrections.csv",
         "phase_model_bundle": ".local/models/frozen",
         "video_fps": 12.0,
     }
@@ -160,7 +171,10 @@ def test_output_cannot_overwrite_or_overlap_input(tmp_path, location):
         output = tmp_path / "raw"
     with pytest.raises((ValueError, FileExistsError), match="output|Output|exist|input|Input"):
         entry_module().process_hdf5_directory(
-            raw, runtime_config=runtime_file(tmp_path), output_dir=output, prepare_only=True,
+            raw,
+            runtime_config=runtime_file(tmp_path),
+            output_dir=output,
+            prepare_only=True,
         )
     assert source.read_bytes() == before
     if location == "existing":
@@ -176,19 +190,27 @@ def test_duplicate_normalized_recording_ids_fail_before_any_output_is_created(tm
     output = tmp_path / "new_batch"
     with pytest.raises(ValueError, match="[Dd]uplicate|collision|ambiguous"):
         entry_module().process_hdf5_directory(
-            raw, runtime_config=runtime_file(tmp_path), output_dir=output, prepare_only=True,
+            raw,
+            runtime_config=runtime_file(tmp_path),
+            output_dir=output,
+            prepare_only=True,
         )
     assert not output.exists()
 
 
 @pytest.mark.parametrize("prior_environment", [None, "previous_profile_configuration"])
 @pytest.mark.parametrize("with_reference", [False, True])
-def test_batch_isolates_preparation_and_build_failures_restores_environment_and_serves_only_successes(
-    tmp_path, monkeypatch, prior_environment, with_reference,
+def test_batch_isolates_failures_restores_environment_and_serves_only_successes(
+    tmp_path,
+    monkeypatch,
+    prior_environment,
+    with_reference,
 ):
     entry = entry_module()
     raw = tmp_path / "raw"
-    sources = [chunk(raw / name / "one.hdf5") for name in ("a_bad_prepare", "b_bad_build", "c_success")]
+    sources = [
+        chunk(raw / name / "one.hdf5") for name in ("a_bad_prepare", "b_bad_build", "c_success")
+    ]
     original_bytes = {path: path.read_bytes() for path in sources}
     if prior_environment is None:
         monkeypatch.delenv("MASTOID_ANATOMY_PROFILES", raising=False)
@@ -206,15 +228,21 @@ def test_batch_isolates_preparation_and_build_failures_restores_environment_and_
         profile.parent.mkdir(parents=True)
         profile.write_text(json.dumps({"fixture": raw.name}))
         return (
-            SimpleNamespace(run_id=run_id), SimpleNamespace(raw_run_dir=raw), profile,
-            {"fixture": raw.name}, {"alignment_path": str(case_dir / "alignment.csv")},
+            SimpleNamespace(run_id=run_id),
+            SimpleNamespace(raw_run_dir=raw),
+            profile,
+            {"fixture": raw.name},
+            {"alignment_path": str(case_dir / "alignment.csv")},
         )
 
     def build(**kwargs):
         source = kwargs["sources"].raw_run_dir
         case_dir = kwargs["result_dir"]
         built.append(source.name)
-        assert Path(os.environ["MASTOID_ANATOMY_PROFILES"]) == case_dir / "config/anatomy_profiles.local.json"
+        assert (
+            Path(os.environ["MASTOID_ANATOMY_PROFILES"])
+            == case_dir / "config/anatomy_profiles.local.json"
+        )
         assert kwargs["build_video"] is True
         if source.name == "b_bad_build":
             raise RuntimeError("generated build failure")
@@ -234,7 +262,10 @@ def test_batch_isolates_preparation_and_build_failures_restores_environment_and_
         runtime_path.write_text(json.dumps(settings))
     output = tmp_path / "new_batch"
     summary = entry.process_hdf5_directory(
-        raw, runtime_config=runtime_path, output_dir=output, base_port=18810,
+        raw,
+        runtime_config=runtime_path,
+        output_dir=output,
+        base_port=18810,
     )
     assert prepared == ["a_bad_prepare", "b_bad_build", "c_success"]
     assert built == ["b_bad_build", "c_success"]
@@ -248,20 +279,32 @@ def test_batch_isolates_preparation_and_build_failures_restores_environment_and_
     assert {path: path.read_bytes() for path in sources} == original_bytes
 
     from evidence_system.cli import _manifest_serve_options, build_parser
+
     # Never read the developer's optional default during a synthetic boundary test.
     monkeypatch.setattr("evidence_system.cli._configured_motion_reference", lambda: None)
     manifest_path = Path(summary["recommendations_manifest"])
     manifest = json.loads(manifest_path.read_text())
-    case, = manifest["cases"]
+    (case,) = manifest["cases"]
     assert case["run_id"] == entry.run_id_for_directory(raw / "c_success")
     assert case["port"] == 18812  # Failed cases do not silently retarget assigned URLs.
-    assert manifest["data_access"] == {"expert_annotations": "none", "participant_responses": "none"}
+    assert manifest["data_access"] == {
+        "expert_annotations": "none",
+        "participant_responses": "none",
+    }
     assert "study_state" not in case
     for field in ("evidence_database", "review_video", "review_video_manifest", "ray_v3_directory"):
         assert Path(case[field]).is_absolute()
-    options = _manifest_serve_options(build_parser().parse_args([
-        "serve", "--manifest", str(manifest_path), "--case-id", case["case_id"],
-    ]))
+    options = _manifest_serve_options(
+        build_parser().parse_args(
+            [
+                "serve",
+                "--manifest",
+                str(manifest_path),
+                "--case-id",
+                case["case_id"],
+            ]
+        )
+    )
     assert options["ui_dir"] == (ROOT / "apps/recommendations").resolve()
     assert options["run_id"] == case["run_id"] and options["port"] == 18812
     assert options["db_path"] == Path(case["evidence_database"])
@@ -270,17 +313,23 @@ def test_batch_isolates_preparation_and_build_failures_restores_environment_and_
     if reference:
         assert case["cohort_benchmark"] == str(reference)
         import hashlib
+
         assert case["cohort_benchmark_sha256"] == hashlib.sha256(reference.read_bytes()).hexdigest()
     else:
         assert "cohort_benchmark" not in case
         assert "cohort_benchmark_sha256" not in case
-    assert options["available_runs"] == [{"run_id": case["run_id"], "url": "http://127.0.0.1:18812/"}]
+    assert options["available_runs"] == [
+        {"run_id": case["run_id"], "url": "http://127.0.0.1:18812/"}
+    ]
 
 
 @pytest.mark.parametrize("separate_edt_root", [False, True])
-def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_path, monkeypatch, separate_edt_root):
+def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(
+    tmp_path, monkeypatch, separate_edt_root
+):
     entry = entry_module()
     from evidence_system import pipeline  # Load ordinary dependencies before isolated adapters.
+
     raw = tmp_path / "raw_recording"
     chunk(raw / "one.hdf5")
     runtime_path = runtime_file(tmp_path)
@@ -297,7 +346,8 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
     def configure(**kwargs):
         calls.append(("anatomy", kwargs))
         return SimpleNamespace(
-            anatomy_key="generated_anatomy", edt_dir=edt,
+            anatomy_key="generated_anatomy",
+            edt_dir=edt,
             profile={"generated_fixture": True},
             metadata={"selection": "explicit_generated", "mode": "new_recording_model_geometry"},
         )
@@ -309,8 +359,13 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
         path.write_text("frame_idx_global,video_time_s\n0,0\n1,1\n")
         return {"alignment_path": str(path.resolve()), "duration_s": 1.0, "frame_count": 2}
 
-    monkeypatch.setitem(sys.modules, "evidence_system.anatomy_catalog", SimpleNamespace(configure_anatomy=configure))
-    monkeypatch.setitem(sys.modules, "evidence_system.hdf5_clock", SimpleNamespace(generate_hdf5_alignment=clock))
+    monkeypatch.setitem(
+        sys.modules, "evidence_system.anatomy_catalog", SimpleNamespace(configure_anatomy=configure)
+    )
+    monkeypatch.setitem(
+        sys.modules, "evidence_system.hdf5_clock", SimpleNamespace(generate_hdf5_alignment=clock)
+    )
+
     def validate(record, sources, *, project_root):
         assert sources.phase_annotation_file is None
         assert sources.phase_model_bundle == tmp_path / "bundle"
@@ -318,14 +373,25 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
         return SimpleNamespace(manifest={"status": "generated_test_preflight"})
 
     monkeypatch.setattr("evidence_system.r4_provenance.validate_production_geometry", validate)
-    monkeypatch.setattr("evidence_system.source_audit.build_source_audit", lambda *args, **kwargs: {
-        "ready_for_frame_extraction": True, "blocking_items": [],
-    })
-    monkeypatch.setattr(pipeline, "build_evidence", lambda **kwargs: pytest.fail("Prepare-only must not execute a build"))
+    monkeypatch.setattr(
+        "evidence_system.source_audit.build_source_audit",
+        lambda *args, **kwargs: {
+            "ready_for_frame_extraction": True,
+            "blocking_items": [],
+        },
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_evidence",
+        lambda **kwargs: pytest.fail("Prepare-only must not execute a build"),
+    )
     before = os.environ.get("MASTOID_ANATOMY_PROFILES")
     summary = entry.process_hdf5_directory(
-        raw, anatomy_model="generated_model", runtime_config=runtime_path,
-        output_dir=tmp_path / "prepared", prepare_only=True,
+        raw,
+        anatomy_model="generated_model",
+        runtime_config=runtime_path,
+        output_dir=tmp_path / "prepared",
+        prepare_only=True,
     )
     assert summary["status"] == "prepared" and summary["prepared_count"] == 1
     assert summary["completed_count"] == 0 and summary["failed_count"] == 0
@@ -338,7 +404,8 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
     case_dir = Path(summary["cases"][0]["result_directory"])
     from evidence_system.registry import load_registry
     from evidence_system.source_config import load_source_roots, resolve_run_sources
-    record, = load_registry(case_dir / "config/runs.local.csv")
+
+    (record,) = load_registry(case_dir / "config/runs.local.csv")
     assert record.anatomy_mapping_status == "configured_model_sources_unverified_recording"
     roots = load_source_roots(case_dir / "config/source_paths.local.json")
     resolved = resolve_run_sources(record, roots)
@@ -352,7 +419,9 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
     assert (case_dir / "preflight.json").is_file()
     saved_source = case_dir / "config/source_paths.local.json"
     original = saved_source.read_bytes()
-    (tmp_path / "config.local.json").write_text("A new runtime default must not alter saved case sources")
+    (tmp_path / "config.local.json").write_text(
+        "A new runtime default must not alter saved case sources"
+    )
     loaded_again = load_source_roots(saved_source, project_root=tmp_path)
     resolved_again = resolve_run_sources(record, loaded_again)
     assert resolved_again == resolved
@@ -360,10 +429,16 @@ def test_prepare_only_writes_reusable_case_config_without_fitting_or_video(tmp_p
 
 
 @pytest.mark.parametrize("span_s", [0.0, 0.999, 1.0])
-def test_actual_native_clock_short_recording_boundary_never_fabricates_duration(tmp_path, monkeypatch, span_s):
+def test_actual_native_clock_short_recording_boundary_never_fabricates_duration(
+    tmp_path, monkeypatch, span_s
+):
     import h5py
     import numpy as np
-    from evidence_system import pipeline  # Resolve ordinary modules before the isolated anatomy adapter.
+
+    from evidence_system import (
+        pipeline,  # Resolve ordinary modules before the isolated anatomy adapter.
+    )
+
     entry = entry_module()
     raw = tmp_path / "generated_recording"
     raw.mkdir()
@@ -374,16 +449,28 @@ def test_actual_native_clock_short_recording_boundary_never_fabricates_duration(
         handle.create_dataset("data/l_img", data=np.zeros((len(times), 4, 4, 3), dtype=np.uint8))
     original = source.read_bytes()
     anatomy = SimpleNamespace(
-        anatomy_key="generated_model", edt_dir=tmp_path / "generated_edt", profile={},
+        anatomy_key="generated_model",
+        edt_dir=tmp_path / "generated_edt",
+        profile={},
         metadata={"mode": "new_recording_model_geometry"},
     )
-    monkeypatch.setitem(sys.modules, "evidence_system.anatomy_catalog", SimpleNamespace(
-        configure_anatomy=lambda **kwargs: anatomy,
-    ))
-    monkeypatch.setattr(pipeline, "build_evidence", lambda **kwargs: pytest.fail("Boundary test must not execute inference"))
+    monkeypatch.setitem(
+        sys.modules,
+        "evidence_system.anatomy_catalog",
+        SimpleNamespace(
+            configure_anatomy=lambda **kwargs: anatomy,
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_evidence",
+        lambda **kwargs: pytest.fail("Boundary test must not execute inference"),
+    )
     runtime = {
-        "simulator_root": tmp_path, "correction_table": tmp_path / "generated.csv",
-        "video_fps": 10.0, "phase_model_bundle": tmp_path / "frozen_bundle",
+        "simulator_root": tmp_path,
+        "correction_table": tmp_path / "generated.csv",
+        "video_fps": 10.0,
+        "phase_model_bundle": tmp_path / "frozen_bundle",
     }
     case_dir = tmp_path / "case_output"
     if span_s < 1:
@@ -392,7 +479,12 @@ def test_actual_native_clock_short_recording_boundary_never_fabricates_duration(
         assert not (case_dir / "config/source_paths.local.json").exists()
     else:
         record, sources, _, _, clock = entry._prepare_case(
-            raw, "generated_case", case_dir, runtime, "generated_model", ROOT,
+            raw,
+            "generated_case",
+            case_dir,
+            runtime,
+            "generated_model",
+            ROOT,
         )
         assert sources.phase_duration_s == 1.0 and clock["duration_s"] == 1.0
         assert record.anatomy_mapping_status == "configured_model_sources_unverified_recording"
@@ -407,25 +499,47 @@ def test_actual_native_clock_short_recording_boundary_never_fabricates_duration(
 
 def test_cli_rejects_prepare_plus_serve_before_any_work(monkeypatch, tmp_path):
     from evidence_system import cli
-    monkeypatch.setattr(entry_module(), "process_hdf5_directory", lambda *args, **kwargs: pytest.fail("Must reject before preparation"))
+
+    monkeypatch.setattr(
+        entry_module(),
+        "process_hdf5_directory",
+        lambda *args, **kwargs: pytest.fail("Must reject before preparation"),
+    )
     with pytest.raises(ValueError, match="prepare-only"):
         cli.main(["process-hdf5", "--input-dir", str(tmp_path), "--prepare-only", "--serve"])
 
 
-@pytest.mark.parametrize("failed_count,serve_result,expected_failure", [
-    (0, 0, False), (1, 0, True), (0, 3, True), (1, 3, True),
-])
-def test_cli_reports_build_or_server_failure_in_exit_status(tmp_path, monkeypatch, failed_count, serve_result, expected_failure):
+@pytest.mark.parametrize(
+    "failed_count,serve_result,expected_failure",
+    [
+        (0, 0, False),
+        (1, 0, True),
+        (0, 3, True),
+        (1, 3, True),
+    ],
+)
+def test_cli_reports_build_or_server_failure_in_exit_status(
+    tmp_path, monkeypatch, failed_count, serve_result, expected_failure
+):
     from evidence_system import cli
+
     manifest = tmp_path / "generated manifest.json"
-    monkeypatch.setattr(entry_module(), "process_hdf5_directory", lambda *args, **kwargs: {
-        "failed_count": failed_count, "recommendations_manifest": str(manifest),
-        "status": "partial_failure" if failed_count else "completed", "output_directory": str(tmp_path),
-    })
+    monkeypatch.setattr(
+        entry_module(),
+        "process_hdf5_directory",
+        lambda *args, **kwargs: {
+            "failed_count": failed_count,
+            "recommendations_manifest": str(manifest),
+            "status": "partial_failure" if failed_count else "completed",
+            "output_directory": str(tmp_path),
+        },
+    )
     served = []
+
     def serve(args):
         served.append(args.manifest)
         return serve_result
+
     monkeypatch.setattr(cli, "serve_batch_command", serve)
     result = cli.main(["process-hdf5", "--input-dir", str(tmp_path), "--serve"])
     assert (result != 0) is expected_failure
@@ -433,77 +547,118 @@ def test_cli_reports_build_or_server_failure_in_exit_status(tmp_path, monkeypatc
 
 
 def serve_manifest(path, *, ports=(18810, 18811), identifiers=("generated_a", "generated_b")):
-    path.write_text(json.dumps({
-        "app_mode": "recommendations", "host": "127.0.0.1",
-        "data_access": {"expert_annotations": "none", "participant_responses": "none"},
-        "cases": [{"case_id": identifier, "run_id": identifier, "port": port}
-                  for identifier, port in zip(identifiers, ports, strict=True)],
-    }))
+    path.write_text(
+        json.dumps(
+            {
+                "app_mode": "recommendations",
+                "host": "127.0.0.1",
+                "data_access": {"expert_annotations": "none", "participant_responses": "none"},
+                "cases": [
+                    {"case_id": identifier, "run_id": identifier, "port": port}
+                    for identifier, port in zip(identifiers, ports, strict=True)
+                ],
+            }
+        )
+    )
     return path
 
 
-@pytest.mark.parametrize("ports,identifiers", [
-    ((18810, 18810), ("generated_a", "generated_b")),
-    ((18810, 65536), ("generated_a", "generated_b")),
-    ((18810, 18811), ("same_case", "same_case")),
-])
-def test_batch_serve_rejects_port_or_identity_collisions_without_launching(tmp_path, monkeypatch, ports, identifiers):
-    from evidence_system import cli
+@pytest.mark.parametrize(
+    "ports,identifiers",
+    [
+        ((18810, 18810), ("generated_a", "generated_b")),
+        ((18810, 65536), ("generated_a", "generated_b")),
+        ((18810, 18811), ("same_case", "same_case")),
+    ],
+)
+def test_batch_serve_rejects_port_or_identity_collisions_without_launching(
+    tmp_path, monkeypatch, ports, identifiers
+):
     import socket
     import subprocess
+
+    from evidence_system import cli
+
     path = serve_manifest(tmp_path / "manifest.json", ports=ports, identifiers=identifiers)
-    monkeypatch.setattr(socket, "socket", lambda: pytest.fail("Invalid manifest must not probe ports"))
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Invalid manifest must not launch"))
+    monkeypatch.setattr(
+        socket, "socket", lambda: pytest.fail("Invalid manifest must not probe ports")
+    )
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Invalid manifest must not launch")
+    )
     with pytest.raises(ValueError, match="unique|ports"):
         cli.main(["serve-batch", "--manifest", str(path)])
 
 
 def test_batch_serve_occupied_port_cannot_start_or_stop_other_services(tmp_path, monkeypatch):
-    from evidence_system import cli
     import socket
     import subprocess
+
+    from evidence_system import cli
+
     path = serve_manifest(tmp_path / "manifest.json")
+
     class OccupiedPort:
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             return False
+
         def bind(self, address):
             raise OSError("generated occupied port")
+
     monkeypatch.setattr(socket, "socket", OccupiedPort)
-    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: pytest.fail("Occupied port must prevent all launches"))
+    monkeypatch.setattr(
+        subprocess,
+        "Popen",
+        lambda *args, **kwargs: pytest.fail("Occupied port must prevent all launches"),
+    )
     with pytest.raises(OSError, match="occupied"):
         cli.main(["serve-batch", "--manifest", str(path)])
 
 
 @pytest.mark.parametrize("failure", ["second_launch", "child_exit", "interrupt"])
-def test_batch_launcher_preserves_argv_and_cleans_up_only_its_children(tmp_path, monkeypatch, failure):
-    from evidence_system import cli
+def test_batch_launcher_preserves_argv_and_cleans_up_only_its_children(
+    tmp_path, monkeypatch, failure
+):
     import socket
     import subprocess
     import time
+
+    from evidence_system import cli
+
     path = serve_manifest(tmp_path / "manifest with spaces.json")
+
     class AvailablePort:
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             return False
+
         def bind(self, address):
             assert address[0] == "127.0.0.1"
+
     class Child:
         def __init__(self, code=None):
             self.returncode = code
             self.terminated = False
             self.waited = False
+
         def poll(self):
             return self.returncode
+
         def terminate(self):
             self.terminated = True
             self.returncode = -15
+
         def wait(self, timeout=None):
             self.waited = True
             return self.returncode
+
     launched = []
+
     def launch(argv, **kwargs):
         if failure == "second_launch" and launched:
             raise OSError("generated second child failure")
@@ -514,8 +669,10 @@ def test_batch_launcher_preserves_argv_and_cleans_up_only_its_children(tmp_path,
         child = Child(4 if failure == "child_exit" and not launched else None)
         launched.append(child)
         return child
+
     def interrupt(_):
         raise KeyboardInterrupt
+
     monkeypatch.setattr(socket, "socket", AvailablePort)
     monkeypatch.setattr(subprocess, "Popen", launch)
     monkeypatch.setattr(time, "sleep", interrupt)
@@ -532,18 +689,33 @@ def test_batch_launcher_preserves_argv_and_cleans_up_only_its_children(tmp_path,
 def generated_motion_reference(path):
     """Real schema/functions, entirely generated rows and declared fixture provenance."""
     from evidence_system.motion_comparison import (
-        build_motion_windows, build_expert_reference, write_motion_artifact,
+        build_expert_reference,
+        build_motion_windows,
+        write_motion_artifact,
     )
-    rows = [{
-        "t_abs": 100 + i / 4, "t_video_s": i / 4,
-        "drill_x": i / 4000, "drill_y": 0.0, "drill_z": 0.0,
-        "frame_removed_mm3": 0.25, "phase": "early_surface", "phase_id": "generated_phase",
-    } for i in range(25)]
+
+    rows = [
+        {
+            "t_abs": 100 + i / 4,
+            "t_video_s": i / 4,
+            "drill_x": i / 4000,
+            "drill_y": 0.0,
+            "drill_z": 0.0,
+            "frame_removed_mm3": 0.25,
+            "phase": "early_surface",
+            "phase_id": "generated_phase",
+        }
+        for i in range(25)
+    ]
     build = build_motion_windows(
-        rows, global_run_id="generated_reference_run", participant_id="generated_expert",
+        rows,
+        global_run_id="generated_reference_run",
+        participant_id="generated_expert",
         provenance={
-            "pose_source": "canonical_vision_pose", "position_unit": "m",
-            "phase_source_kind": "human_phase_annotation", "clock_source": "generated_native_clock",
+            "pose_source": "canonical_vision_pose",
+            "position_unit": "m",
+            "phase_source_kind": "human_phase_annotation",
+            "clock_source": "generated_native_clock",
             "source_artifacts": [
                 {"kind": kind, "path": f"generated_fixture/{kind}", "sha256": "a" * 64}
                 for kind in ("frames", "phases")
@@ -551,7 +723,8 @@ def generated_motion_reference(path):
         },
     )
     reference = build_expert_reference(
-        [build], expert_participant_ids=["generated_expert"],
+        [build],
+        expert_participant_ids=["generated_expert"],
         provenance={"expert_definition": "Generated unit-test identity; no real expertise claim"},
     )
     write_motion_artifact(path, reference)
@@ -591,8 +764,11 @@ def test_motion_reference_runtime_resolves_relative_path_and_validates_content(t
         entry_module().load_directory_runtime(path, project_root=tmp_path)
 
 
-def test_default_motion_reference_uses_only_the_temporary_installation_config(tmp_path, monkeypatch):
+def test_default_motion_reference_uses_only_the_temporary_installation_config(
+    tmp_path, monkeypatch
+):
     from evidence_system import cli
+
     monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
     assert cli._configured_motion_reference() is None
     config = tmp_path / "config.local.json"
@@ -607,14 +783,20 @@ def test_default_motion_reference_uses_only_the_temporary_installation_config(tm
 
 
 @pytest.mark.parametrize("mode", ["explicit", "default", "missing_explicit", "tampered_explicit"])
-def test_manifest_reference_binding_never_silently_replaces_an_explicit_reference(tmp_path, monkeypatch, mode):
+def test_manifest_reference_binding_never_silently_replaces_an_explicit_reference(
+    tmp_path, monkeypatch, mode
+):
     import hashlib
+
     from evidence_system import cli
+
     fallback = generated_motion_reference(tmp_path / "default_reference.json")
     explicit = generated_motion_reference(tmp_path / "case_reference.json")
     monkeypatch.setattr(cli, "_configured_motion_reference", lambda: fallback)
     case = {
-        "case_id": "generated_case", "run_id": "generated_case", "port": 18810,
+        "case_id": "generated_case",
+        "run_id": "generated_case",
+        "port": 18810,
         "evidence_database": str(tmp_path / "evidence.sqlite3"),
         "review_video": str(tmp_path / "review.webm"),
         "review_video_manifest": str(tmp_path / "video_manifest.json"),
@@ -627,11 +809,16 @@ def test_manifest_reference_binding_never_silently_replaces_an_explicit_referenc
     elif mode == "tampered_explicit":
         explicit.write_bytes(explicit.read_bytes() + b"\n")
     manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({
-        "app_mode": "recommendations", "ui_directory": str(ROOT / "apps/recommendations"),
-        "data_access": {"expert_annotations": "none", "participant_responses": "none"},
-        "cases": [case],
-    }))
+    manifest.write_text(
+        json.dumps(
+            {
+                "app_mode": "recommendations",
+                "ui_directory": str(ROOT / "apps/recommendations"),
+                "data_access": {"expert_annotations": "none", "participant_responses": "none"},
+                "cases": [case],
+            }
+        )
+    )
     args = cli.build_parser().parse_args(["serve", "--manifest", str(manifest)])
     if mode == "missing_explicit":
         with pytest.raises(FileNotFoundError, match="reference|benchmark|cohort"):
@@ -648,7 +835,9 @@ def generated_r4_motion_catalog(tmp_path, monkeypatch, *, defect=None):
     """Mock only the trusted manifest pin for a self-contained generated catalog."""
     import csv
     import hashlib
+
     from evidence_system import cli
+
     catalog = tmp_path / "generated_catalog"
     hashes = []
 
@@ -662,82 +851,122 @@ def generated_r4_motion_catalog(tmp_path, monkeypatch, *, defect=None):
         hashes.append({"Path": relative, "SHA256": hashlib.sha256(target.read_bytes()).hexdigest()})
         return target
 
-    write_csv("participants.csv", [
-        {"ParticipantID": "generated_expert", "TrainingYears": 11},
-        {"ParticipantID": "generated_partial_expert", "TrainingYears": 12},
-        {"ParticipantID": "generated_novice", "TrainingYears": 10},
-    ])
-    records = [{
-        "RecordingID": rid, "ParticipantID": person, "PhaseStatus": status,
-        "RawFolder": folder, "FrameRows": 101, "ActualSpecimen": "generated_anatomy",
-        "AssistanceCondition": "generated_condition",
-    } for rid, person, status, folder in [
-        ("generated_complete", "generated_expert", "complete", "frames/generated_complete"),
-        ("generated_partial", "generated_partial_expert", "partial", "intentionally_absent"),
-        ("generated_novice", "generated_novice", "complete", "also_intentionally_absent"),
-    ]]
+    write_csv(
+        "participants.csv",
+        [
+            {"ParticipantID": "generated_expert", "TrainingYears": 11},
+            {"ParticipantID": "generated_partial_expert", "TrainingYears": 12},
+            {"ParticipantID": "generated_novice", "TrainingYears": 10},
+        ],
+    )
+    records = [
+        {
+            "RecordingID": rid,
+            "ParticipantID": person,
+            "PhaseStatus": status,
+            "RawFolder": folder,
+            "FrameRows": 101,
+            "ActualSpecimen": "generated_anatomy",
+            "AssistanceCondition": "generated_condition",
+        }
+        for rid, person, status, folder in [
+            ("generated_complete", "generated_expert", "complete", "frames/generated_complete"),
+            ("generated_partial", "generated_partial_expert", "partial", "intentionally_absent"),
+            ("generated_novice", "generated_novice", "complete", "also_intentionally_absent"),
+        ]
+    ]
     if defect == "inventory":
         records[0]["FrameRows"] = 102
     write_csv("recordings.csv", records)
     frames, alignment = [], []
     for index in range(101):
         seconds = index / 4
-        frames.append({
-            "frame_idx_global": index, "t_abs": 100 + seconds,
-            "drill_x": seconds / 1000, "drill_y": 0, "drill_z": 0,
-            "frame_removed_voxels": 1 if seconds >= 2 else 0,
-            "frame_removed_mm3": .25 if seconds >= 2 else 0,
-            "is_drilling_frame": seconds >= 2,
-            "stroke_id": 0 if seconds >= 2 else "",
-            "stroke_end_flag": index == 100,
-            "phase": "unused_frame_label",
-            "feedback_text": "FORBIDDEN_GENERATED_FEEDBACK_NOT_AN_INPUT",
-        })
-        alignment.append({
-            "frame_idx_global": index,
-            # Deliberately different video clock: it provides labels, not window duration.
-            "video_time_s": 1000 + 2 * seconds,
-            "phase": "pre_antrum" if seconds < 8 else "antrum" if seconds < 14
-                     else "incus" if seconds < 19 else "post_incus",
-        })
+        frames.append(
+            {
+                "frame_idx_global": index,
+                "t_abs": 100 + seconds,
+                "drill_x": seconds / 1000,
+                "drill_y": 0,
+                "drill_z": 0,
+                "frame_removed_voxels": 1 if seconds >= 2 else 0,
+                "frame_removed_mm3": 0.25 if seconds >= 2 else 0,
+                "is_drilling_frame": seconds >= 2,
+                "stroke_id": 0 if seconds >= 2 else "",
+                "stroke_end_flag": index == 100,
+                "phase": "unused_frame_label",
+                "feedback_text": "FORBIDDEN_GENERATED_FEEDBACK_NOT_AN_INPUT",
+            }
+        )
+        alignment.append(
+            {
+                "frame_idx_global": index,
+                # Deliberately different video clock: it provides labels, not window duration.
+                "video_time_s": 1000 + 2 * seconds,
+                "phase": "pre_antrum"
+                if seconds < 8
+                else "antrum"
+                if seconds < 14
+                else "incus"
+                if seconds < 19
+                else "post_incus",
+            }
+        )
     if defect == "identity":
         alignment[50]["frame_idx_global"] = 51
     if defect == "unknown_phase":
         alignment[50]["phase"] = "unrecognized_phase"
-    frame_path = write_csv("frames/generated_complete/frame_level_spatial_all_frames_visibility.csv", frames)
+    frame_path = write_csv(
+        "frames/generated_complete/frame_level_spatial_all_frames_visibility.csv", frames
+    )
     write_csv("frames/generated_complete/alignment.csv", alignment)
     manifest = catalog / "releases/R4_20261029/manifest.json"
     manifest.parent.mkdir(parents=True)
-    manifest.write_text(json.dumps({
-        "Files": hashes, "GeometryNeedsReviewRecordingIDs": ["generated_complete"],
-        "GeometryScientificAcceptanceStatus": "generated_false_review_fixture",
-    }))
+    manifest.write_text(
+        json.dumps(
+            {
+                "Files": hashes,
+                "GeometryNeedsReviewRecordingIDs": ["generated_complete"],
+                "GeometryScientificAcceptanceStatus": "generated_false_review_fixture",
+            }
+        )
+    )
     # This override is scoped to generated unit-test bytes, never to the real release.
-    monkeypatch.setattr(cli, "TRUSTED_R4_CATALOG_SHA256", hashlib.sha256(manifest.read_bytes()).hexdigest())
+    monkeypatch.setattr(
+        cli, "TRUSTED_R4_CATALOG_SHA256", hashlib.sha256(manifest.read_bytes()).hexdigest()
+    )
     if defect == "source_hash":
         with frame_path.open("a", encoding="utf-8") as stream:
             stream.write("\n")
     return catalog
 
 
-def test_cli_builds_native_time_expert_windows_from_verified_manual_phase_rows(tmp_path, monkeypatch):
+def test_cli_builds_native_time_expert_windows_from_verified_manual_phase_rows(
+    tmp_path, monkeypatch
+):
     import hashlib
+
     from evidence_system import cli
     from evidence_system.motion_comparison import validate_expert_reference
+
     catalog = generated_r4_motion_catalog(tmp_path, monkeypatch)
     output = tmp_path / "generated_reference.json"
     summary = cli.build_motion_reference(catalog, output)
     payload = json.loads(output.read_text())
     validate_expert_reference(payload)
     assert summary["recording_count"] == 1
-    assert summary["excluded_recordings"] == [{
-        "recording_id": "generated_partial", "reason": "incomplete_manual_phase_boundaries",
-    }]
+    assert summary["excluded_recordings"] == [
+        {
+            "recording_id": "generated_partial",
+            "reason": "incomplete_manual_phase_boundaries",
+        }
+    ]
     assert summary["reference_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
     assert payload["expert_participant_ids"] == ["generated_expert", "generated_partial_expert"]
-    record, = payload["recordings"]
+    (record,) = payload["recordings"]
     assert record["stroke_frequency_metadata"]["source_status"] == "recorded_legacy_segmentation"
-    assert all("stroke_frequency_hz" in row and "stroke_rate_per_s" in row for row in record["windows"])
+    assert all(
+        "stroke_frequency_hz" in row and "stroke_rate_per_s" in row for row in record["windows"]
+    )
     assert record["native_time_origin_abs"] == 100 and record["native_duration_s"] == 25
     assert record["source_frame_count"] == 101
     assert record["provenance"]["phase_source_kind"] == "human_phase_annotation"
@@ -749,7 +978,9 @@ def test_cli_builds_native_time_expert_windows_from_verified_manual_phase_rows(t
     assert min(row["native_start_s"] for row in windows) == 2  # First removal, not prehistory.
     assert {row["phase"] for row in windows} == {"early_phase", "antrum", "incus"}
     assert len({row["phase_id"] for row in windows if row["phase"] == "incus"}) == 1
-    assert [(row["native_start_s"], row["native_end_s"]) for row in windows if row["phase"] == "incus"] == [(14, 19), (19, 24)]
+    assert [
+        (row["native_start_s"], row["native_end_s"]) for row in windows if row["phase"] == "incus"
+    ] == [(14, 19), (19, 24)]
     assert payload["protocol"]["stride_s"] == 5 and payload["protocol"]["persistence_windows"] == 1
     for row in windows:
         assert row["speed_mm_s"] == pytest.approx(1.0)
@@ -765,12 +996,20 @@ def test_cli_builds_native_time_expert_windows_from_verified_manual_phase_rows(t
     assert not (catalog / "forbidden_output.json").exists()
 
 
-@pytest.mark.parametrize("defect,match", [
-    ("source_hash", "checksum"), ("identity", "identity"),
-    ("unknown_phase", "Unknown"), ("inventory", "inventory"),
-])
-def test_cli_motion_reference_rejects_bad_source_before_writing_output(tmp_path, monkeypatch, defect, match):
+@pytest.mark.parametrize(
+    "defect,match",
+    [
+        ("source_hash", "checksum"),
+        ("identity", "identity"),
+        ("unknown_phase", "Unknown"),
+        ("inventory", "inventory"),
+    ],
+)
+def test_cli_motion_reference_rejects_bad_source_before_writing_output(
+    tmp_path, monkeypatch, defect, match
+):
     from evidence_system import cli
+
     catalog = generated_r4_motion_catalog(tmp_path, monkeypatch, defect=defect)
     output = tmp_path / "rejected.json"
     with pytest.raises(ValueError, match=match):
@@ -780,6 +1019,7 @@ def test_cli_motion_reference_rejects_bad_source_before_writing_output(tmp_path,
 
 def test_cli_motion_reference_requires_the_pinned_release_manifest(tmp_path, monkeypatch):
     from evidence_system import cli
+
     catalog = generated_r4_motion_catalog(tmp_path, monkeypatch)
     monkeypatch.setattr(cli, "TRUSTED_R4_CATALOG_SHA256", "0" * 64)
     output = tmp_path / "rejected.json"

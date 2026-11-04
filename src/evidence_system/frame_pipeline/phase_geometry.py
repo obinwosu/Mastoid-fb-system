@@ -13,7 +13,6 @@ import math
 import re
 from typing import Any
 
-
 R4_RECORDER_SCALE = 0.049202688
 R4_SCHEMA = "r4_signal_geometry_v1"
 MODEL_SCHEMA = "r4_anatomy_model_geometry_v1"
@@ -67,18 +66,17 @@ def resolve_phase_geometry(
         raise ValueError("Unsupported signal-phase geometry schema")
     if _text(contract, "global_run_id") != global_run_id:
         raise ValueError("Signal-phase geometry is bound to a different run")
-    if (
-        _text(contract, "edt_profile") != edt_profile
-        or profile.get("edt_profile") != edt_profile
-    ):
+    if _text(contract, "edt_profile") != edt_profile or profile.get("edt_profile") != edt_profile:
         raise ValueError("Signal-phase geometry, anatomy profile and EDT registry disagree")
     _text(contract, "actual_specimen")
     if schema == MODEL_SCHEMA:
         if contract.get("calibration_recording_id") is not None:
             raise ValueError("Model geometry cannot claim another recording's calibration")
         _text(contract, "calibration_scope")
-        if (contract.get("model_parameter_sources_verified") is not True
-                or contract.get("recording_geometry_verified") is not False):
+        if (
+            contract.get("model_parameter_sources_verified") is not True
+            or contract.get("recording_geometry_verified") is not False
+        ):
             raise ValueError("Model sources and unverified recording scope must be explicit")
     else:
         _text(contract, "calibration_recording_id")
@@ -127,9 +125,15 @@ def resolve_phase_geometry(
 
     if schema in (R4_SCHEMA, MODEL_SCHEMA):
         _same_number(recorder_scale, R4_RECORDER_SCALE, "R4 common recorder scale")
-        if schema == R4_SCHEMA and contract.get("geometry_quality") not in ("accepted", "needs_review"):
+        if schema == R4_SCHEMA and contract.get("geometry_quality") not in (
+            "accepted",
+            "needs_review",
+        ):
             raise ValueError("R4 geometry quality must preserve accepted or needs_review")
-        if schema == MODEL_SCHEMA and contract.get("geometry_quality") != "unverified_new_recording":
+        if (
+            schema == MODEL_SCHEMA
+            and contract.get("geometry_quality") != "unverified_new_recording"
+        ):
             raise ValueError("New model geometry must retain unverified recording quality")
         correction_digest = _text(contract, "correction_table_sha256")
         if re.fullmatch(r"[0-9a-fA-F]{64}", correction_digest) is None:
@@ -145,8 +149,11 @@ def resolve_phase_geometry(
         volume_dimensions_sim=dimensions,
         recorder_scale_m_per_simulator_unit=recorder_scale,
         edt_distance_scale_mm=spacing,
-        orientation_mode=("fixed_model_native_volume_local_to_world_xyzw" if schema == MODEL_SCHEMA
-                          else "fixed_calibrated_volume_local_to_world_xyzw"),
+        orientation_mode=(
+            "fixed_model_native_volume_local_to_world_xyzw"
+            if schema == MODEL_SCHEMA
+            else "fixed_calibrated_volume_local_to_world_xyzw"
+        ),
         translation="drill_world_position - recorded_volume_world_position",
         local_coordinate_definition="inverse(fixed_quaternion) * translation / recorder_scale",
         tip_distance_definition="EDT_raw * edt_distance_scale_mm - burr_mm / 2",
@@ -184,61 +191,98 @@ def validate_v3_volume_contract(frames, profile, *, raw_run_dir):
     adf = yaml.safe_load(Path(profile["adf_profile"]).read_text(encoding="utf-8"))
     volume = adf[adf["volumes"][0]]
     scale = _positive_number(geometry["recorder_scale_m_per_simulator_unit"], "recorder scale")
-    expected_position = np.asarray([volume["location"]["position"][axis] for axis in "xyz"], dtype=float)*scale
+    expected_position = (
+        np.asarray([volume["location"]["position"][axis] for axis in "xyz"], dtype=float) * scale
+    )
     if not np.isfinite(expected_position).all() or not np.any(np.abs(expected_position) > 1e-8):
         raise ValueError("V3 ADF volume translation cannot establish the recorder scale")
     from ..r4_provenance import _rpy_quaternion
 
-    expected_quaternion = np.asarray(_rpy_quaternion(volume["location"]["orientation"]), dtype=float)
+    expected_quaternion = np.asarray(
+        _rpy_quaternion(volume["location"]["orientation"]), dtype=float
+    )
     source_volumes, readmes = [], []
     for path in reader.paths:
         with reader.open_chunk(path) as handle:
             readme = handle.get("metadata/README")
             voxel = handle.get("metadata/voxel_volume")
             if readme is None or voxel is None:
-                raise ValueError("V3 recording requires explicit README units and voxel-volume metadata")
+                raise ValueError(
+                    "V3 recording requires explicit README units and voxel-volume metadata"
+                )
             text = readme[()]
             text = text.decode("utf-8") if isinstance(text, bytes) else str(text)
-            required = ("All position information is in meters", "[qx, qy, qz, qw]",
-                        "T_world_obj", "Depth in CV convention", "T_cv_ambf")
+            required = (
+                "All position information is in meters",
+                "[qx, qy, qz, qw]",
+                "T_world_obj",
+                "Depth in CV convention",
+                "T_cv_ambf",
+            )
             if any(fragment not in text for fragment in required):
-                raise ValueError("V3 README does not establish the supported metre/xyzw/CV conventions")
+                raise ValueError(
+                    "V3 README does not establish the supported metre/xyzw/CV conventions"
+                )
             unit = voxel.attrs.get("units", "")
             unit = unit.decode("utf-8") if isinstance(unit, bytes) else str(unit)
             if unit != "mm^3, millimeters cubed":
-                raise ValueError("V3 voxel-volume metadata must explicitly declare cubic millimetres")
+                raise ValueError(
+                    "V3 voxel-volume metadata must explicitly declare cubic millimetres"
+                )
             source_volumes.append(_positive_number(voxel[()], "source voxel volume"))
-            readmes.append({"source_hdf5": path.name, "units_readme": text, "voxel_volume_units": unit})
-    positions = np.asarray([[row[f"volume_{axis}"] for axis in "xyz"] for row in frames], dtype=float)
-    quaternions = np.asarray([[row[f"volume_q{axis}"] for axis in "xyzw"] for row in frames], dtype=float)
+            readmes.append(
+                {"source_hdf5": path.name, "units_readme": text, "voxel_volume_units": unit}
+            )
+    positions = np.asarray(
+        [[row[f"volume_{axis}"] for axis in "xyz"] for row in frames], dtype=float
+    )
+    quaternions = np.asarray(
+        [[row[f"volume_q{axis}"] for axis in "xyzw"] for row in frames], dtype=float
+    )
     if not len(frames) or not np.isfinite(positions).all() or not np.isfinite(quaternions).all():
         raise ValueError("V3 recorded volume poses must be present and finite")
     norms = np.linalg.norm(quaternions, axis=1)
-    if np.any(np.abs(norms-1) > 1e-6):
+    if np.any(np.abs(norms - 1) > 1e-6):
         raise ValueError("V3 recorded volume quaternions must be unit length")
-    quaternions = quaternions/norms[:, None]
-    position_error = float(np.max(np.abs(positions-expected_position)))
-    quaternion_error = float(np.max(np.minimum(
-        np.max(np.abs(quaternions-expected_quaternion), axis=1),
-        np.max(np.abs(quaternions+expected_quaternion), axis=1),
-    )))
+    quaternions = quaternions / norms[:, None]
+    position_error = float(np.max(np.abs(positions - expected_position)))
+    quaternion_error = float(
+        np.max(
+            np.minimum(
+                np.max(np.abs(quaternions - expected_quaternion), axis=1),
+                np.max(np.abs(quaternions + expected_quaternion), axis=1),
+            )
+        )
+    )
     if position_error > 1e-8 or quaternion_error > 1e-6:
-        raise ValueError("V3 recorded volume pose does not match the current ADF and declared recorder scale")
-    if max(source_volumes)-min(source_volumes) > 1e-12:
+        raise ValueError(
+            "V3 recorded volume pose does not match the current ADF and declared recorder scale"
+        )
+    if max(source_volumes) - min(source_volumes) > 1e-12:
         raise ValueError("V3 native voxel-volume metadata changes across source chunks")
     spacing = _positive_number(geometry["edt_distance_scale_mm"], "EDT spacing")
     return {
-        "schema": "v3_volume_source_contract_v1", "status": "volume_source_contract_matched",
-        "frame_count": len(frames), "chunk_count": len(reader.paths), "source_units": readmes,
+        "schema": "v3_volume_source_contract_v1",
+        "status": "volume_source_contract_matched",
+        "frame_count": len(frames),
+        "chunk_count": len(reader.paths),
+        "source_units": readmes,
         "recorder_scale_m_per_simulator_unit": scale,
-        "recorder_scale_evidence": "Nonzero recorded volume translation matches current ADF translation multiplied by the declared scale",
+        "recorder_scale_evidence": (
+            "Nonzero recorded volume translation matches current ADF translation "
+            "multiplied by the declared scale"
+        ),
         "maximum_volume_position_error_m": position_error,
         "maximum_volume_quaternion_component_error": quaternion_error,
-        "native_voxel_volume_mm3": source_volumes[0], "edt_spacing_mm": spacing,
-        "native_volume_divided_by_edt_spacing_cubed": source_volumes[0]/spacing**3,
-        "voxel_volume_policy": "Preserve explicit native mm^3; EDT spacing cubed is not substituted",
+        "native_voxel_volume_mm3": source_volumes[0],
+        "edt_spacing_mm": spacing,
+        "native_volume_divided_by_edt_spacing_cubed": source_volumes[0] / spacing**3,
+        "voxel_volume_policy": (
+            "Preserve explicit native mm^3; EDT spacing cubed is not substituted"
+        ),
         "camera_tool_registration_status": "not_validated_by_volume_contract",
         "burr_size_status": "not_established_by_volume_contract",
-        "recording_geometry_verified": False, "user_review_performed": False,
+        "recording_geometry_verified": False,
+        "user_review_performed": False,
         "clinician_review_performed": False,
     }

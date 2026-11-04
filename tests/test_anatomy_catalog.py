@@ -12,10 +12,10 @@ from unittest.mock import patch
 import pytest
 import test_r4_provenance as fixtures
 
+from evidence_system import r4_provenance as authority
 from evidence_system.anatomy_catalog import configure_anatomy
 from evidence_system.frame_pipeline.phase_geometry import MODEL_SCHEMA
 from evidence_system.r4_provenance import validate_production_geometry
-from evidence_system import r4_provenance as authority
 
 
 @pytest.fixture
@@ -36,14 +36,24 @@ def source_catalog():
 
 def configure(base, *, raw=None, run_id=None, model="auto", dataset="HDF5", edt_root=None):
     with (
-        patch("evidence_system.r4_provenance.TRUSTED_R4_CORRECTION_SHA256", {fixtures.digest(base.table)}),
+        patch(
+            "evidence_system.r4_provenance.TRUSTED_R4_CORRECTION_SHA256",
+            {fixtures.digest(base.table)},
+        ),
         patch("evidence_system.r4_provenance.EDT_CATALOG_PATH", base.catalogue),
-        patch("evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256", fixtures.digest(base.catalogue)),
+        patch(
+            "evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256",
+            fixtures.digest(base.catalogue),
+        ),
     ):
         return configure_anatomy(
-            simulator_root=base.adf.parent, correction_table=base.table,
-            recording_dir=raw or base.raw, run_id=run_id,
-            dataset_id=dataset, anatomy_model=model, edt_root=edt_root,
+            simulator_root=base.adf.parent,
+            correction_table=base.table,
+            recording_dir=raw or base.raw,
+            run_id=run_id,
+            dataset_id=dataset,
+            anatomy_model=model,
+            edt_root=edt_root,
         )
 
 
@@ -69,20 +79,30 @@ def validate_generated(base, result, raw, edit=None):
         edit(result.profile)
     base.config.write_text(json.dumps({"profiles": {result.anatomy_key: result.profile}}))
     record = SimpleNamespace(
-        dataset_id="HDF5", run_id=result.metadata["run_id"],
-        global_run_id=result.metadata["global_run_id"], anatomy_key=result.anatomy_key,
-        edt_profile=result.edt_dir.name, raw_run_relpath=raw.name,
-        anatomy_mapping_status="configured_automatic_sources", source_status="user_selected",
+        dataset_id="HDF5",
+        run_id=result.metadata["run_id"],
+        global_run_id=result.metadata["global_run_id"],
+        anatomy_key=result.anatomy_key,
+        edt_profile=result.edt_dir.name,
+        raw_run_relpath=raw.name,
+        anatomy_mapping_status="configured_automatic_sources",
+        source_status="user_selected",
     )
     with (
         patch.dict(os.environ, {"MASTOID_ANATOMY_PROFILES": str(base.config)}),
-        patch("evidence_system.r4_provenance.TRUSTED_R4_CORRECTION_SHA256",
-              {fixtures.digest(base.table)}),
+        patch(
+            "evidence_system.r4_provenance.TRUSTED_R4_CORRECTION_SHA256",
+            {fixtures.digest(base.table)},
+        ),
         patch("evidence_system.r4_provenance.EDT_CATALOG_PATH", base.catalogue),
-        patch("evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256", fixtures.digest(base.catalogue)),
+        patch(
+            "evidence_system.r4_provenance.TRUSTED_EDT_CATALOG_SHA256",
+            fixtures.digest(base.catalogue),
+        ),
     ):
         return validate_production_geometry(
-            record, SimpleNamespace(raw_run_dir=raw, edt_dir=result.edt_dir),
+            record,
+            SimpleNamespace(raw_run_dir=raw, edt_dir=result.edt_dir),
             project_root=base.root,
         )
 
@@ -91,7 +111,9 @@ def test_historical_auto_keeps_record_binding_in_hdf5_dataset(source_catalog):
     base = source_catalog
     resolved = configure(base)
     assert resolved.metadata["mode"] == "historical_r4_recording"
-    assert resolved.profile["phase_signal_geometry"]["calibration_recording_id"] == base.record.run_id
+    assert (
+        resolved.profile["phase_signal_geometry"]["calibration_recording_id"] == base.record.run_id
+    )
     snapshot = validate_generated(base, resolved, base.raw)
     assert snapshot.manifest["status"] == "verified_R4_v3_sources"
     assert snapshot.manifest["geometry_quality"] == "needs_review"
@@ -129,8 +151,13 @@ def test_new_model_uses_current_sources_and_never_claims_recording_validation(so
     assert not snapshot.manifest["clinician_review_performed"]
 
 
-@pytest.mark.parametrize("adf", ["/sim/ADF/volume_256_TESTSPECIMEN.yaml",
-                                 "\\".join(["D:", "sim", "ADF", "volume_256_TESTSPECIMEN.yaml"])])
+@pytest.mark.parametrize(
+    "adf",
+    [
+        "/sim/ADF/volume_256_TESTSPECIMEN.yaml",
+        "\\".join(["D:", "sim", "ADF", "volume_256_TESTSPECIMEN.yaml"]),
+    ],
+)
 def test_new_recording_selects_metadata_model_and_preserves_source_hash(source_catalog, adf):
     base = source_catalog
     raw = new_directory(base)
@@ -141,14 +168,18 @@ def test_new_recording_selects_metadata_model_and_preserves_source_hash(source_c
     assert result.metadata["model_selection_source"]["value"] == adf
     assert "notes" not in json.dumps(result.metadata)
     snapshot = validate_generated(base, result, raw)
-    assert snapshot.manifest["source_files"]["recording_metadata"]["sha256"] == fixtures.digest(metadata)
+    assert snapshot.manifest["source_files"]["recording_metadata"]["sha256"] == fixtures.digest(
+        metadata
+    )
     assert snapshot.manifest["recording_geometry_verified"] is False
 
 
 def test_explicit_model_cannot_override_conflicting_recording_metadata(source_catalog):
     base = source_catalog
     raw = new_directory(base)
-    (raw / "metadata.json").write_text(json.dumps({"volume_adf": "/sim/volume_256_TESTSPECIMEN.yaml"}))
+    (raw / "metadata.json").write_text(
+        json.dumps({"volume_adf": "/sim/volume_256_TESTSPECIMEN.yaml"})
+    )
     with pytest.raises(ValueError, match="conflicts with metadata"):
         configure(base, raw=raw, model="OTHER")
 
@@ -176,11 +207,18 @@ def test_new_model_never_borrows_a_historical_fitted_rotation(source_catalog):
 
 def test_current_model_can_coexist_with_fitted_history_without_selecting_it(source_catalog):
     base = source_catalog
+
     def augment(rows):
-        other = dict(rows[0], RecordingID="P" + "8"*3 + "T" + "8"*3,
-                     FolderName="another_historical", RotationSource="fitted",
-                     UsedRotation="[0,0,1,0]", FittedRotation="[0,0,1,0]")
+        other = dict(
+            rows[0],
+            RecordingID="P" + "8" * 3 + "T" + "8" * 3,
+            FolderName="another_historical",
+            RotationSource="fitted",
+            UsedRotation="[0,0,1,0]",
+            FittedRotation="[0,0,1,0]",
+        )
         rows.append(other)
+
     rewrite_rows(base, augment)
     result = configure(base, raw=new_directory(base), model="TESTSPECIMEN")
     assert result.profile["phase_signal_geometry"]["volume_quaternion_xyzw"] == [0, 0, 0, 1]
@@ -189,8 +227,10 @@ def test_current_model_can_coexist_with_fitted_history_without_selecting_it(sour
 
 def test_conflicting_model_scale_rejects_automatic_transfer(source_catalog):
     base = source_catalog
+
     def augment(rows):
         rows.append(dict(rows[0], RecordingID="OTHER", FolderName="other", SpacingMm="2.0"))
+
     rewrite_rows(base, augment)
     with pytest.raises(ValueError, match="ambiguous model SpacingMm"):
         configure(base, raw=new_directory(base), model="TESTSPECIMEN")
@@ -201,6 +241,7 @@ def test_generated_profile_is_rederived_instead_of_trusting_caller_claims(source
     base = source_catalog
     raw = new_directory(base)
     result = configure(base, raw=raw, model="TESTSPECIMEN")
+
     def change(profile):
         geometry = profile["phase_signal_geometry"]
         if attack == "quaternion":
@@ -208,18 +249,19 @@ def test_generated_profile_is_rederived_instead_of_trusting_caller_claims(source
         elif attack == "spacing":
             geometry["edt_distance_scale_mm"] = profile["edt_distance_scale_mm"] = 2
         elif attack == "edt_hash":
-            geometry["source_edt_sha256"]["Bone.edt"] = "0"*64
+            geometry["source_edt_sha256"]["Bone.edt"] = "0" * 64
         else:
             geometry["recording_geometry_verified"] = True
+
     with pytest.raises(ValueError, match="differs|unverified recording"):
         validate_generated(base, result, raw, change)
 
 
 def test_non_cubic_source_grids_and_missing_edt_are_handled_explicitly(source_catalog):
     base = source_catalog
-    header = b"G3\n1 FLOAT\n4 4 3\n" + b"0 "*15 + b"1\n"
+    header = b"G3\n1 FLOAT\n4 4 3\n" + b"0 " * 15 + b"1\n"
     for path in base.edt.glob("*.edt"):
-        path.write_bytes(header + b"\0"*(4*4*3*4))
+        path.write_bytes(header + b"\0" * (4 * 4 * 3 * 4))
     contract = base.profile["phase_signal_geometry"]
     contract["grid_resolution_xyz"] = [4, 4, 3]
     contract["source_edt_sha256"] = {p.name: fixtures.digest(p) for p in base.edt.glob("*.edt")}
@@ -232,7 +274,9 @@ def test_non_cubic_source_grids_and_missing_edt_are_handled_explicitly(source_ca
 
 
 @pytest.mark.parametrize("new_recording", [False, True])
-def test_independent_edt_root_preserves_model_content_and_recording_scope(source_catalog, new_recording):
+def test_independent_edt_root_preserves_model_content_and_recording_scope(
+    source_catalog, new_recording
+):
     base = source_catalog
     raw = new_directory(base) if new_recording else base.raw
     separate = base.root / "relocated_edt_root"
@@ -242,12 +286,16 @@ def test_independent_edt_root_preserves_model_content_and_recording_scope(source
     assert result.profile["phase_signal_geometry"]["source_edt_root"] == str(separate)
     snapshot = validate_generated(base, result, raw)
     assert snapshot.manifest["real_R4_validated"] is not new_recording
-    assert snapshot.manifest["source_files"]["Bone.edt"]["path"] == str(separate / base.edt.name / "Bone.edt")
+    assert snapshot.manifest["source_files"]["Bone.edt"]["path"] == str(
+        separate / base.edt.name / "Bone.edt"
+    )
     assert "edt_source_catalogue" in snapshot.manifest["source_files"]
 
 
 @pytest.mark.parametrize("new_recording", [False, True])
-def test_saved_profiles_without_edt_root_keep_original_source_contract(source_catalog, new_recording):
+def test_saved_profiles_without_edt_root_keep_original_source_contract(
+    source_catalog, new_recording
+):
     base = source_catalog
     raw = new_directory(base) if new_recording else base.raw
     result = configure(base, raw=raw, model="TESTSPECIMEN")
@@ -278,7 +326,11 @@ def test_versioned_catalogue_accepts_checkout_line_endings_but_rejects_content_c
     with patch("evidence_system.r4_provenance.EDT_CATALOG_PATH", copy):
         for ending in (b"\n", b"\r\n"):
             copy.write_bytes(original.replace(b"\n", ending))
-            authority._trusted_edt_profile("LT151", row["edt_profile"], row["grid_resolution_xyz"], row["sha256"])
+            authority._trusted_edt_profile(
+                "LT151", row["edt_profile"], row["grid_resolution_xyz"], row["sha256"]
+            )
         copy.write_bytes(original.replace(b"LT151", b"OTHER", 1))
         with pytest.raises(ValueError, match="trusted version"):
-            authority._trusted_edt_profile("LT151", row["edt_profile"], row["grid_resolution_xyz"], row["sha256"])
+            authority._trusted_edt_profile(
+                "LT151", row["edt_profile"], row["grid_resolution_xyz"], row["sha256"]
+            )

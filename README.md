@@ -16,6 +16,18 @@ All processing, including phase inference, uses the same Python environment.
 The requirements include CPU PyTorch; CUDA is not required. Local environments
 such as `.venv/` are ignored by Git and are not part of the repository.
 
+Before pushing code changes, also install the development tools and run both
+GitHub checks (on Windows, macOS or Linux):
+
+```text
+python -m pip install --editable ".[pipeline,vision,dev]"
+python -m ruff check src tests
+python -m pytest -q
+```
+
+These checks use generated fixtures; the full HDF5 runtime installation above
+also includes PyTorch for phase inference.
+
 ## Configure once
 
 The only file you edit for machine paths is **`config.local.json` in this project
@@ -23,10 +35,10 @@ root**. Copy `config.example.json` if it does not exist.
 
 | Setting | Value |
 | --- | --- |
-| `simulator_root` | Anatomy resource root containing `scripts/study_gui/gui_setup.yaml` and the matching `ADF/` files |
+| `simulator_root` | Anatomy resource root containing `scripts/study_gui/gui_setup.yaml` and its matching `ADF/` files. Supplies specimen identity, orientation, dimensions and units; no running simulator is needed. |
 | `edt_root` | Parent directory of the `edt_grids_<specimen>_256/` folders; may differ from `simulator_root` |
-| `correction_table` | Path to the unchanged R4 `geometry_corrections_v3.csv`; edit the path, not the CSV contents |
-| `phase_model_bundle` | Trained model directory containing `model.pt`, `neural_preprocessing.json`, and `manifest.json` |
+| `correction_table` | Included: `references/geometry_corrections_v3.csv`. Keep this relative path and the original CSV bytes. |
+| `phase_model_bundle` | Included: `models/e71_full_recording_holdout/` (0.92 MB total). Keep this relative path; the frozen offline MS-TCN++ is ready for inference. |
 | `video_fps` | Output video frame rate, default 10; does not change native timestamps or signal sampling |
 | `motion_reference` | Saved expert distribution: `references/r4_motion_windows_v6.json`, included with the project. Keep this relative path when migrating; `null` disables expert motion comparisons. |
 
@@ -37,6 +49,8 @@ this information, supply its actual specimen with `--anatomy-model RT138`, for e
 See [input format changes](docs/hdf5-directory-input.md#simulator-format-changes)
 for supported fields and the shared reader to update if the simulator format changes.
 
+Only `simulator_root` and `edt_root` normally need changing when moving machines.
+The HDF5 input location is supplied separately with `--input-dir`.
 Relative paths are resolved from this project root. EDTs can be stored separately
 from the anatomy configuration. Model/grid identity, geometry and content hashes
 remain checked after moving them. The correction CSV is copied unchanged; do not
@@ -44,10 +58,21 @@ edit or re-save it. No manual phase labels or original video are required.
 
 No Python executable path is needed in the configuration.
 
-Copy the model bundle, correction CSV and anatomy resources as well as the code;
-these resources and machine-local configuration are not stored in Git. The saved
-expert reference under `references/` is included with the project. Rebuild results on the
-new machine; old results contain absolute source paths and remain archives.
+The model bundle, correction CSV and saved expert reference are included with the
+project in Git-visible `models/` and `references/` directories. The model bundle
+contains `model.pt` (weights), `neural_preprocessing.json` (frozen input transforms)
+and `manifest.json` (feature definitions and integrity hashes). No separate model
+download or training is needed. Anatomy/EDT resources and `config.local.json`
+remain machine-specific. Rebuild results on the new machine; old results contain
+absolute source paths and remain archives.
+
+The correction CSV is the fixed R4 geometry reference, not a phase model or a
+per-recording form to fill in. It records historical specimen identities,
+rotations, unit scales and review status. The current pipeline also uses it to
+check supported anatomy parameters for new recordings. New recordings use their
+selected model's current ADF rotation; another recording's fitted rotation is
+never transferred. Keep the included CSV unchanged: its exact hash is checked.
+Git attributes preserve the frozen resources' bytes on Windows and Linux.
 
 ## Run
 
@@ -89,7 +114,8 @@ geometry or clinical validation. No model training or remote inference is used.
 - `apps/`: the existing recommendations and expert-study applications.
 - `run.py`: the shared Windows/Linux entry.
 - `config/rules/`: internal rules/source metadata; not machine-path settings.
-- `references/`: saved R4 expert distribution used directly on every machine.
+- `models/`: the frozen three-file offline phase inference bundle.
+- `references/`: the fixed R4 geometry table and saved expert distributions.
 - `tests/`: source, clock, model, pipeline and service checks.
 
 Detailed contracts: [directory input](docs/hdf5-directory-input.md),
@@ -219,3 +245,55 @@ side. Playback context can overlap between clips; analysis windows do not.
 Original source files must remain readable for exact-frame display. The resampled
 review video can omit source frames, so timeline seeking alone does not guarantee
 the original image. Length anchors use an eligible completed stroke in the interval.
+
+## Current pipeline
+
+Start with `python run.py process-hdf5 --input-dir ./recordings --serve`.
+The batch discovers every recording directory; all HDF5 chunks in one directory
+belong to that recording. The diagram shows data dependencies for each recording,
+not parallel execution. The build saves the evidence database before generating
+the review video; the service then compares measurements and assembles feedback.
+
+```mermaid
+flowchart TD
+    Input["--input-dir<br/>HDF5 recording folders"] --> Cases["Discover recordings<br/>One folder = one case; combine its chunks"]
+    Cases --> Geometry["Select anatomy and verify geometry sources<br/>Historical R4 identity or metadata.json volume_adf"]
+
+    Config["config.local.json<br/>simulator_root: GUI and ADF configuration<br/>edt_root: anatomy distance grids"] --> Geometry
+    Corrections["Included R4 geometry reference<br/>references/geometry_corrections_v3.csv"] --> Geometry
+
+    Geometry --> Read["Read images, timestamps, recorded poses and removal<br/>Automatically create clock/alignment.csv"]
+    Read --> Signals["Verify source geometry and extract phase features<br/>Removal amount + tip/removed-region anatomy distances"]
+    Signals --> Phase["Offline phase detection<br/>Predrilling: before first positive removal<br/>Then MS-TCN++: early drilling / antrum / incus"]
+    Model["Included frozen phase model<br/>models/e71_full_recording_holdout/"] --> Phase
+
+    Phase --> Observations["Phase-labelled frame observations<br/>Visibility and stroke analysis"]
+    Read -->|Recorded poses| Observations
+    Observations --> Events["Event detection<br/>Overshoot + Ray-v3 under-ledge"]
+    Observations --> Motion["Motion measurements by phase<br/>5-second windows, 5-second step<br/>Speed, complete-stroke Length, removal rate"]
+    Events --> Saved["Save evidence.sqlite3<br/>Frame/phase records, events and source-bound sidecars"]
+    Motion --> Saved
+
+    Saved --> Video["Generate review_video.webm<br/>and review_video_manifest.json"]
+    Read -->|Images and shared native clock| Video
+    Saved --> Compare["Serve saved results<br/>Compare current measurements with same-phase experts"]
+    Experts["Included expert distribution<br/>references/r4_motion_windows_v6.json<br/>39 expert recordings already processed"] --> Compare
+    Compare --> Coaching["Apply coaching rules<br/>Safety / under-ledge / lower speed / shorter strokes"]
+    Coaching --> Website["Existing feedback website<br/>Phase-labelled clips, Go to key frame, Play context"]
+    Video --> Website
+    Read -->|Original source image for exact key frame| Website
+```
+
+Phase detection consumes removal/anatomy signals; video appearance and motion
+metrics are not phase-model inputs. Video and feedback share the generated native
+time alignment. New-recording geometry retains its explicit verification status;
+using the R4 model resources does not certify a new recording's calibration.
+
+The expert JSON is loaded directly when serving feedback; the 39 expert recordings
+are not reprocessed. Speed and Length use the same-phase distribution, and one
+valid qualifying window can trigger coaching. Removal rate remains descriptive;
+frequency remains saved-only. The trigger details are listed above.
+
+Each case is saved under `results/hdf5_batches/<batch>/<recording>/`, with its
+generated configuration, clock, analysis stages, database and video. The batch's
+`recommendations_manifest.json` can reopen completed results with `serve-batch`.

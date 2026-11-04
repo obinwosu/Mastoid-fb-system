@@ -17,7 +17,12 @@ files. `edt_root` independently contains the model directories, for example
 `edt_grids_LT151_256/` with its 16 EDT files. These roots may be the same or
 different locations. The model identity, grid geometry and pinned R4 EDT content
 hashes are checked after relocation. Relative paths are resolved from the project
-root. Copy the unchanged correction CSV and the whole three-file model bundle.
+root. The unchanged correction CSV is included at
+`references/geometry_corrections_v3.csv`, and the three-file phase bundle at
+`models/e71_full_recording_holdout/`. Keep their relative paths in the root config;
+these resources travel with the repository. Only anatomy/EDT resource locations
+normally need changing for another machine. The simulator is not started:
+its YAML resources supply model identity, rotation, dimensions and unit scaling.
 Use one Python 3.12 environment installed from the root `requirements.txt`;
 the [README](../README.md) gives Windows/Linux commands. The active Python runs
 both processing and phase inference; there is no separate interpreter setting.

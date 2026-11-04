@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import math
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from .project import PROJECT_ROOT, SOURCE_PATHS_EXAMPLE, SOURCE_PATHS_LOCAL
@@ -39,14 +39,18 @@ def _resolve(value: str | Path, base: Path) -> Path:
 
 
 def load_source_roots(
-    path: Path | None = None, *, project_root: Path = PROJECT_ROOT,
+    path: Path | None = None,
+    *,
+    project_root: Path = PROJECT_ROOT,
     phase_model_bundle: Path | None = None,
 ) -> SourceRoots:
     configured = path
     if configured is None:
         env_value = os.environ.get("MASTOID_SOURCE_CONFIG")
-        configured = Path(env_value) if env_value else (
-            SOURCE_PATHS_LOCAL if SOURCE_PATHS_LOCAL.is_file() else SOURCE_PATHS_EXAMPLE
+        configured = (
+            Path(env_value)
+            if env_value
+            else (SOURCE_PATHS_LOCAL if SOURCE_PATHS_LOCAL.is_file() else SOURCE_PATHS_EXAMPLE)
         )
     configured = configured.expanduser().resolve()
     if not configured.is_file():
@@ -67,6 +71,7 @@ def load_source_roots(
     if missing:
         raise ValueError(f"Missing source path keys: {', '.join(missing)}")
     base = project_root
+
     def optional_path(value: str | Path | None) -> Path | None:
         return _resolve(value, base) if value else None
 
@@ -99,15 +104,15 @@ def resolve_run_sources(
 ) -> ResolvedRunSources:
     raw = raw_run_dir or (
         roots.data_root / Path(record.raw_run_relpath)
-        if record.raw_run_relpath else roots.data_root
+        if record.raw_run_relpath
+        else roots.data_root
     )
-    edt = edt_dir or (
-        roots.edt_root / record.edt_profile if record.edt_profile else roots.edt_root
-    )
+    edt = edt_dir or (roots.edt_root / record.edt_profile if record.edt_profile else roots.edt_root)
     annotation = phase_annotation_file or roots.phase_annotation_file
     bundle = phase_model_bundle or roots.phase_model_bundle
     if annotation is None and bundle is None:
         raise ValueError("A phase model bundle or manual phase annotation is required")
+
     def resolved(value: Path | None) -> Path | None:
         return value.expanduser().resolve() if value is not None else None
 
@@ -118,5 +123,7 @@ def resolve_run_sources(
         golden_reference_path=record.golden_reference_path,
         phase_model_bundle=resolved(bundle),
         frame_alignment_file=resolved(frame_alignment_file or roots.frame_alignment_file),
-        phase_duration_s=phase_duration_s if phase_duration_s is not None else roots.phase_duration_s,
+        phase_duration_s=phase_duration_s
+        if phase_duration_s is not None
+        else roots.phase_duration_s,
     )

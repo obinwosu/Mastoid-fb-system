@@ -14,13 +14,21 @@
   These references retain pseudonymous participant/recording IDs,
   window metrics and original provenance paths; it is not anonymized. This
   exception does not include other research data or authorize a public upload.
+- User-authorized runtime packaging (2026-11-04): the unchanged
+  `references/geometry_corrections_v3.csv` and the three-file frozen phase bundle
+  in `models/e71_full_recording_holdout/` are included for repository migration.
+  The CSV retains historical coded recording IDs and geometry evidence. The
+  bundle contains weights, preprocessing parameters and the inference manifest,
+  not source recordings. Exact hashes restrict this exception to these files;
+  Git attributes preserve their bytes across operating systems.
 
 ## Content kept outside Git
 
 - Raw or transformed simulator sessions and anatomy resources.
-- Real dataset manifests, case mappings, phase annotations, or review labels.
+- Real dataset manifests, case mappings, phase annotations, or review labels,
+  except the explicitly authorized frozen references above.
 - Participant or reviewer identifiers, responses, notes, and recordings.
-- Videos, images, HDF5 files, SQLite databases, model weights, and generated
+- Videos, images, HDF5 files, SQLite databases, other model weights, and generated
   reports.
 - Credentials, provider configuration, deidentification maps, and absolute
   machine paths.

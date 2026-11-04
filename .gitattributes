@@ -21,3 +21,12 @@
 *.h5 binary
 *.hdf5 binary
 
+# Frozen runtime resources: preserve byte hashes across Windows/Linux checkouts.
+/models/e71_full_recording_holdout/* -text whitespace=cr-at-eol
+/models/e71_full_recording_holdout/model.pt binary
+/references/geometry_corrections_v3.csv -text whitespace=cr-at-eol
+/references/r4_motion_windows_v2.json -text whitespace=cr-at-eol
+/references/r4_motion_windows_v3.json -text whitespace=cr-at-eol
+/references/r4_motion_windows_v4.json -text whitespace=cr-at-eol
+/references/r4_motion_windows_v6.json -text whitespace=cr-at-eol
+

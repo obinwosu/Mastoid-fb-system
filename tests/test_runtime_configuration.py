@@ -8,7 +8,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
@@ -29,15 +28,10 @@ from evidence_system.web import ExpertStudyStore, FeedbackService  # noqa: E402
 
 class ExampleConfigurationTests(unittest.TestCase):
     def test_example_registry_and_source_config_resolve_from_repository_root(self) -> None:
-        records = load_registry(
-            REPOSITORY_ROOT / "config" / "examples" / "runs.example.csv"
-        )
+        records = load_registry(REPOSITORY_ROOT / "config" / "examples" / "runs.example.csv")
         record = get_run("DEMO_CASE_01", records)
         roots = load_source_roots(
-            REPOSITORY_ROOT
-            / "config"
-            / "examples"
-            / "source_paths.example.json"
+            REPOSITORY_ROOT / "config" / "examples" / "source_paths.example.json"
         )
         sources = resolve_run_sources(record, roots)
 
@@ -48,23 +42,11 @@ class ExampleConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(
             sources.edt_dir,
-            (
-                REPOSITORY_ROOT
-                / "data"
-                / "demo"
-                / "edt"
-                / record.edt_profile
-            ).resolve(),
+            (REPOSITORY_ROOT / "data" / "demo" / "edt" / record.edt_profile).resolve(),
         )
         self.assertEqual(
             sources.phase_annotation_file,
-            (
-                REPOSITORY_ROOT
-                / "data"
-                / "demo"
-                / "annotations"
-                / "phase_timepoints.csv"
-            ).resolve(),
+            (REPOSITORY_ROOT / "data" / "demo" / "annotations" / "phase_timepoints.csv").resolve(),
         )
 
 
@@ -94,12 +76,7 @@ class ApplicationBoundaryTests(unittest.TestCase):
             self.assertIn(forbidden, expert_source)
 
     def test_recommendations_manifest_rejects_study_state(self) -> None:
-        source = (
-            REPOSITORY_ROOT
-            / "config"
-            / "examples"
-            / "recommendations_manifest.example.json"
-        )
+        source = REPOSITORY_ROOT / "config" / "examples" / "recommendations_manifest.example.json"
         payload = json.loads(source.read_text(encoding="utf-8"))
         payload["cases"][0]["study_state"] = "results/demo/study_state.json"
 
@@ -149,9 +126,7 @@ class ApplicationBoundaryTests(unittest.TestCase):
             moments = reloaded.moments("EXPERT_01", "DEMO_CASE_01")
             self.assertEqual(len(moments), 1)
             self.assertEqual(moments[0]["moment_id"], created["moment_id"])
-            self.assertEqual(
-                moments[0]["observation"], "Synthetic typed observation"
-            )
+            self.assertEqual(moments[0]["observation"], "Synthetic typed observation")
             self.assertEqual(
                 moments[0]["coaching_message"],
                 "Synthetic typed coaching message",

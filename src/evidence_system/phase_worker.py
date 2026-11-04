@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from .phase_network import SETTINGS, MSTCNPP
+from .phase_network import MSTCNPP, SETTINGS
 
 
 def main():
@@ -22,8 +22,11 @@ def main():
     torch.set_num_interop_threads(1)
     torch.use_deterministic_algorithms(True)
     checkpoint = torch.load(args.bundle / "model.pt", map_location="cpu", weights_only=True)
-    if (checkpoint["Architecture"] != "MSTCNPP" or checkpoint["InputWidth"] != 96
-            or list(checkpoint["Phases"]) != ["early_phase", "antrum", "incus"]):
+    if (
+        checkpoint["Architecture"] != "MSTCNPP"
+        or checkpoint["InputWidth"] != 96
+        or list(checkpoint["Phases"]) != ["early_phase", "antrum", "incus"]
+    ):
         raise ValueError("Checkpoint does not match the E71 three-class contract")
     if any(checkpoint["Settings"].get(key) != value for key, value in SETTINGS.items()):
         raise ValueError("Checkpoint architecture settings differ from the inference network")
@@ -39,11 +42,21 @@ def main():
         logits = model(torch.from_numpy(x.astype(np.float32))[None])
         probabilities = logits[-1, 0].softmax(-1).numpy()
     np.save(args.output, probabilities, allow_pickle=False)
-    args.output.with_suffix(".json").write_text(json.dumps({
-        "device": "cpu", "torch_version": torch.__version__,
-        "input_shape": [1, len(x), 96], "stage_logits_shape": list(logits.shape),
-        "output_shape": list(probabilities.shape), "trained": False,
-    }, indent=2) + "\n", encoding="utf-8")
+    args.output.with_suffix(".json").write_text(
+        json.dumps(
+            {
+                "device": "cpu",
+                "torch_version": torch.__version__,
+                "input_shape": [1, len(x), 96],
+                "stage_logits_shape": list(logits.shape),
+                "output_shape": list(probabilities.shape),
+                "trained": False,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

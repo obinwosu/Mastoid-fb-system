@@ -27,7 +27,9 @@ from evidence_system.relations.builder import build_relations  # noqa: E402
 from evidence_system.retrieval.api import EvidenceRetriever  # noqa: E402
 from evidence_system.review_video import build_review_video  # noqa: E402
 from evidence_system.source_config import (  # noqa: E402
-    ResolvedRunSources, SourceRoots, resolve_run_sources,
+    ResolvedRunSources,
+    SourceRoots,
+    resolve_run_sources,
 )
 from evidence_system.storage.store import populate_evidence_store  # noqa: E402
 from evidence_system.web import FeedbackService  # noqa: E402
@@ -41,10 +43,14 @@ def _record():
 def _phases():
     names = ("pre_drilling", "antrum", "incus", "antrum")
     return [
-        {"phase_id": f"interval:{i}", "phase": name,
-         "model_phase": "predrilling" if name == "pre_drilling" else name,
-         "phase_source": "model_signal_mstcnpp", "annotation_start_s": float(i),
-         "annotation_end_s": float(i + 1)}
+        {
+            "phase_id": f"interval:{i}",
+            "phase": name,
+            "model_phase": "predrilling" if name == "pre_drilling" else name,
+            "phase_source": "model_signal_mstcnpp",
+            "annotation_start_s": float(i),
+            "annotation_end_s": float(i + 1),
+        }
         for i, name in enumerate(names)
     ]
 
@@ -53,12 +59,21 @@ def test_repeated_phase_identity_survives_events_relations_store_and_retrieval(t
     record = _record()
     phases = _phases()
     frames = [
-        {"frame_evidence_id": f"{record.global_run_id}:frame:{i}",
-         "frame_idx_global": i, "source_hdf5": "sample.hdf5", "source_frame_idx": i,
-         "t_video_s": i + 0.25, "phase": phase["phase"], "phase_id": phase["phase_id"],
-         "model_phase": phase["model_phase"], "phase_source": phase["phase_source"],
-         "frame_removed_voxels": int(i > 0), "frame_removed_mm3": float(i > 0),
-         "is_drilling_frame": i > 0, "voxel_min_EAC_mm": 2.0}
+        {
+            "frame_evidence_id": f"{record.global_run_id}:frame:{i}",
+            "frame_idx_global": i,
+            "source_hdf5": "sample.hdf5",
+            "source_frame_idx": i,
+            "t_video_s": i + 0.25,
+            "phase": phase["phase"],
+            "phase_id": phase["phase_id"],
+            "model_phase": phase["model_phase"],
+            "phase_source": phase["phase_source"],
+            "frame_removed_voxels": int(i > 0),
+            "frame_removed_mm3": float(i > 0),
+            "is_drilling_frame": i > 0,
+            "voxel_min_EAC_mm": 2.0,
+        }
         for i, phase in enumerate(phases)
     ]
     strokes = StrokeBuild(frames, [], [], [], {"ready_for_eventization": True})
@@ -66,37 +81,51 @@ def test_repeated_phase_identity_survives_events_relations_store_and_retrieval(t
     events = build_events(strokes, phases, record)
     assert len(events.events) == 3
     assert [event.attributes["phase_id"] for event in events.events] == [
-        "interval:1", "interval:2", "interval:3",
+        "interval:1",
+        "interval:2",
+        "interval:3",
     ]
     assert phase_interval_at(2.0, phases)["phase_id"] == "interval:2"
     relations = build_relations(events, record)
-    occurs = {row.source_id: row.target_id for row in relations.relations
-              if row.relation_type == "occurs_during"}
+    occurs = {
+        row.source_id: row.target_id
+        for row in relations.relations
+        if row.relation_type == "occurs_during"
+    }
     assert [occurs[event.event_id] for event in events.events] == [
-        "interval:1", "interval:2", "interval:3",
+        "interval:1",
+        "interval:2",
+        "interval:3",
     ]
-    assert all(row.target_id != "source:human_video_timepoint_annotation"
-               for row in relations.relations)
+    assert all(
+        row.target_id != "source:human_video_timepoint_annotation" for row in relations.relations
+    )
     phase_file = tmp_path / "phase_manifest.json"
     phase_file.write_text(json.dumps({"source_kind": "model_phase_prediction"}))
     sources = ResolvedRunSources(tmp_path, tmp_path, phase_file, tmp_path / "absent.json")
     audit = {
-        "hdf5": {"chunks": [{"file_name": "sample.hdf5", "path": "sample.hdf5",
-                               "size_bytes": 0}]},
+        "hdf5": {"chunks": [{"file_name": "sample.hdf5", "path": "sample.hdf5", "size_bytes": 0}]},
         "phase_annotation": {"path": str(phase_file), "source_kind": "model_phase_prediction"},
         "edt": {"headers": []},
     }
     db = tmp_path / "evidence.sqlite3"
     manifest = populate_evidence_store(
-        db, record=record, sources=sources, source_audit=audit, core=core,
-        strokes=strokes, events=events, relations=relations, artifact_root=tmp_path,
+        db,
+        record=record,
+        sources=sources,
+        source_audit=audit,
+        core=core,
+        strokes=strokes,
+        events=events,
+        relations=relations,
+        artifact_root=tmp_path,
         project_root=ROOT,
     )
     assert manifest["integrity_check"] == "ok"
     with sqlite3.connect(db) as connection:
-        assert connection.execute(
-            "SELECT phase_id FROM frames ORDER BY frame_idx"
-        ).fetchall() == [(f"interval:{i}",) for i in range(4)]
+        assert connection.execute("SELECT phase_id FROM frames ORDER BY frame_idx").fetchall() == [
+            (f"interval:{i}",) for i in range(4)
+        ]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
     retriever = EvidenceRetriever(db)
     summary = retriever.get_phase_summary(record.run_id, "antrum")
@@ -113,17 +142,28 @@ def test_repeated_phase_identity_survives_events_relations_store_and_retrieval(t
 
 
 def test_coaching_links_every_antrum_interval_without_bridging_other_phases():
-    phases = [{"phase_id": row["phase_id"], "phase_name": row["phase"],
-               "t_start_s": row["annotation_start_s"], "t_end_s": row["annotation_end_s"]}
-              for row in _phases()]
-    benchmark = {"phases": {"antrum": {
-        "observed": {"mean_stroke_length": 1, "stroke_rate_per_s": 3},
-        "experienced_q25": {"mean_stroke_length": 2},
-        "experienced_q75": {"stroke_rate_per_s": 2},
-    }}}
+    phases = [
+        {
+            "phase_id": row["phase_id"],
+            "phase_name": row["phase"],
+            "t_start_s": row["annotation_start_s"],
+            "t_end_s": row["annotation_end_s"],
+        }
+        for row in _phases()
+    ]
+    benchmark = {
+        "phases": {
+            "antrum": {
+                "observed": {"mean_stroke_length": 1, "stroke_rate_per_s": 3},
+                "experienced_q25": {"mean_stroke_length": 2},
+                "experienced_q75": {"stroke_rate_per_s": 2},
+            }
+        }
+    }
     item = build_session_coaching_plan([], phases, {}, benchmark)["items"][0]
     assert [(row["t_start_s"], row["t_end_s"]) for row in item["review_clips"]] == [
-        (1.0, 2.0), (3.0, 4.0),
+        (1.0, 2.0),
+        (3.0, 4.0),
     ]
     assert item["t_start_s"] == 1.0 and item["t_end_s"] == 2.0
 
@@ -144,14 +184,19 @@ def _video_fixture(tmp_path):
         handle.create_dataset("data/l_img", data=images)
     with h5py.File(raw / "terminal.hdf5", "w") as handle:
         handle.create_group("metadata")
-    return path, ResolvedRunSources(raw, tmp_path, tmp_path / "unused.csv", tmp_path / "absent.json")
+    return path, ResolvedRunSources(
+        raw, tmp_path, tmp_path / "unused.csv", tmp_path / "absent.json"
+    )
 
 
 def test_actual_webm_uses_canonical_clock_native_order_and_bgr(tmp_path):
     path, sources = _video_fixture(tmp_path)
     before = hashlib.sha256(path.read_bytes()).hexdigest()
     manifest = build_review_video(
-        _record(), sources, tmp_path / "video", fps=2,
+        _record(),
+        sources,
+        tmp_path / "video",
+        fps=2,
         frame_times_video=[0.0, 2.0, 4.0],
         clock_manifest={"mode": "verified_fixture_clock", "duration_s": 4.5},
     )
@@ -177,7 +222,8 @@ def test_video_rejects_incomplete_or_invalid_mapped_clocks(tmp_path, times):
 
 @pytest.mark.parametrize("removal_count", [0, 1, 17])
 def test_sparse_removal_builds_database_video_feedback_and_preserves_stroke_clocks(
-    tmp_path, removal_count,
+    tmp_path,
+    removal_count,
 ):
     """Actual source/geometry/consumer path, with explicitly stubbed model outputs."""
     h5py = pytest.importorskip("h5py")
@@ -197,26 +243,36 @@ def test_sparse_removal_builds_database_video_feedback_and_preserves_stroke_cloc
     for name in ("manifest.json", "model.pt", "neural_preprocessing.json"):
         (bundle / name).write_text("Synthetic orchestration stub; no trained weights")
     clock = tmp_path / "clock.csv"
-    clock.write_text("frame_idx_global,video_time_s\n" + "".join(
-        f"{i},{i * .2}\n" for i in range(24)
-    ))
+    clock.write_text(
+        "frame_idx_global,video_time_s\n" + "".join(f"{i},{i * 0.2}\n" for i in range(24))
+    )
     profiles = json.loads((ROOT / "config/examples/anatomy_profiles.example.json").read_text())
     profile = profiles["profiles"][record.anatomy_key]
     profile["phase_signal_geometry"] = {
-        "schema": "synthetic_signal_geometry_v1", "global_run_id": record.global_run_id,
-        "edt_profile": record.edt_profile, "actual_specimen": "synthetic_fixture",
-        "calibration_recording_id": "synthetic_fixture", "rotation_source": "generated identity",
+        "schema": "synthetic_signal_geometry_v1",
+        "global_run_id": record.global_run_id,
+        "edt_profile": record.edt_profile,
+        "actual_specimen": "synthetic_fixture",
+        "calibration_recording_id": "synthetic_fixture",
+        "rotation_source": "generated identity",
         "volume_quaternion_xyzw": [0.0, 0.0, 0.0, 1.0],
         "recorder_scale_m_per_simulator_unit": profile["meters_per_simulator_unit"],
         "edt_distance_scale_mm": profile["edt_distance_scale_mm"],
-        "volume_dimensions_sim": profile["volume_dimensions_sim"], "geometry_quality": "synthetic",
+        "volume_dimensions_sim": profile["volume_dimensions_sim"],
+        "geometry_quality": "synthetic",
     }
     profiles_path = tmp_path / "profiles.json"
     profiles_path.write_text(json.dumps(profiles))
-    sources = resolve_run_sources(record, SourceRoots(
-        Path(fixture["output_root"]) / "raw", Path(fixture["output_root"]) / "edt",
-        phase_model_bundle=bundle, frame_alignment_file=clock, phase_duration_s=5.0,
-    ))
+    sources = resolve_run_sources(
+        record,
+        SourceRoots(
+            Path(fixture["output_root"]) / "raw",
+            Path(fixture["output_root"]) / "edt",
+            phase_model_bundle=bundle,
+            frame_alignment_file=clock,
+            phase_duration_s=5.0,
+        ),
+    )
     Path(fixture["phase_annotation_file"]).unlink()
 
     def fake_infer(frames, actual_record, **kwargs):
@@ -225,19 +281,36 @@ def test_sparse_removal_builds_database_video_feedback_and_preserves_stroke_cloc
         times = times[times >= onset] if onset is not None else times[:0]
         probabilities = np.tile([0.8, 0.1, 0.1], (len(times), 1))
         assigned, intervals = assign_intervals(
-            frames, actual_record, times, probabilities, onset, 5.0,
+            frames,
+            actual_record,
+            times,
+            probabilities,
+            onset,
+            5.0,
         )
-        manifest = {"source_kind": "model_phase_prediction", "model_id": "synthetic_stub",
-                    "first_removal_s": onset, "reference_labels_used": False}
+        manifest = {
+            "source_kind": "model_phase_prediction",
+            "model_id": "synthetic_stub",
+            "first_removal_s": onset,
+            "reference_labels_used": False,
+        }
         kwargs["output_dir"].mkdir(parents=True)
         (kwargs["output_dir"] / "manifest.json").write_text(json.dumps(manifest))
         return PhaseBuild(assigned, intervals, manifest)
 
     output = tmp_path / "out"
-    with patch("evidence_system.phase_detection.infer_phases", side_effect=fake_infer), \
-         patch.dict(os.environ, {"MASTOID_ANATOMY_PROFILES": str(profiles_path)}):
-        result = build_evidence(record=record, sources=sources, result_dir=output,
-                                project_root=ROOT, build_video=True, video_fps=2)
+    with (
+        patch("evidence_system.phase_detection.infer_phases", side_effect=fake_infer),
+        patch.dict(os.environ, {"MASTOID_ANATOMY_PROFILES": str(profiles_path)}),
+    ):
+        result = build_evidence(
+            record=record,
+            sources=sources,
+            result_dir=output,
+            project_root=ROOT,
+            build_video=True,
+            video_fps=2,
+        )
     assert result["frame_count"] == 24
     assert result["removed_voxel_count"] == removal_count
     assert result["store_integrity"] == "ok"
@@ -249,9 +322,10 @@ def test_sparse_removal_builds_database_video_feedback_and_preserves_stroke_cloc
         assert not manifest["metrics_available"]
     with sqlite3.connect(output / "evidence.sqlite3") as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-        observations = [json.loads(row[0]) for row in connection.execute(
-            "SELECT observation_json FROM frames ORDER BY frame_idx"
-        )]
+        observations = [
+            json.loads(row[0])
+            for row in connection.execute("SELECT observation_json FROM frames ORDER BY frame_idx")
+        ]
         if removal_count == 0:
             assert all(row["model_phase"] == "predrilling" for row in observations)
         else:
@@ -269,10 +343,15 @@ def test_sparse_removal_builds_database_video_feedback_and_preserves_stroke_cloc
                 assert interval["video_duration_s"] == pytest.approx(2 * interval["duration_s"])
                 assert interval["duration_clock"] == "native_HDF5_data/time"
     service = FeedbackService(
-        mode="recommendations", db_path=output / "evidence.sqlite3", run_id=record.run_id,
+        mode="recommendations",
+        db_path=output / "evidence.sqlite3",
+        run_id=record.run_id,
         video_path=output / "review_video.webm",
         video_manifest_path=output / "review_video_manifest.json",
-        ray_v3_dir=None, cohort_benchmark_path=None, available_runs=[],
-        display_name="Synthetic fixture", interface_version="test",
+        ray_v3_dir=None,
+        cohort_benchmark_path=None,
+        available_runs=[],
+        display_name="Synthetic fixture",
+        interface_version="test",
     )
     assert service.bootstrap()["media"]["available"]

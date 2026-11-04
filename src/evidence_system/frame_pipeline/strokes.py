@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import json
-import math
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
+from ..registry import RunRecord
 from .core_frames import _git_commit, _require_numeric_stack, map_native_event_times
 from .tip_edt import TIP_STRUCTURES
 from .visibility import VisibilityBuild
-from ..registry import RunRecord
 
 
 @dataclass
@@ -85,9 +85,7 @@ def _legacy_kinematics(positions: Any, times: Any, stroke_ends: Any) -> dict[str
     legacy_length_boundaries = np.insert(end_indices, 0, 0)
     lengths = []
     for index in range(int(stroke_ends.sum())):
-        segment = positions[
-            legacy_length_boundaries[index] : legacy_length_boundaries[index + 1]
-        ]
+        segment = positions[legacy_length_boundaries[index] : legacy_length_boundaries[index + 1]]
         lengths.append(float(np.linalg.norm(np.diff(segment, axis=0), axis=1).sum()))
 
     starts = np.insert(end_indices + 1, 0, 0)[:-1]
@@ -111,8 +109,7 @@ def _legacy_kinematics(positions: Any, times: Any, stroke_ends: Any) -> dict[str
         az = np.gradient(vz, segment_times)
         acceleration_vectors = np.column_stack((ax, ay, az))
         jerks.append(
-            float(np.linalg.norm(np.diff(acceleration_vectors, axis=0), axis=1).sum())
-            / duration
+            float(np.linalg.norm(np.diff(acceleration_vectors, axis=0), axis=1).sum()) / duration
         )
         curvature_values = []
         curvature_times = list(segment_times)
@@ -156,28 +153,42 @@ def build_strokes(
     if len(drilling_global_indices) < 7:
         # The k=3 detector has no supported neighborhood. Preserve frame evidence
         # instead of inventing a stroke or making the feedback/video build fail.
-        return StrokeBuild(frames, [], [], visibility.removed_voxels, {
-            "schema": "stroke_evidence_v1",
-            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
-            "git_commit": _git_commit(project_root),
-            "dataset_id": record.dataset_id, "run_id": record.run_id,
-            "global_run_id": record.global_run_id,
-            "upstream_schema": visibility.manifest["schema"],
-            "frame_count": len(frames), "drilling_frame_count": len(drilling_global_indices),
-            "stroke_count": 0,
-            "segmentation": {"method": "legacy_k_cosine_v1", "neighbor_k": 3,
-                             "status": "insufficient_drilling_frames", "minimum_frames": 7},
-            "metrics_available": False,
-            "clock_semantics": {"video_bounds": "canonical aligned frame clock",
-                                "duration_and_kinematic_rates": "native HDF5 data/time seconds"},
-            "invariants": {
-                "upstream_ready": bool(visibility.manifest["ready_for_strokes"]),
-                "frame_count_preserved": len(frames) == len(visibility.frames),
-                "no_strokes_or_metrics_invented": True,
+        return StrokeBuild(
+            frames,
+            [],
+            [],
+            visibility.removed_voxels,
+            {
+                "schema": "stroke_evidence_v1",
+                "generated_at": datetime.now(tz=UTC).isoformat(),
+                "git_commit": _git_commit(project_root),
+                "dataset_id": record.dataset_id,
+                "run_id": record.run_id,
+                "global_run_id": record.global_run_id,
+                "upstream_schema": visibility.manifest["schema"],
+                "frame_count": len(frames),
+                "drilling_frame_count": len(drilling_global_indices),
+                "stroke_count": 0,
+                "segmentation": {
+                    "method": "legacy_k_cosine_v1",
+                    "neighbor_k": 3,
+                    "status": "insufficient_drilling_frames",
+                    "minimum_frames": 7,
+                },
+                "metrics_available": False,
+                "clock_semantics": {
+                    "video_bounds": "canonical aligned frame clock",
+                    "duration_and_kinematic_rates": "native HDF5 data/time seconds",
+                },
+                "invariants": {
+                    "upstream_ready": bool(visibility.manifest["ready_for_strokes"]),
+                    "frame_count_preserved": len(frames) == len(visibility.frames),
+                    "no_strokes_or_metrics_invented": True,
+                },
+                "ready_for_eventization": bool(visibility.manifest["ready_for_strokes"]),
+                "eventization_scope": "frame_level_evidence_only; performance bouts unavailable",
             },
-            "ready_for_eventization": bool(visibility.manifest["ready_for_strokes"]),
-            "eventization_scope": "frame_level_evidence_only; performance bouts unavailable",
-        })
+        )
     positions = np.asarray(
         [
             [frames[index]["drill_x"], frames[index]["drill_y"], frames[index]["drill_z"]]
@@ -195,17 +206,21 @@ def build_strokes(
     native_frame_times = np.asarray([row["t_abs"] for row in frames], dtype=float)
     canonical_frame_times = np.asarray([row["t_video_s"] for row in frames], dtype=float)
     boundary_start_video = map_native_event_times(
-        boundary_start_abs, native_frame_times, canonical_frame_times,
+        boundary_start_abs,
+        native_frame_times,
+        canonical_frame_times,
     )
     boundary_end_video = map_native_event_times(
-        boundary_end_abs, native_frame_times, canonical_frame_times,
+        boundary_end_abs,
+        native_frame_times,
+        canonical_frame_times,
     )
     legacy_metrics = _legacy_kinematics(positions, times_abs, stroke_ends)
 
     for row in frames:
         row["stroke_id"] = None
         row["stroke_end_flag"] = False
-    for stroke_id, (start, end) in enumerate(zip(start_indices, end_indices)):
+    for stroke_id, (start, end) in enumerate(zip(start_indices, end_indices, strict=False)):
         globals_for_stroke = drilling_global_indices[int(start) : int(end) + 1]
         for global_index in globals_for_stroke:
             frames[int(global_index)]["stroke_id"] = stroke_id
@@ -215,7 +230,7 @@ def build_strokes(
     metric_rows: list[dict[str, Any]] = []
     risk_names = [name for name in TIP_STRUCTURES if name != "Bone"]
     for stroke_id, (start, end, boundary_start, boundary_end) in enumerate(
-        zip(start_indices, end_indices, boundary_start_abs, boundary_end_abs)
+        zip(start_indices, end_indices, boundary_start_abs, boundary_end_abs, strict=False)
     ):
         start, end = int(start), int(end)
         global_indices = drilling_global_indices[start : end + 1]
@@ -277,8 +292,12 @@ def build_strokes(
                 "legacy_curvature": float(legacy_metrics["Curvature"][stroke_id]),
                 "direct_path_length_m": direct_path,
                 "direct_mean_speed_m_s": direct_path / duration if duration > 0 else None,
-                "removed_voxel_count": sum(int(row["frame_removed_voxels"]) for row in segment_frames),
-                "removed_volume_mm3": sum(float(row["frame_removed_mm3"]) for row in segment_frames),
+                "removed_voxel_count": sum(
+                    int(row["frame_removed_voxels"]) for row in segment_frames
+                ),
+                "removed_volume_mm3": sum(
+                    float(row["frame_removed_mm3"]) for row in segment_frames
+                ),
                 "dominant_phase": dominant_phase,
                 "phase_counts": json.dumps(phase_counts, sort_keys=True),
                 "visible_frame_fraction": sum(bool(row["tip_visible"]) for row in segment_frames)
@@ -288,15 +307,19 @@ def build_strokes(
                 "under_ledge_candidate_frame_count": sum(
                     row["under_ledge"] in {"mild", "clear"} for row in segment_frames
                 ),
-                "voxel_overshoot_frame_count": sum(bool(row["voxel_overshoot"]) for row in segment_frames),
+                "voxel_overshoot_frame_count": sum(
+                    bool(row["voxel_overshoot"]) for row in segment_frames
+                ),
                 "min_tip_sensitive_mm": min(finite_tip_risks) if finite_tip_risks else None,
-                "min_removed_voxel_sensitive_mm": min(finite_voxel_risks) if finite_voxel_risks else None,
+                "min_removed_voxel_sensitive_mm": min(finite_voxel_risks)
+                if finite_voxel_risks
+                else None,
             }
         )
 
     manifest = {
         "schema": "stroke_evidence_v1",
-        "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+        "generated_at": datetime.now(tz=UTC).isoformat(),
         "git_commit": _git_commit(project_root),
         "dataset_id": record.dataset_id,
         "run_id": record.run_id,
@@ -343,12 +366,15 @@ def _compare_rows(
         legacy = list(csv.DictReader(handle))
     if len(legacy) != len(new_rows):
         return {
-            "available": True, "row_count_match": False,
-            "new_row_count": len(new_rows), "legacy_row_count": len(legacy), "all_match": False,
+            "available": True,
+            "row_count_match": False,
+            "new_row_count": len(new_rows),
+            "legacy_row_count": len(legacy),
+            "all_match": False,
         }
     mismatches = {new_name: 0 for new_name in mapping}
     max_error = {new_name: 0.0 for new_name in mapping}
-    for new, old in zip(new_rows, legacy):
+    for new, old in zip(new_rows, legacy, strict=False):
         for new_name, old_name in mapping.items():
             left, right = float(new[new_name]), float(old[old_name])
             error = abs(left - right)
@@ -368,12 +394,19 @@ def _compare_rows(
 
 def compare_legacy_strokes(build: StrokeBuild, raw_run_dir: Path) -> dict[str, Any]:
     table_mapping = {
-        "stroke_id": "stroke_id", "start_idx": "start_idx", "end_idx": "end_idx",
-        "start_time_abs": "start_time_abs", "end_time_abs": "end_time_abs",
-        "start_time_video": "start_time_video", "end_time_video": "end_time_video",
-        "boundary_start_abs": "boundary_start_abs", "boundary_end_abs": "boundary_end_abs",
-        "boundary_start_video": "boundary_start_video", "boundary_end_video": "boundary_end_video",
-        "duration_s": "duration_s", "n_frames": "n_frames",
+        "stroke_id": "stroke_id",
+        "start_idx": "start_idx",
+        "end_idx": "end_idx",
+        "start_time_abs": "start_time_abs",
+        "end_time_abs": "end_time_abs",
+        "start_time_video": "start_time_video",
+        "end_time_video": "end_time_video",
+        "boundary_start_abs": "boundary_start_abs",
+        "boundary_end_abs": "boundary_end_abs",
+        "boundary_start_video": "boundary_start_video",
+        "boundary_end_video": "boundary_end_video",
+        "duration_s": "duration_s",
+        "n_frames": "n_frames",
     }
     metric_mapping = {
         "stroke_id": "stroke_id",
@@ -410,15 +443,39 @@ def _write_csv(
 def write_stroke_build(output_dir: Path, build: StrokeBuild, regression: dict[str, Any]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_csv(output_dir / "frame_observations_complete.csv", build.frames)
-    _write_csv(output_dir / "strokes.csv", build.strokes, empty_fields=(
-        "stroke_evidence_id", "global_run_id", "stroke_id", "start_time_abs", "end_time_abs",
-        "start_time_video", "end_time_video", "duration_s", "duration_clock", "video_duration_s",
-    ))
-    _write_csv(output_dir / "stroke_metrics.csv", build.metrics, empty_fields=(
-        "stroke_evidence_id", "global_run_id", "stroke_id", "stroke_end_time_video",
-        "legacy_length_m", "legacy_velocity_m_s", "legacy_acceleration", "legacy_jerk",
-        "legacy_curvature", "removed_voxel_count", "removed_volume_mm3",
-    ))
+    _write_csv(
+        output_dir / "strokes.csv",
+        build.strokes,
+        empty_fields=(
+            "stroke_evidence_id",
+            "global_run_id",
+            "stroke_id",
+            "start_time_abs",
+            "end_time_abs",
+            "start_time_video",
+            "end_time_video",
+            "duration_s",
+            "duration_clock",
+            "video_duration_s",
+        ),
+    )
+    _write_csv(
+        output_dir / "stroke_metrics.csv",
+        build.metrics,
+        empty_fields=(
+            "stroke_evidence_id",
+            "global_run_id",
+            "stroke_id",
+            "stroke_end_time_video",
+            "legacy_length_m",
+            "legacy_velocity_m_s",
+            "legacy_acceleration",
+            "legacy_jerk",
+            "legacy_curvature",
+            "removed_voxel_count",
+            "removed_volume_mm3",
+        ),
+    )
     (output_dir / "stroke_manifest.json").write_text(
         json.dumps(build.manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
@@ -426,7 +483,8 @@ def write_stroke_build(output_dir: Path, build: StrokeBuild, regression: dict[st
         json.dumps(regression, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
     lines = [
-        f"# Stroke Audit: {build.manifest['run_id']}", "",
+        f"# Stroke Audit: {build.manifest['run_id']}",
+        "",
         f"- Drilling frames: {build.manifest['drilling_frame_count']}",
         f"- Strokes: {build.manifest['stroke_count']}",
         f"- Stroke-table exact regression: **{regression['stroke_table'].get('all_match')}**",
@@ -434,4 +492,3 @@ def write_stroke_build(output_dir: Path, build: StrokeBuild, regression: dict[st
         f"- Ready for eventization: **{build.manifest['ready_for_eventization']}**",
     ]
     (output_dir / "STROKE_AUDIT.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
-

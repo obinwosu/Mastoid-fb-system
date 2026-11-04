@@ -12,7 +12,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -34,10 +33,8 @@ from scripts.create_demo_data import (  # noqa: E402
     create_demo_data,
 )
 
-
 PIPELINE_DEPENDENCIES_AVAILABLE = all(
-    importlib.util.find_spec(name) is not None
-    for name in ("cv2", "h5py", "numpy", "scipy")
+    importlib.util.find_spec(name) is not None for name in ("cv2", "h5py", "numpy", "scipy")
 )
 
 
@@ -77,12 +74,7 @@ class DemoPipelineTests(unittest.TestCase):
             fixture = create_demo_data(temporary_root / "demo")
             record = get_run(
                 "DEMO_CASE_01",
-                load_registry(
-                    REPOSITORY_ROOT
-                    / "config"
-                    / "examples"
-                    / "runs.example.csv"
-                ),
+                load_registry(REPOSITORY_ROOT / "config" / "examples" / "runs.example.csv"),
             )
             sources = resolve_run_sources(
                 record,
@@ -94,10 +86,7 @@ class DemoPipelineTests(unittest.TestCase):
             )
             result_dir = temporary_root / "results" / record.run_id
             anatomy_profiles = (
-                REPOSITORY_ROOT
-                / "config"
-                / "examples"
-                / "anatomy_profiles.example.json"
+                REPOSITORY_ROOT / "config" / "examples" / "anatomy_profiles.example.json"
             )
             with patch.dict(
                 os.environ,
@@ -126,9 +115,7 @@ class DemoPipelineTests(unittest.TestCase):
                 summary["under_ledge_detection"]["reason"],
                 "validated_signal_geometry_not_configured",
             )
-            self.assertTrue(
-                (result_dir / "stages" / "07_relations" / "relations.jsonl").is_file()
-            )
+            self.assertTrue((result_dir / "stages" / "07_relations" / "relations.jsonl").is_file())
             self.assertTrue((result_dir / "evidence_store_manifest.json").is_file())
 
             recommendation_service = FeedbackService(
@@ -143,13 +130,9 @@ class DemoPipelineTests(unittest.TestCase):
                 display_name="Synthetic demo",
                 interface_version="test",
             )
-            recommendation_items = recommendation_service.bootstrap()[
-                "coaching_plan"
-            ]["items"]
+            recommendation_items = recommendation_service.bootstrap()["coaching_plan"]["items"]
             self.assertGreaterEqual(len(recommendation_items), 1)
-            self.assertTrue(
-                any(item["category"] == "safety" for item in recommendation_items)
-            )
+            self.assertTrue(any(item["category"] == "safety" for item in recommendation_items))
 
             connection = sqlite3.connect(result_dir / "evidence.sqlite3")
             try:
@@ -175,9 +158,7 @@ class DemoPipelineTests(unittest.TestCase):
                     ("relations", "relation_count"),
                 ):
                     self.assertEqual(
-                        connection.execute(
-                            f"SELECT COUNT(*) FROM {table}"
-                        ).fetchone()[0],
+                        connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0],
                         summary[summary_key],
                     )
             finally:

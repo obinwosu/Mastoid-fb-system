@@ -13,20 +13,26 @@ It does not train a model, download weights, use video to classify phases or cal
 an external feedback API. Manual phase labels remain supported when no model
 bundle is configured, but real production builds always require verified R4 geometry.
 
-## Local bundle and configuration
+## Included bundle and configuration
 
-Export the selected Full / RecordingHoldout checkpoint and matching preprocessing
-file into a new ignored local directory. Use explicit local source paths:
+The selected Full / RecordingHoldout bundle is already included at
+`models/e71_full_recording_holdout/` (916,992 bytes total). Normal installation
+does not require export, a separate model download, or training. The root example
+configuration points to this directory and `references/geometry_corrections_v3.csv`.
+
+For maintainers exporting a different approved checkpoint, use a new directory
+and its matching preprocessing file; do not overwrite the frozen included bundle:
 
 ```text
-python scripts/export_phase_model.py --checkpoint <checkpoint> --preprocessing <preprocessing> --output .local/models/e71 --model-id e71-full-recording
+python scripts/export_phase_model.py --checkpoint <checkpoint> --preprocessing <preprocessing> --output models/<new-bundle> --model-id <new-model-id>
 ```
 
 The bundle contains `manifest.json`, `model.pt` and
 `neural_preprocessing.json`. Its manifest declares feature ordering, output
 ordering, hashes, units, the removal gate and offline context. Export is a copy
 of existing artifacts, not a fit. The target directory must not already exist.
-Keep models and machine-specific paths out of tracked files.
+Only the selected frozen bundle is authorized for Git inclusion; other checkpoints
+remain ignored. Machine-specific paths belong in ignored local configuration.
 
 Provide explicit `phase_model_bundle`, `frame_alignment_file`
 and, when required, `phase_duration_s` fields in an ignored local source config.
@@ -37,7 +43,7 @@ The phase worker always uses the same interpreter that starts the pipeline.
 CLI overrides use the corresponding hyphenated names:
 
 ```text
-python run.py build --run-id YOUR_RUN_ID --registry config/local/runs.csv --source-config config/local/source_paths.json --anatomy-profiles config/local/anatomy_profiles.json --phase-model-bundle .local/models/e71 --frame-alignment-file <clock-alignment.csv> --build-video
+python run.py build --run-id YOUR_RUN_ID --registry config/local/runs.csv --source-config config/local/source_paths.json --anatomy-profiles config/local/anatomy_profiles.json --phase-model-bundle models/e71_full_recording_holdout --frame-alignment-file <clock-alignment.csv> --build-video
 ```
 
 Use a new output directory for a changed model, calibration or clock. Source

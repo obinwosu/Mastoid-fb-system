@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
-PROJECT_ROOT = Path(
-    os.environ.get("MASTOID_PROJECT_ROOT", Path(__file__).resolve().parents[2])
-).expanduser().resolve()
+PROJECT_ROOT = (
+    Path(os.environ.get("MASTOID_PROJECT_ROOT", Path(__file__).resolve().parents[2]))
+    .expanduser()
+    .resolve()
+)
 CONFIG_DIR = PROJECT_ROOT / "config"
 EXAMPLE_CONFIG_DIR = CONFIG_DIR / "examples"
 RULES_DIR = CONFIG_DIR / "rules"
@@ -20,9 +21,7 @@ def _configured_path(env_name: str, fallback: Path) -> Path:
     return Path(value).expanduser().resolve() if value else fallback
 
 
-REGISTRY_PATH = _configured_path(
-    "MASTOID_REGISTRY_PATH", EXAMPLE_CONFIG_DIR / "runs.example.csv"
-)
+REGISTRY_PATH = _configured_path("MASTOID_REGISTRY_PATH", EXAMPLE_CONFIG_DIR / "runs.example.csv")
 SOURCE_PATHS_LOCAL = _configured_path(
     "MASTOID_SOURCE_CONFIG", CONFIG_DIR / "source_paths.local.json"
 )

@@ -61,6 +61,8 @@ recordings/
 *.pth
 *.ckpt
 *.onnx
+# Frozen inference bundle explicitly included for migration.
+!/models/e71_full_recording_holdout/model.pt
 *.zip
 *.tar
 *.tar.gz
