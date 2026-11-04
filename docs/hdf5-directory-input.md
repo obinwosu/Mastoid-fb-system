@@ -15,7 +15,11 @@ No model fitting, package download or remote inference occurs.
 `simulator_root` contains `scripts/study_gui/gui_setup.yaml` and its `ADF/`
 files. `edt_root` independently contains the model directories, for example
 `edt_grids_LT151_256/` with its 16 EDT files. These roots may be the same or
-different locations. The model identity, grid geometry and pinned R4 EDT content
+different locations. The grids can be generated from the folder containing the
+anatomy volumes with `edt_tools/batch_generate_edt.py`; see
+[EDT generation](../README.md#generate-anatomy-edt-grids) for the command, required
+`EDTFromGrid` executable and folder naming. The model identity, grid geometry and
+pinned R4 EDT content
 hashes are checked after relocation. Relative paths are resolved from the project
 root. The unchanged correction CSV is included at
 `references/geometry_corrections_v3.csv`, and the three-file phase bundle at

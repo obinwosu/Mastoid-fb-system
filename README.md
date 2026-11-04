@@ -74,6 +74,33 @@ selected model's current ADF rotation; another recording's fitted rotation is
 never transferred. Keep the included CSV unchanged: its exact hash is checked.
 Git attributes preserve the frozen resources' bytes on Windows and Linux.
 
+## Generate anatomy EDT grids
+
+The anatomy models' EDT grids can be generated with the included
+[`edt_tools/batch_generate_edt.py`](edt_tools/batch_generate_edt.py) script.
+Its input is the **folder containing the anatomy volumes**: each immediate
+subfolder contains one volume's numbered, anatomy-color PNG slices.
+
+```text
+python edt_tools/batch_generate_edt.py --volumes "./volumes" --output "./data/edt" --exe "/path/to/EDTFromGrid"
+```
+
+- `--volumes`: the parent folder containing all volume subfolders.
+- `--output`: the parent folder for generated EDTs; set `edt_root` to this location.
+- `--exe`: an existing compiled `EDTFromGrid` executable for your operating system
+  (`EDTFromGrid.exe` on Windows). It is separate from the Python dependencies.
+
+The script generates 16 anatomy `.edt` files per volume and preserves each input
+subfolder's name: `<output>/<volume-subfolder>/`. For use in this pipeline, the
+generated folder names must match `gui_setup.yaml`'s `sdf_path`, for example
+`edt_grids_LT151_256`. The script does not add that prefix or rename folders.
+Keep input and output folders separate and non-nested. Existing `.edt` files are
+skipped, so use a new output folder when regenerating grids.
+
+This is a one-time resource preparation step, separate from processing recordings.
+The HDF5 pipeline still checks the generated grids' identity, geometry and hashes
+against the fixed R4 EDT catalog.
+
 ## Run
 
 From the project root on Windows or Linux, replace the input directory:
@@ -261,6 +288,8 @@ flowchart TD
 
     Config["config.local.json<br/>simulator_root: GUI and ADF configuration<br/>edt_root: anatomy distance grids"] --> Geometry
     Corrections["Included R4 geometry reference<br/>references/geometry_corrections_v3.csv"] --> Geometry
+    Volumes["Anatomy volume parent folder<br/>One subfolder of numbered PNG slices per volume"] --> EDT["One-time EDT generation<br/>edt_tools/batch_generate_edt.py + EDTFromGrid"]
+    EDT -->|Generated grids under edt_root| Geometry
 
     Geometry --> Read["Read images, timestamps, recorded poses and removal<br/>Automatically create clock/alignment.csv"]
     Read --> Signals["Verify source geometry and extract phase features<br/>Removal amount + tip/removed-region anatomy distances"]
