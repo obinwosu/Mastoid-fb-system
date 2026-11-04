@@ -43,15 +43,35 @@ validated evidence contract, with two read-only recommendation views:
   measurements with the saved recording-level expert reference. It shares the
   video endpoint and event-view layout and adds no study data collection.
 
-The expert-study ID form also selects the initial Event-based/Summary view. After
-analysis, the sequence is first view, questionnaire placeholder, second view,
-questionnaire placeholder, then completion. The same summary assets are embedded
-at the summary step with the Study ID; there are no free-switching study tabs.
-The API requires completed analysis. `review_flow` persists order and current
-step, with atomic expected-view/stage checks on Next to reject stale requests.
-Questionnaire continuations contain no answers; earlier reflection records remain
-unchanged. Only the second placeholder continuation completes the new flow.
-Reviewer identity stays distinct from performer identity for cohort exclusion.
+The expert-study ID form selects the initial Event-based/Summary view. New sessions
+use `sequential_review_v2`: background once per Study ID, analysis, baseline
+self-assessment, first review, first post-feedback self-assessment and two-item
+questionnaire, second review, second post-feedback self-assessment and two-item
+questionnaire, then preference and completion. Preference follows the final
+configured case; other cases continue after their second questionnaire. The same
+summary assets are embedded at their assigned step. There are no free-switching
+tabs and the entry selection is not randomized by the application.
+
+`study_surveys.py` defines the versioned English instrument and validates answers.
+`apps/expert_study/surveys.js` renders the background, six-item OSATS-like forms,
+Clarity/Actionability and Preference with `surveys.css`. Self-assessment has its
+own original-video player without coaching overlays. Current-step drafts use
+tab-local storage scoped by instrument, Study ID, recording and step; submitted
+answers are never used to prefill later rounds. A response records the exact
+instrument snapshot, time, case, round and feedback order. The instrument is a
+proposed research self-assessment, not a validated clinical score; no total or
+pass threshold is produced. Responses never feed automatic evidence generation.
+
+The separate study JSON stores participant background under `participants` and
+case-specific submissions under `sessions[*].review_flow.responses`. Public flow
+payloads omit saved answers. Next checks step ID, view, stage and payload before
+an atomic write; invalid and duplicate submissions cannot overwrite or skip
+steps. Background precedes analysis; other transitions require completed analysis.
+Existing v1 sessions retain their original placeholder sequence and records,
+including earlier reflection history. New Study IDs are required for an
+unexposed baseline under v2. Reviewer identity stays distinct from performer
+identity for cohort exclusion; manifests must select the participant's own
+recording when collecting self-assessment.
 
 The Event-based study step reuses `/review-styles.css` and the recommendations
 workspace: video on the left, feedback on the right, with native key-frame and

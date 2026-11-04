@@ -1,14 +1,26 @@
-"""Persisted two-view review order advances only through its current step."""
+"""Legacy saved two-view flows retain their original placeholder sequence."""
 
 import json
 
 import pytest
-from test_ray_feedback_runtime import make_service
+from test_ray_feedback_runtime import make_service as make_base_service
 from test_review_view_selection import post
 
 from evidence_system.web import FeedbackService
 
 IDENTITY = "Reviewer-sequential"
+
+
+def make_service(tmp_path, *, mode):
+    service = make_base_service(tmp_path, mode=mode)
+    # This file exercises saved pre-survey sessions; fresh sessions use v2.
+    payload = service._study()._empty()
+    payload["expert_study"]["sessions"][IDENTITY + "::" + service.run_id] = {
+        "participant_id": IDENTITY, "run_id": service.run_id,
+        "started_at": "legacy-start-time",
+    }
+    service._study().path.write_text(json.dumps(payload), encoding="utf-8")
+    return service
 
 
 def reopen(service):
@@ -77,7 +89,8 @@ def test_both_orders_resume_each_step_and_complete_only_after_second_questionnai
 
 @pytest.mark.parametrize("started", [False, True])
 def test_next_requires_started_session_and_completed_analysis_without_writing(tmp_path, started):
-    service = make_service(tmp_path, mode="expert-study")
+    factory = make_service if started else make_base_service
+    service = factory(tmp_path, mode="expert-study")
     if started:
         service.start_study(IDENTITY)
     path = service._study().path

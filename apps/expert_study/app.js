@@ -37,6 +37,12 @@ const eventReview = EventReview.create({
   onOpen: openReviewMoment,
 });
 
+const studySurveys = StudySurveys.create({
+  root: document.getElementById("surveyPanel"),
+  onSubmit: answers => advanceReviewFlow(answers),
+  onMediaEvent: (type, details) => logEvent(type, details, null),
+});
+
 function reviewViewName(value) {
   return value === "summary" ? "summary" : "event-based";
 }
@@ -46,8 +52,11 @@ function reviewViewLabel(value) {
 }
 
 function setReviewFlow(flow) {
-  if (flow?.schema !== "sequential_review_v1" || !Array.isArray(flow.order)
-      || !["review", "questionnaire", "complete"].includes(flow.stage)) {
+  const modern = flow?.schema === "sequential_review_v2";
+  const stages = modern ? ["background", "self_assessment", "review", "questionnaire", "preference", "complete"]
+    : ["review", "questionnaire", "complete"];
+  if ((!modern && flow?.schema !== "sequential_review_v1") || !Array.isArray(flow.order)
+      || !stages.includes(flow.stage) || (modern && !flow.step_id)) {
     throw new Error("The study progress could not be loaded. Reload the page to try again.");
   }
   state.reviewFlow = flow;
@@ -137,9 +146,14 @@ async function enterStudy(participantId, firstReviewView) {
   window.history.replaceState({}, "", currentUrl);
   document.getElementById("accessPanel").classList.add("hidden");
   document.getElementById("headerStatus").classList.remove("hidden");
+  document.getElementById("legacySurveyNotice").classList.toggle("hidden", !value.legacy_survey_flow);
   caseHeader();
   if (state.reviewFlow.stage === "complete") {
     showCompletion();
+    return;
+  }
+  if (state.reviewFlow.stage === "background") {
+    renderReviewFlow();
     return;
   }
   if (value.analysis_completed) {
@@ -153,9 +167,16 @@ async function enterStudy(participantId, firstReviewView) {
       throw error;
     }
   }
+  showReady();
+}
+
+function showReady() {
+  studySurveys.hide();
+  document.getElementById("reviewProgress").classList.add("hidden");
   setHeaderStatus("Session ready");
-  document.getElementById("workflowDisclosure").textContent = value.workflow.disclosure;
-  document.getElementById("readyCaseTitle").textContent = `${value.case.alias} is ready for post-session analysis`;
+  document.getElementById("workflowDisclosure").textContent = state.start.workflow.disclosure;
+  document.getElementById("readyCaseTitle").textContent = `${state.start.case.alias} is ready for post-session analysis`;
+  document.getElementById("startAnalysisButton").disabled = false;
   document.getElementById("readyPanel").classList.remove("hidden");
 }
 
@@ -213,6 +234,8 @@ function feedbackItems() {
 
 function prepareExperience(experience) {
   state.experience = experience;
+  state.start.analysis_completed = true;
+  if (experience.surveys) state.start.surveys = experience.surveys;
   setReviewFlow(experience.review_flow || state.reviewFlow);
   state.reviewView = state.reviewFlow.current_view || state.firstReviewView;
   renderExperience();
@@ -220,6 +243,7 @@ function prepareExperience(experience) {
 }
 
 function pauseReviewMedia() {
+  studySurveys.pause();
   state.stopAt = null;
   beginMediaAction();
   document.querySelectorAll("#eventBasedReview video, #eventBasedReview audio").forEach(media => media.pause());
@@ -468,12 +492,19 @@ function renderExperience() {
 
 function renderReviewFlow() {
   const flow = state.reviewFlow;
+  const modern = flow.schema === "sequential_review_v2";
   pauseReviewMedia();
+  studySurveys.hide();
   document.getElementById("experiencePanel").classList.add("hidden");
   document.getElementById("questionnairePanel").classList.add("hidden");
   document.getElementById("readyPanel").classList.add("hidden");
+  document.getElementById("completionPanel").classList.add("hidden");
   if (flow.stage === "complete") {
     showCompletion();
+    return;
+  }
+  if (modern && flow.stage !== "background" && !state.experience) {
+    showReady();
     return;
   }
   document.getElementById("reviewProgress").classList.remove("hidden");
@@ -483,32 +514,60 @@ function renderReviewFlow() {
   const label = reviewViewLabel(flow.current_view);
   const step = `${flow.index + 1} of ${flow.order.length}`;
   document.getElementById("reviewProgressLabel").textContent = `${flow.stage === "questionnaire" ? "Questionnaire" : "Review"} ${step} · ${label}`;
+  if (modern && ["background", "self_assessment", "questionnaire", "preference"].includes(flow.stage)) {
+    document.getElementById("reviewProgress").classList.add("hidden");
+    const status = flow.stage === "background" ? "Background questionnaire"
+      : flow.stage === "self_assessment" ? `Self-assessment ${flow.assessment_round + 1} of 3`
+        : flow.stage === "preference" ? "Feedback preference" : `Questionnaire ${step} · ${label}`;
+    setHeaderStatus(status);
+    document.getElementById("reviewProgressLabel").textContent = flow.stage === "self_assessment"
+      ? `Self-assessment · After ${label.toLowerCase()} feedback` : status;
+    studySurveys.show({
+      participantId: state.participantId,
+      runId: state.start.run_id,
+      flow,
+      definitions: state.start.surveys,
+      media: state.experience?.media,
+    });
+    return;
+  }
   if (flow.stage === "questionnaire") {
     document.getElementById("questionnaireStep").textContent = `Questionnaire ${step}`;
     document.getElementById("questionnaireTitle").textContent = `Questionnaire · ${label}`;
     document.getElementById("questionnairePanel").classList.remove("hidden");
     setHeaderStatus(`Questionnaire ${flow.index + 1} of ${flow.order.length}`);
   } else {
+    document.getElementById("reviewNextTitle").textContent = modern ? "Continue to self-assessment" : "Continue to questionnaire";
     document.getElementById("experiencePanel").classList.remove("hidden");
     setHeaderStatus(`Review ${step} · ${label}`);
     selectReviewView(flow.current_view);
   }
 }
 
-async function advanceReviewFlow() {
+async function advanceReviewFlow(answers = null) {
   if (state.reviewNextPending || !state.reviewFlow || state.reviewFlow.stage === "complete") return;
   const previous = state.reviewFlow;
+  const modern = previous.schema === "sequential_review_v2";
+  const surveyStep = modern && previous.stage !== "review";
+  if (surveyStep && !answers) return;
   const error = document.getElementById(previous.stage === "questionnaire" ? "questionnaireError" : "reviewNextError");
   const buttons = [document.getElementById("finishExperienceButton"), document.getElementById("questionnaireNextButton")];
   state.reviewNextPending = true;
+  if (surveyStep) studySurveys.setPending(true);
   buttons.forEach(button => { button.disabled = true; });
   error.classList.add("hidden");
   try {
-    const result = await api("/api/expert-study/review-next", {
+    const payload = {
       participant_id: state.participantId,
       view: previous.current_view,
       stage: previous.stage,
-    });
+    };
+    if (modern) {
+      payload.step_id = previous.step_id;
+      if (surveyStep) payload.answers = answers;
+    }
+    const result = await api("/api/expert-study/review-next", payload);
+    if (surveyStep) studySurveys.clearDraft();
     setReviewFlow(result.review_flow);
     state.start.case_completed = result.case_completed;
     state.start.case.next_case_url = result.next_case_url;
@@ -516,16 +575,21 @@ async function advanceReviewFlow() {
     renderReviewFlow();
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
-    error.textContent = err.message;
-    error.classList.remove("hidden");
+    if (surveyStep) studySurveys.showError(err.message);
+    else {
+      error.textContent = err.message;
+      error.classList.remove("hidden");
+    }
   } finally {
     state.reviewNextPending = false;
+    if (surveyStep) studySurveys.setPending(false);
     buttons.forEach(button => { button.disabled = false; });
   }
 }
 
 function showCompletion() {
   pauseReviewMedia();
+  studySurveys.hide();
   ["accessPanel", "readyPanel", "processingPanel", "experiencePanel", "questionnairePanel", "reviewProgress"].forEach(id => {
     document.getElementById(id).classList.add("hidden");
   });
@@ -576,8 +640,8 @@ document.getElementById("accessForm").addEventListener("submit", async event => 
   }
 });
 document.getElementById("startAnalysisButton").addEventListener("click", startAnalysis);
-document.getElementById("finishExperienceButton").addEventListener("click", advanceReviewFlow);
-document.getElementById("questionnaireNextButton").addEventListener("click", advanceReviewFlow);
+document.getElementById("finishExperienceButton").addEventListener("click", () => advanceReviewFlow());
+document.getElementById("questionnaireNextButton").addEventListener("click", () => advanceReviewFlow());
 document.getElementById("nextCaseButton").addEventListener("click", goToNextCase);
 document.getElementById("summaryReviewFrame").addEventListener("load", event => {
   state.summaryResizeObserver?.disconnect();

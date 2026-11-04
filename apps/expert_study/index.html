@@ -5,8 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Expert Workflow Experience</title>
   <meta name="description" content="End-to-end surgeon experience of automated simulator feedback" />
+  <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/review-styles.css" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/surveys.css" />
 </head>
 <body>
   <header class="topbar">
@@ -29,14 +31,14 @@
       <p class="lead">Use the pseudonymous code provided by the study team. Do not enter your name, email address, or other identifying information.</p>
       <form id="accessForm">
         <label for="participantId">Study ID</label>
-        <input id="participantId" name="participant_id" type="text" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.-]{0,63}" autocomplete="off" required placeholder="e.g. S001" />
+        <input id="participantId" name="participant_id" type="text" maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{0,63}" autocomplete="off" required placeholder="e.g. S001" />
         <fieldset class="first-review-choice">
           <legend>Show first</legend>
           <div class="choice-row">
             <label><input type="radio" name="first_review_view" value="event-based" checked /><span>Event-based</span></label>
             <label><input type="radio" name="first_review_view" value="summary" /><span>Summary</span></label>
           </div>
-          <p>You will review both views in this order, with a questionnaire after each.</p>
+          <p>You will complete a background questionnaire, assess your performance before and after each feedback view, and rate each format.</p>
         </fieldset>
         <label class="check-row">
           <input id="studyReady" type="checkbox" required />
@@ -46,6 +48,9 @@
         <p id="accessError" class="form-error hidden" role="alert"></p>
       </form>
     </section>
+
+    <p id="legacySurveyNotice" class="legacy-survey-notice hidden">This Study ID began with an earlier review sequence. Its saved progress is preserved. <a href="/">Start with a new Study ID</a> to complete the background questionnaire and all three self-assessments.</p>
+    <section id="surveyPanel" class="study-survey hidden" aria-label="Study questionnaire"></section>
 
     <section id="readyPanel" class="panel ready-panel hidden">
       <div class="ready-icon" aria-hidden="true">✓</div>
@@ -123,7 +128,7 @@
       </section>
 
       <section class="finish-card panel">
-        <div><p class="eyebrow">Next step</p><h2>Continue to the questionnaire</h2><p>When you have finished reviewing this view, select Next.</p><p id="reviewNextError" class="form-error hidden" role="alert"></p></div>
+        <div><p class="eyebrow">Next step</p><h2 id="reviewNextTitle">Continue to self-assessment</h2><p>When you have finished reviewing this view, select Next.</p><p id="reviewNextError" class="form-error hidden" role="alert"></p></div>
         <button id="finishExperienceButton" class="primary-button" type="button">Next</button>
       </section>
 
@@ -159,6 +164,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script src="/event-review.js" defer></script>
+  <script src="/surveys.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

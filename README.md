@@ -132,18 +132,54 @@ Select **Summary** on the feedback page, or append `/summary/` to the same serve
 address. Both views use the same recording and video; no new processing command
 is needed. Restart an already running server after updating the application.
 
-In the existing **Study ID** entry (`expert-study` mode), **Show first** selects
-**Event-based** or **Summary**. After automatic analysis, **Next** follows this
-fixed order for the same ID and recording:
+In the **Study ID** entry (`expert-study` mode), **Show first** selects
+**Event-based** or **Summary**. New Study IDs follow this sequence:
 
-**First view → Questionnaire placeholder → Second view → Questionnaire placeholder → Complete.**
+**Background questionnaire → Automatic analysis → Self-assessment before feedback
+→ First view → Self-assessment after first feedback → First-view questionnaire
+→ Second view → Self-assessment after second feedback → Second-view questionnaire
+→ Preference → Complete.**
 
-There are no free-switching tabs during the study. Each questionnaire is a blank
-placeholder awaiting design; it collects no answers. The initial order and current
-step are saved per Study ID/case and restored after refresh. Advancing pauses
-hidden playback. Only continuing past the second questionnaire completes the case;
-the next configured case, if any, follows afterward. The selected order is carried
-to that case and is not a randomized assignment.
+The background questionnaire is collected once per Study ID in the shared study
+state file. Each recording has three separate self-assessments of that same
+recorded performance. The two view questionnaires each ask Clarity and
+Actionability. Preference is collected after the final configured recording;
+earlier recordings continue to the next case after their second-view questionnaire.
+There are no free-switching tabs during the study. The selected view order is
+preserved across refresh and cases; it is selected at entry, not randomized by
+the application. Study teams can assign balanced orders outside the application.
+
+All questions are in English. The background form adapts the training-year question
+to Medical student, Resident, Fellow or Attending. Age and gender are optional.
+Clinical mastoidectomy and temporal bone laboratory experience use approximate
+**years since first hands-on experience before the recorded procedure**, not case
+or specimen counts. Zero means no prior experience; fractional years are accepted.
+Training duration is recorded in completed months, while prior attempts in this
+simulator remain an estimated count. Unknown and not-applicable answers remain
+distinct from zero.
+
+The proposed OSATS-like self-assessment contains six items: protection of critical
+structures, visibility during drilling, drill control, purposeful bone removal,
+anatomical orientation, and procedure flow and planning. Each uses 1–5 with
+item-specific descriptions at 1, 3 and 5, plus separate Cannot assess and Not
+applicable choices. It is an unvalidated research questionnaire; no total,
+competence threshold or automatic OSATS score is calculated. The same questions
+are repeated with blank responses for each round; earlier submitted ratings are
+not shown. Self-assessment uses the original recording without coaching overlays.
+Clarity and Actionability use 0 (Strongly disagree) through 4 (Strongly agree).
+Preference is Event-based, Summary or No preference.
+
+Submitted responses, timestamps, view order and the instrument snapshot are saved
+in the configured `study_state` JSON file, separately from the evidence database.
+Background responses are under `expert_study.participants[Study ID].background`;
+case responses are under `expert_study.sessions[Study ID::run ID].review_flow.responses`.
+Current-step drafts are retained in the browser tab for refresh recovery and
+removed after a successful submission. Drafts are isolated by instrument version,
+Study ID, recording and step; they are not server submissions.
+
+Existing IDs with the older placeholder sequence keep their original sequence
+and records. They are not silently restarted or assigned retrospective baseline
+ratings. Use a **new Study ID** to try the complete questionnaire sequence.
 
 The Event-based step uses the same video-left, feedback-right layout and key-frame
 controls as the standalone feedback page. It has no additional coaching-moment
@@ -280,14 +316,22 @@ the event view's video layout and `/api/media/video`. The existing event coachin
 rules and original results are unchanged. In study mode, the same Summary page
 is embedded at its assigned review step; its API requires a started Study ID session
 and completed automatic analysis. The reviewer ID never replaces the recorded
-performer ID used for expert self-exclusion. No additional questions or coaching
-entry features are added. Existing study responses remain in the separate study
-state file. The versioned `review_flow` records order, current step and placeholder
-continuations (`answers: null`). Earlier reflection answers and completion timestamps
-remain preserved; they do not mark the new sequence complete. The old reflection
-submission endpoint cannot complete or overwrite a session using this sequence.
-`POST /api/expert-study/review-next` checks the expected view and stage before
-advancing, so a repeated or stale Next request cannot skip a step.
+performer ID used for expert self-exclusion. The study's questionnaires are separate
+from the recommendation-only pages and never become model inputs. Saved placeholder
+continuations (`answers: null`), earlier reflection answers and historical completion
+timestamps remain preserved. New `sequential_review_v2` progress records each survey
+submission with its definition and version. The old reflection endpoint cannot
+complete or overwrite a sequential session. `POST /api/expert-study/review-next`
+validates the expected step ID, view, stage and answers before advancing, so an
+invalid, repeated or stale request cannot skip a step or replace a submission.
+
+Question wording, rating descriptions and server validation live in
+[`study_surveys.py`](src/evidence_system/study_surveys.py). The study form rendering
+is in [`surveys.js`](apps/expert_study/surveys.js), with scoped presentation in
+[`surveys.css`](apps/expert_study/surveys.css). When changing an instrument, use a
+new version; do not relabel historical responses. The three self-assessments
+measure changes in self-evaluation, not demonstrated improvements in surgical
+skill. The second feedback exposure also includes knowledge gained from the first.
 
 Optional maintainer-only regeneration, requiring the original sources named in
 the saved cohort reference, with a new output filename:

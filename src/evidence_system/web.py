@@ -8,10 +8,12 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
 import tempfile
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +25,14 @@ from uuid import uuid4
 from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
 from .ray_v3_view import build_ray_v3_view
 from .retrieval import EvidenceRetriever
+from .study_surveys import (
+    FLOW_SCHEMA,
+    SURVEY_DEFINITION,
+    new_review_flow,
+    public_review_flow,
+    response_record,
+    validate_answers,
+)
 
 APP_MODES = {"recommendations", "expert-study"}
 EXPERT_STUDY_SCHEMA = "expert_feedback_study_v1"
@@ -93,10 +103,44 @@ def normalize_participant_id(value: str) -> str:
 class ExpertStudyStore:
     """Atomic local study storage, separate from the read-only evidence database."""
 
+    _path_locks: dict[str, Any] = {}
+    _path_locks_guard = threading.Lock()
+
     def __init__(self, path: Path, interface_version: str) -> None:
         self.path = path
         self.interface_version = interface_version
-        self._lock = threading.Lock()
+        key = os.path.normcase(str(path.resolve()))
+        with self._path_locks_guard:
+            self._lock = self._path_locks.setdefault(key, threading.RLock())
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Serialize transactions across case servers sharing this state file."""
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            lock_path = self.path.with_name(self.path.name + ".lock")
+            with lock_path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _empty(self) -> dict[str, Any]:
         return {
@@ -104,6 +148,7 @@ class ExpertStudyStore:
             "expert_study": {
                 "schema": EXPERT_STUDY_SCHEMA,
                 "sessions": {},
+                "participants": {},
                 "events": [],
                 "expert_proposed_moments": {},
             },
@@ -115,10 +160,13 @@ class ExpertStudyStore:
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         study = dict(payload.get("expert_study") or {})
         return {
+            **payload,
             "schema": "local_expert_study_state_v1",
             "expert_study": {
+                **study,
                 "schema": EXPERT_STUDY_SCHEMA,
                 "sessions": dict(study.get("sessions") or {}),
+                "participants": dict(study.get("participants") or {}),
                 "events": list(study.get("events") or []),
                 "expert_proposed_moments": dict(study.get("expert_proposed_moments") or {}),
             },
@@ -145,7 +193,7 @@ class ExpertStudyStore:
 
     def progress(self, participant_id: str, run_id: str) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
-        with self._lock:
+        with self._locked():
             study = self._read_unlocked()["expert_study"]
             return dict(study["sessions"].get(self._session_key(participant_id, run_id)) or {})
 
@@ -156,13 +204,14 @@ class ExpertStudyStore:
         run_id: str,
         stimulus_ids: Sequence[str],
         first_review_view: str = "event-based",
+        final_case: bool = True,
     ) -> dict[str, Any]:
         if first_review_view not in {"event-based", "summary"}:
             raise ValueError("First review view must be event-based or summary")
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
         now = datetime.now(UTC).isoformat()
-        with self._lock:
+        with self._locked():
             payload = self._read_unlocked()
             sessions = payload["expert_study"]["sessions"]
             existing = dict(sessions.get(key) or {})
@@ -182,40 +231,94 @@ class ExpertStudyStore:
             }
             if "review_flow" not in row:
                 first = row["first_review_view"]
-                row["review_flow"] = {
-                    "schema": "sequential_review_v1",
-                    "order": [first, "summary" if first == "event-based" else "event-based"],
-                    "stage": "review",
-                    "index": 0,
-                    "current_view": first,
-                    "questionnaires": {},
-                    "transitions": [],
-                    "created_at": now,
-                    "completed_at": None,
-                }
+                if existing:
+                    # A participant may already have seen feedback under an older protocol.
+                    # Never manufacture a fresh, uncontaminated baseline for that session.
+                    row["review_flow"] = {
+                        "schema": "sequential_review_v1",
+                        "order": [first, "summary" if first == "event-based" else "event-based"],
+                        "stage": "review", "index": 0, "current_view": first,
+                        "questionnaires": {}, "transitions": [], "created_at": now,
+                        "completed_at": None,
+                    }
+                else:
+                    profile = payload["expert_study"]["participants"].get(participant_id) or {}
+                    row["review_flow"] = new_review_flow(
+                        first, now, background=not bool(profile.get("background")),
+                        final_case=final_case,
+                    )
+            flow = row["review_flow"]
+            profile = payload["expert_study"]["participants"].get(participant_id) or {}
+            if (
+                flow.get("schema") == FLOW_SCHEMA
+                and flow.get("stage") == "background"
+                and profile.get("background")
+            ):
+                # Another case may have saved the shared background after this tab opened.
+                # Resume at the still-unanswered baseline without duplicating that response.
+                flow["cursor"] += 1
+                flow.update(flow["steps"][flow["cursor"]])
+                flow["transitions"].append({
+                    "from_stage": "background", "to_stage": "self_assessment",
+                    "from_step_id": "background", "to_step_id": flow["step_id"],
+                    "reason": "background_saved_in_another_case", "at": now,
+                })
             sessions[key] = row
             self._write_unlocked(payload)
         return row
 
     def advance_review(
-        self, *, participant_id: str, run_id: str, view: str, stage: str
+        self, *, participant_id: str, run_id: str, view: str | None, stage: str,
+        step_id: str | None = None, answers: Any = None,
     ) -> dict[str, Any]:
-        """Advance one acknowledged step; placeholder continuation supplies no answers."""
+        """Validate and record one current step in one atomic transaction."""
         participant_id = normalize_participant_id(participant_id)
-        if view not in {"event-based", "summary"} or stage not in {"review", "questionnaire"}:
-            raise ValueError("Invalid review step")
-        with self._lock:
+        with self._locked():
             payload = self._read_unlocked()
             session = payload["expert_study"]["sessions"].get(
                 self._session_key(participant_id, run_id)
             )
-            if not session or not session.get("analysis_completed_at"):
-                raise ValueError("Complete automatic analysis before continuing the review")
+            if not session:
+                raise ValueError("Start the expert-study experience before continuing")
             flow = session.get("review_flow")
             if not flow or flow.get("current_view") != view or flow.get("stage") != stage:
                 raise ValueError("The review step has changed; reload to resume the current step")
+            modern = flow.get("schema") == FLOW_SCHEMA
+            if modern and (not isinstance(step_id, str) or flow.get("step_id") != step_id):
+                raise ValueError("The review step has changed; reload to resume the current step")
+            if stage != "background" and not session.get("analysis_completed_at"):
+                raise ValueError("Complete automatic analysis before continuing the review")
             now = datetime.now(UTC).isoformat()
-            if stage == "review":
+            if modern:
+                if stage == "complete":
+                    raise ValueError("This review is already complete")
+                validated = validate_answers(stage, answers)
+                if validated is not None:
+                    if step_id in flow["responses"]:
+                        raise ValueError("This questionnaire has already been submitted")
+                    record = response_record(
+                        flow, validated, participant_id=participant_id, run_id=run_id, now=now,
+                    )
+                    profile = payload["expert_study"]["participants"].setdefault(
+                        participant_id, {"participant_id": participant_id}
+                    )
+                    if stage in {"background", "preference"}:
+                        if stage in profile:
+                            raise ValueError(
+                                f"The {stage} questionnaire has already been submitted"
+                            )
+                        profile[stage] = record
+                    flow["responses"][step_id] = record
+                flow["cursor"] += 1
+                flow.update(flow["steps"][flow["cursor"]])
+                if flow["stage"] == "complete":
+                    flow["completed_at"] = now
+                    session["case_completed_at"] = session.get("case_completed_at") or now
+            elif view not in {"event-based", "summary"} or stage not in {"review", "questionnaire"}:
+                raise ValueError("Invalid review step")
+            elif answers is not None:
+                raise ValueError("This legacy sequence does not collect questionnaire answers")
+            elif stage == "review":
                 flow["stage"] = "questionnaire"
             else:
                 flow["questionnaires"][view] = {
@@ -232,7 +335,10 @@ class ExpertStudyStore:
                     # Keep legacy completion/response history when introducing this flow.
                     session["case_completed_at"] = session.get("case_completed_at") or now
             flow["transitions"].append(
-                {"view": view, "from_stage": stage, "to_stage": flow["stage"], "at": now}
+                {
+                    "view": view, "from_stage": stage, "to_stage": flow["stage"], "at": now,
+                    **({"from_step_id": step_id, "to_step_id": flow["step_id"]} if modern else {}),
+                }
             )
             self._write_unlocked(payload)
         return flow
@@ -262,7 +368,7 @@ class ExpertStudyStore:
             "details": dict(details or {}),
             "recorded_at": datetime.now(UTC).isoformat(),
         }
-        with self._lock:
+        with self._locked():
             payload = self._read_unlocked()
             payload["expert_study"]["events"].append(row)
             if event_type == "analysis_completed":
@@ -276,7 +382,7 @@ class ExpertStudyStore:
 
     def moments(self, participant_id: str, run_id: str) -> list[dict[str, Any]]:
         participant_id = normalize_participant_id(participant_id)
-        with self._lock:
+        with self._locked():
             values = self._read_unlocked()["expert_study"]["expert_proposed_moments"].values()
             return sorted(
                 [
@@ -367,7 +473,7 @@ class ExpertStudyStore:
             "created_at": datetime.now(UTC).isoformat(),
         }
         try:
-            with self._lock:
+            with self._locked():
                 payload = self._read_unlocked()
                 payload["expert_study"]["expert_proposed_moments"][moment_id] = row
                 self._write_unlocked(payload)
@@ -379,7 +485,7 @@ class ExpertStudyStore:
 
     def delete_moment(self, participant_id: str, run_id: str, moment_id: str) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
-        with self._lock:
+        with self._locked():
             payload = self._read_unlocked()
             moments = payload["expert_study"]["expert_proposed_moments"]
             row = dict(moments.get(moment_id) or {})
@@ -398,7 +504,7 @@ class ExpertStudyStore:
 
     def audio(self, participant_id: str, run_id: str, moment_id: str) -> tuple[Path, str]:
         participant_id = normalize_participant_id(participant_id)
-        with self._lock:
+        with self._locked():
             row = dict(
                 self._read_unlocked()["expert_study"]["expert_proposed_moments"].get(moment_id)
                 or {}
@@ -422,7 +528,7 @@ class ExpertStudyStore:
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
         now = datetime.now(UTC).isoformat()
-        with self._lock:
+        with self._locked():
             payload = self._read_unlocked()
             sessions = payload["expert_study"]["sessions"]
             session = dict(sessions.get(key) or {})
@@ -1452,6 +1558,7 @@ class FeedbackService:
             else None
         )
         return {
+            "run_id": self.run_id,
             "alias": self.display_name or f"Case {index + 1:02d}",
             "index": index + 1,
             "total": len(self.available_runs),
@@ -1562,12 +1669,14 @@ class FeedbackService:
             raise ValueError("First review view must be event-based or summary")
         participant_id = normalize_participant_id(participant_id)
         items = self._study_items()
+        case = self._case_context()
         previous = store.progress(participant_id, self.run_id)
         session = store.start_session(
             participant_id=participant_id,
             run_id=self.run_id,
             stimulus_ids=[str(row["feedback_id"]) for row in items],
             first_review_view=first_review_view,
+            final_case=case["index"] >= case["total"],
         )
         store.add_event(
             participant_id=participant_id,
@@ -1575,14 +1684,24 @@ class FeedbackService:
             event_type="study_resumed" if previous else "study_started",
             details={"feedback_count": len(items)},
         )
-        case = self._case_context()
+        flow = session["review_flow"]
+        legacy = flow.get("schema") != FLOW_SCHEMA
+        final_case = case["next_case_url"] is None if legacy else flow["final_case"]
         seed = f"{EXPERT_STUDY_SCHEMA}|{participant_id}"
         return {
             "schema": "expert_workflow_study_start_v1",
             "interface_version": self.interface_version,
             "participant_id": participant_id,
+            "run_id": self.run_id,
             "first_review_view": session["first_review_view"],
-            "review_flow": session["review_flow"],
+            "review_flow": public_review_flow(flow),
+            "surveys": flow.get("survey_definition", SURVEY_DEFINITION),
+            "legacy_survey_flow": legacy,
+            "survey_warning": (
+                "This saved session uses the previous review sequence. Start with a new "
+                "Study ID to complete the new questionnaires and baseline self-assessment."
+                if legacy else None
+            ),
             "analysis_completed": bool(session.get("analysis_completed_at")),
             "case": case,
             "media": self.media_summary(),
@@ -1602,7 +1721,7 @@ class FeedbackService:
             },
             "completion_code": (
                 "EXP-" + hashlib.sha256(seed.encode()).hexdigest()[:8].upper()
-                if case["next_case_url"] is None
+                if final_case and (legacy or flow["stage"] == "complete")
                 else None
             ),
             "expert_proposed_moments": self.public_moments(participant_id),
@@ -1652,9 +1771,12 @@ class FeedbackService:
             event_type="analysis_completed",
             details={"feedback_count": len(feedback)},
         )
+        flow = store.progress(participant_id, self.run_id)["review_flow"]
         return {
             "schema": "expert_workflow_experience_v1",
-            "review_flow": store.progress(participant_id, self.run_id).get("review_flow"),
+            "review_flow": public_review_flow(flow),
+            "surveys": flow.get("survey_definition", SURVEY_DEFINITION),
+            "legacy_survey_flow": flow.get("schema") != FLOW_SCHEMA,
             "interface_version": self.interface_version,
             "case": self._case_context(),
             "session": {
@@ -1681,11 +1803,15 @@ class FeedbackService:
             "expert_proposed_moments": self.public_moments(participant_id),
         }
 
-    def advance_review(self, participant_id: str, view: str, stage: str) -> dict[str, Any]:
+    def advance_review(
+        self, participant_id: str, view: str | None, stage: str,
+        step_id: str | None = None, answers: Any = None,
+    ) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
         store = self._study()
         flow = store.advance_review(
-            participant_id=participant_id, run_id=self.run_id, view=view, stage=stage
+            participant_id=participant_id, run_id=self.run_id, view=view, stage=stage,
+            step_id=step_id, answers=answers,
         )
         store.add_event(
             participant_id=participant_id, run_id=self.run_id,
@@ -1694,14 +1820,18 @@ class FeedbackService:
         )
         complete = flow["stage"] == "complete"
         case = self._case_context()
+        final_case = (
+            flow["final_case"] if flow.get("schema") == FLOW_SCHEMA
+            else case["next_case_url"] is None
+        )
         seed = f"{EXPERT_STUDY_SCHEMA}|{participant_id}"
         return {
-            "review_flow": flow,
+            "review_flow": public_review_flow(flow),
             "case_completed": complete,
             "next_case_url": case["next_case_url"] if complete else None,
             "completion_code": (
                 "EXP-" + hashlib.sha256(seed.encode()).hexdigest()[:8].upper()
-                if complete and case["next_case_url"] is None else None
+                if complete and final_case else None
             ),
         }
 
@@ -1895,6 +2025,11 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
         "/styles.css": (ui_dir / "styles.css", "text/css; charset=utf-8"),
         "/app.js": (ui_dir / "app.js", "text/javascript; charset=utf-8"),
     }
+    if service.mode == "expert-study":
+        assets.update({
+            "/surveys.js": (ui_dir / "surveys.js", "text/javascript; charset=utf-8"),
+            "/surveys.css": (ui_dir / "surveys.css", "text/css; charset=utf-8"),
+        })
     review_ui = _official_ui_directory("recommendations")
     summary_ui = review_ui.parent / "summary"
     assets.update(
@@ -1954,7 +2089,10 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
             self.send_header("Content-Length", str(end - start + 1))
             if requested:
                 self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
-            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header(
+                "Cache-Control", "no-store" if mime_type.startswith("text/")
+                else "private, max-age=3600",
+            )
             self._headers()
             self.end_headers()
             if not send_body:
@@ -2099,8 +2237,8 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                     self._json(
                         HTTPStatus.OK,
                         service.advance_review(
-                            participant_id, str(body.get("view") or ""),
-                            str(body.get("stage") or ""),
+                            participant_id, body.get("view"), body.get("stage"),
+                            body.get("step_id"), body.get("answers"),
                         ),
                     )
                     return
