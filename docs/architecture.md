@@ -62,8 +62,20 @@ instrument snapshot, time, case, round and feedback order. The instrument is a
 proposed research self-assessment, not a validated clinical score; no total or
 pass threshold is produced. Responses never feed automatic evidence generation.
 
-The separate study JSON stores participant background under `participants` and
-case-specific submissions under `sessions[*].review_flow.responses`. Public flow
+The study directory stores one JSON per participant (normally
+`study_data/participants/<Study ID>.json`). `study_storage.py` owns atomic file
+transactions, portable filename allocation and lossless legacy import. Each file
+retains the existing envelope: participant background under `participants` and
+case-specific submissions under `sessions[*].review_flow.responses`, plus that
+participant's events and historical contributions. Same-participant transactions
+are serialized across case-server processes; another participant's file is not
+rewritten. `--study-state` and manifest `study_state` select the directory. Legacy
+JSON arguments import once into a sibling `<stem>_participants` directory without
+editing the source; `migrate-study-state` allows an explicit destination. A source
+hash receipt prevents stale imports from overwriting later answers, and conflicting
+data or a changed previously imported source is rejected. Original IDs and unknown
+shared metadata are preserved; safe filenames avoid case/device-name collisions.
+Public flow
 payloads omit saved answers. Next checks step ID, view, stage and payload before
 an atomic write; invalid and duplicate submissions cannot overwrite or skip
 steps. Background precedes analysis; other transitions require completed analysis.

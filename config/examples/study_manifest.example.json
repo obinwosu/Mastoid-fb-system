@@ -19,7 +19,7 @@
       "evidence_database": "results/DEMO_CASE_01/evidence.sqlite3",
       "review_video": "results/DEMO_CASE_01/review_video.webm",
       "review_video_manifest": "results/DEMO_CASE_01/review_video_manifest.json",
-      "study_state": "results/DEMO_CASE_01/study_state.json"
+      "study_state": "study_data/participants"
     }
   ]
 }

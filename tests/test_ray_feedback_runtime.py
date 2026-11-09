@@ -44,7 +44,7 @@ def make_service(folder, *, explicit_ray=None, mode="recommendations"):
         available_runs=[],
         display_name="Synthetic recording",
         interface_version="test",
-        study_state_path=folder / "study.json" if mode == "expert-study" else None,
+        study_state_path=folder / "participants" if mode == "expert-study" else None,
     )
 
 

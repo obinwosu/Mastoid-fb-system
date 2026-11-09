@@ -42,6 +42,7 @@ tmp/
 portable_dist/
 recordings/
 **/study_state.json
+/study_data/
 **/recordings/
 
 # Large data, media, databases, models, and archives

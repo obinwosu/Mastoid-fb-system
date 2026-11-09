@@ -151,11 +151,11 @@ def test_instrument_is_frozen_for_a_session_and_response_snapshot():
 def _write_sessions(path, prefix):
     store = ExpertStudyStore(path, "test")
     for index in range(8):
-        store.start_session(participant_id=f"{prefix}-{index}", run_id="case", stimulus_ids=[])
+        store.start_session(participant_id="Shared", run_id=f"{prefix}-{index}", stimulus_ids=[])
 
 
 def test_separate_processes_do_not_lose_shared_state_transactions(tmp_path):
-    path = tmp_path / "study.json"
+    path = tmp_path / "participants"
     context = multiprocessing.get_context("spawn")
     processes = [
         context.Process(target=_write_sessions, args=(path, prefix)) for prefix in ("A", "B")
@@ -171,8 +171,11 @@ def test_separate_processes_do_not_lose_shared_state_transactions(tmp_path):
             if process.is_alive():
                 process.terminate()
                 process.join(timeout=5)
-    saved = json.loads(path.read_text(encoding="utf-8"))["expert_study"]
-    assert len(saved["sessions"]) == 16
+    participant_file = ExpertStudyStore(path, "test").participant_path("Shared")
+    saved = json.loads(participant_file.read_text(encoding="utf-8"))["expert_study"]
+    assert set(saved["sessions"]) == {
+        f"Shared::{prefix}-{index}" for prefix in ("A", "B") for index in range(8)
+    }
 
 
 def test_unrelated_state_metadata_survives_survey_transactions(tmp_path):
@@ -180,10 +183,13 @@ def test_unrelated_state_metadata_survives_survey_transactions(tmp_path):
     path.write_text(json.dumps({"custom_metadata": {"keep": True}, "expert_study": {
         "participants": {"Old": {"custom_profile": "keep"}}, "custom_study": [1, 2],
     }}), encoding="utf-8")
-    ExpertStudyStore(path, "test").start_session(
-        participant_id="New", run_id="case", stimulus_ids=[],
+    original = path.read_bytes()
+    store = ExpertStudyStore(path, "test")
+    store.start_session(
+        participant_id="Old", run_id="case", stimulus_ids=[],
     )
-    saved = json.loads(path.read_text(encoding="utf-8"))
+    saved = json.loads(store.participant_path("Old").read_text(encoding="utf-8"))
+    assert path.read_bytes() == original
     assert saved["custom_metadata"] == {"keep": True}
     assert saved["expert_study"]["custom_study"] == [1, 2]
     assert saved["expert_study"]["participants"]["Old"] == {"custom_profile": "keep"}

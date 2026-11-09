@@ -73,6 +73,7 @@ FORBIDDEN_FILE_SUFFIXES = (
 WINDOWS_ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+)"
 )
+HTTP_URL = re.compile(r"https?://[^\s<>\"'`\[\]()\\]+", re.IGNORECASE)
 POSIX_USER_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9])/(?:Users|home|mnt|Volumes)/[^\s\"']+")
 CODED_PARTICIPANT_TRIAL_ID = re.compile(
     r"(?<![A-Za-z0-9.])P[0-9]{2}(?:_T[0-9]{2})?\b", re.IGNORECASE
@@ -111,12 +112,38 @@ def line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def windows_absolute_path_match(text: str) -> re.Match[str] | None:
+    # SharePoint navigation routes can resemble drives. Keep source offsets intact
+    # and leave the POSIX and participant-ID checks on the original text.
+    masked = HTTP_URL.sub(lambda match: " " * len(match.group()), text)
+    return WINDOWS_ABSOLUTE_PATH.search(masked)
+
+
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_http_url_routes_do_not_mask_real_local_paths(self) -> None:
+        urls = (
+            "https://example.sharepoint.com/:f:/r/sites/study/Shared%20Documents",
+            "HTTP://example.test/:f:/r/resources",
+        )
+        drive = "C" + ":" + "\\" + "private" + "\\" + "survey.json"
+        unc = "\\" * 2 + "host" + "\\" + "share" + "\\" + "survey.json"
+        for url in urls:
+            with self.subTest(url=url):
+                self.assertIsNone(windows_absolute_path_match(f"[Source]({url})"))
+                for local_path in (drive, unc):
+                    text = f"[Source]({url})\nLocal file: {local_path}"
+                    match = windows_absolute_path_match(text)
+                    self.assertIsNotNone(match)
+                    assert match is not None
+                    self.assertEqual(match.start(), text.index(local_path))
+                    self.assertEqual(line_number(text, match.start()), 2)
+
     def test_local_data_and_result_directories_are_ignored(self) -> None:
         probes = (
             "config/local/.repository-hygiene-probe",
             "data/.repository-hygiene-probe",
             "results/.repository-hygiene-probe",
+            "study_data/participants/.repository-hygiene-probe",
         )
         missing = []
         for probe in probes:
@@ -177,7 +204,10 @@ class RepositoryHygieneTests(unittest.TestCase):
                 ("local POSIX user absolute path", POSIX_USER_ABSOLUTE_PATH),
                 ("coded participant/trial ID", CODED_PARTICIPANT_TRIAL_ID),
             ):
-                match = pattern.search(text)
+                match = (
+                    windows_absolute_path_match(text)
+                    if pattern is WINDOWS_ABSOLUTE_PATH else pattern.search(text)
+                )
                 if match:
                     problems.append(f"{relative}:{line_number(text, match.start())}: {label}")
 

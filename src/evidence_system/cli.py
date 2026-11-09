@@ -441,6 +441,14 @@ def serve_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def migrate_study_state_command(args: argparse.Namespace) -> int:
+    from .study_storage import migrate_study_state
+
+    receipt = migrate_study_state(_path(args.source), _path(args.output_dir))
+    print(json.dumps(receipt, indent=2, ensure_ascii=False))
+    return 0
+
+
 def process_hdf5_command(args: argparse.Namespace) -> int:
     from .directory_pipeline import process_hdf5_directory
 
@@ -629,12 +637,25 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--video-manifest", type=Path)
     serve.add_argument("--ray-v3-dir", type=Path)
     serve.add_argument("--cohort-benchmark", type=Path)
-    serve.add_argument("--study-state", type=Path)
+    serve.add_argument(
+        "--study-state", type=Path,
+        help=(
+            "Participant JSON directory, e.g. study_data/participants; "
+            "legacy JSON paths import once"
+        ),
+    )
     serve.add_argument("--display-name")
     serve.add_argument("--interface-version")
     serve.add_argument("--host")
     serve.add_argument("--port", type=int)
     serve.set_defaults(handler=serve_command)
+
+    migrate = subparsers.add_parser(
+        "migrate-study-state", help="Split a legacy shared study JSON into participant files"
+    )
+    migrate.add_argument("--source", type=Path, required=True)
+    migrate.add_argument("--output-dir", type=Path, default=Path("study_data/participants"))
+    migrate.set_defaults(handler=migrate_study_state_command)
     return parser
 
 

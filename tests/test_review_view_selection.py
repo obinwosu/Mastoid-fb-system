@@ -30,7 +30,7 @@ def post(service, route, payload):
     "first,subsequent", [("event-based", "summary"), ("summary", "event-based")]
 )
 def test_first_review_view_persists_across_resume_and_store_reload(tmp_path, first, subsequent):
-    path = tmp_path / "study.json"
+    path = tmp_path / "participants"
     store = ExpertStudyStore(path, "initial-interface")
     original = store.start_session(
         participant_id="Reviewer-01", run_id="case", stimulus_ids=[], first_review_view=first
@@ -59,7 +59,7 @@ def test_invalid_selection_rejected_before_state_write(tmp_path, existing):
     service = make_service(tmp_path, mode="expert-study")
     if existing:
         service.start_study("Doctor-02", "summary")
-    path = service._study().path
+    path = service._study().participant_path("Doctor-02")
     before = path.read_bytes() if path.exists() else None
     status, response = post(service, "/api/expert-study/start", {
         "participant_id": "Doctor-02", "first_review_view": "unsupported",
@@ -109,7 +109,7 @@ def test_reviewer_identity_does_not_exclude_expert_performer_reference(tmp_path)
         run_id=recording.run_id, video_path=None, video_manifest_path=None,
         ray_v3_dir=None, cohort_benchmark_path=None, available_runs=[],
         display_name="Synthetic recording", interface_version="test",
-        study_state_path=recording.artifact_root / "study.json",
+        study_state_path=recording.artifact_root / "participants",
     )
     saved_reference(service, frames)
     service.start_study("expert_a", "summary")
@@ -130,7 +130,7 @@ def test_review_view_opened_event_keeps_reviewer_and_selected_view(tmp_path):
         "details": {"view": "summary"},
     })
     assert status == 200 and response["ok"]
-    saved = json.loads(service._study().path.read_text(encoding="utf-8"))
+    saved = json.loads(service._study().participant_path("Doctor-04").read_text(encoding="utf-8"))
     event = saved["expert_study"]["events"][-1]
     assert event["event_type"] == "review_view_opened"
     assert event["participant_id"] == "Doctor-04" and event["run_id"] == "case"
@@ -141,7 +141,7 @@ def test_review_view_opened_event_keeps_reviewer_and_selected_view(tmp_path):
 def test_client_event_cannot_mark_analysis_complete_or_unlock_summary(tmp_path, event_type):
     service = make_service(tmp_path, mode="expert-study")
     service.start_study("Doctor-05", "summary")
-    path = service._study().path
+    path = service._study().participant_path("Doctor-05")
     before = path.read_bytes()
     status, response = post(service, "/api/expert-study/event", {
         "participant_id": "Doctor-05", "event_type": event_type, "details": {},

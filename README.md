@@ -142,8 +142,8 @@ In the **Study ID** entry (`expert-study` mode), **Show first** selects
 → Second view → Self-assessment after second feedback → Second-view questionnaire
 → Preference → Complete.**
 
-The background questionnaire is collected once per Study ID in the shared study
-state file. Each recording has three separate self-assessments of that same
+The background questionnaire is collected once per Study ID in that participant's
+file. Each recording has three separate self-assessments of that same
 recorded performance. The two view questionnaires each ask Clarity and
 Actionability. Preference is collected after the final configured recording;
 earlier recordings continue to the next case after their second-view questionnaire.
@@ -172,12 +172,52 @@ Clarity and Actionability use 0 (Strongly disagree) through 4 (Strongly agree).
 Preference is Event-based, Summary or No preference.
 
 Submitted responses, timestamps, view order and the instrument snapshot are saved
-in the configured `study_state` JSON file, separately from the evidence database.
-Background responses are under `expert_study.participants[Study ID].background`;
-case responses are under `expert_study.sessions[Study ID::run ID].review_flow.responses`.
+in **one JSON file per Study ID**, separately from the evidence database. Use
+`--study-state study_data/participants` when starting the study server, or set
+each study manifest case's `study_state` to that same directory:
+
+```text
+study_data/
+  participants/
+    S001.json
+    test03.json
+    test04.json
+```
+
+Each file contains only that participant's background, all recording-specific
+responses/progress, interaction events and historical records. The existing JSON
+fields are retained: background is under
+`expert_study.participants[Study ID].background`, and case responses are under
+`expert_study.sessions[Study ID::run ID].review_flow.responses`. Multiple recordings
+for the same participant share one file; opening another case does not create
+another background questionnaire. File locks and atomic replacement protect
+concurrent saves. Unusual or case-conflicting IDs receive safe filenames while
+retaining the original Study ID inside the file.
+
 Current-step drafts are retained in the browser tab for refresh recovery and
 removed after a successful submission. Drafts are isolated by instrument version,
 Study ID, recording and step; they are not server submissions.
+
+To migrate an older shared JSON, first stop servers writing to it, then run:
+
+```text
+python run.py migrate-study-state --source /path/to/study_state.json --output-dir study_data/participants
+```
+
+The migration preserves the original source, imports each person's records and
+copies any historical recording attachments. An exact source backup and migration
+receipt are saved in the destination's `.migrations/` subdirectory. It refuses conflicting target data.
+Repeating the same completed migration does not overwrite newer answers. Restart
+the study server with `--study-state study_data/participants` afterwards.
+For compatibility, an older `--study-state /path/to/study_state.json` argument
+imports once into the sibling `study_state_participants/` directory and writes
+only participant files from then on. Changes to an already imported source are
+reported instead of silently replacing current answers.
+
+`study_data/` is excluded from Git. Copy that directory separately when backing
+up or moving collected responses to another computer; Git checkout alone does
+not transfer survey answers. The storage directory is configured by the server
+argument or study manifest, not by the anatomy/EDT configuration.
 
 Existing IDs with the older placeholder sequence keep their original sequence
 and records. They are not silently restarted or assigned retrospective baseline

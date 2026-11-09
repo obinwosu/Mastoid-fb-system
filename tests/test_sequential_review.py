@@ -14,12 +14,20 @@ IDENTITY = "Reviewer-sequential"
 def make_service(tmp_path, *, mode):
     service = make_base_service(tmp_path, mode=mode)
     # This file exercises saved pre-survey sessions; fresh sessions use v2.
-    payload = service._study()._empty()
+    payload = {
+        "schema": "local_expert_study_state_v1", "participant_id": IDENTITY,
+        "expert_study": {
+            "schema": "expert_feedback_study_v1", "sessions": {}, "participants": {},
+            "events": [], "expert_proposed_moments": {},
+        },
+    }
     payload["expert_study"]["sessions"][IDENTITY + "::" + service.run_id] = {
         "participant_id": IDENTITY, "run_id": service.run_id,
         "started_at": "legacy-start-time",
     }
-    service._study().path.write_text(json.dumps(payload), encoding="utf-8")
+    path = service._study().participant_path(IDENTITY)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return service
 
 
@@ -93,7 +101,7 @@ def test_next_requires_started_session_and_completed_analysis_without_writing(tm
     service = factory(tmp_path, mode="expert-study")
     if started:
         service.start_study(IDENTITY)
-    path = service._study().path
+    path = service._study().participant_path(IDENTITY)
     before = path.read_bytes() if path.exists() else None
     status, response = advance(service, "event-based", "review")
     assert status == 400 and "error" in response
@@ -108,7 +116,7 @@ def test_out_of_order_or_invalid_next_leaves_saved_flow_unchanged(tmp_path, view
     service = make_service(tmp_path, mode="expert-study")
     service.start_study(IDENTITY, "event-based")
     service.analyze_study(IDENTITY)
-    path = service._study().path
+    path = service._study().participant_path(IDENTITY)
     before = path.read_bytes()
     status, response = advance(service, view, stage)
     assert status == 400 and "error" in response
@@ -126,9 +134,9 @@ def test_duplicate_or_stale_next_never_skips_a_step(tmp_path, first):
                  (other, "review"), (other, "questionnaire")]
     for view, stage in submitted:
         assert advance(service, view, stage)[0] == 200
-        before = service._study().path.read_bytes()
+        before = service._study().participant_path(IDENTITY).read_bytes()
         assert advance(service, view, stage)[0] == 400
-        assert service._study().path.read_bytes() == before
+        assert service._study().participant_path(IDENTITY).read_bytes() == before
     assert_flow(service.start_study(IDENTITY), [first, other], 2, "complete")
 
 
@@ -136,9 +144,9 @@ def test_legacy_responses_and_first_preference_survive_new_completion_context(tm
     service = make_service(tmp_path, mode="expert-study")
     legacy_answers = {"answers": {"usefulness": 4}, "submitted_at": "old-response-time"}
     old_completed = "old-case-completion-time"
-    path = service._study().path
+    path = service._study().participant_path(IDENTITY)
     path.write_text(json.dumps({
-        "schema": "local_expert_study_state_v1",
+        "schema": "local_expert_study_state_v1", "participant_id": IDENTITY,
         "expert_study": {"schema": "expert_feedback_study_v1", "events": [],
                          "expert_proposed_moments": {}, "sessions": {
             IDENTITY + "::case": {
@@ -176,7 +184,7 @@ def test_legacy_completion_endpoint_cannot_skip_or_overwrite_sequential_flow(tmp
     for view, stage in sequence[:steps]:
         assert advance(service, view, stage)[0] == 200
     # Simulate an archived response retained when this session entered the new flow.
-    path = service._study().path
+    path = service._study().participant_path(IDENTITY)
     data = json.loads(path.read_text(encoding="utf-8"))
     prior_response = {"answers": {"workflow_clarity": 2}, "submitted_at": "legacy-response-time"}
     data["expert_study"]["sessions"][IDENTITY + "::case"]["experience_response"] = prior_response

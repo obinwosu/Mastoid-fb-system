@@ -8,12 +8,10 @@ import csv
 import hashlib
 import json
 import math
-import os
 import re
 import tempfile
 import threading
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -25,6 +23,7 @@ from uuid import uuid4
 from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
 from .ray_v3_view import build_ray_v3_view
 from .retrieval import EvidenceRetriever
+from .study_storage import ParticipantStateFiles, normalize_participant_id
 from .study_surveys import (
     FLOW_SCHEMA,
     SURVEY_DEFINITION,
@@ -70,7 +69,6 @@ EXPERT_STUDY_EVENT_TYPES = {
     "expert_moment_deleted",
     "audio_recording_started",
 }
-PARTICIPANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 def _official_ui_directory(mode: str) -> Path:
@@ -91,101 +89,8 @@ def _validate_ui_directory(mode: str, ui_dir: Path) -> Path:
     return actual
 
 
-def normalize_participant_id(value: str) -> str:
-    participant_id = value.strip()
-    if not PARTICIPANT_ID_PATTERN.fullmatch(participant_id):
-        raise ValueError(
-            "Study ID must be 1 to 64 letters, numbers, periods, dashes, or underscores"
-        )
-    return participant_id
-
-
-class ExpertStudyStore:
-    """Atomic local study storage, separate from the read-only evidence database."""
-
-    _path_locks: dict[str, Any] = {}
-    _path_locks_guard = threading.Lock()
-
-    def __init__(self, path: Path, interface_version: str) -> None:
-        self.path = path
-        self.interface_version = interface_version
-        key = os.path.normcase(str(path.resolve()))
-        with self._path_locks_guard:
-            self._lock = self._path_locks.setdefault(key, threading.RLock())
-
-    @contextmanager
-    def _locked(self) -> Iterator[None]:
-        """Serialize transactions across case servers sharing this state file."""
-        with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            lock_path = self.path.with_name(self.path.name + ".lock")
-            with lock_path.open("a+b") as handle:
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-                if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-                else:
-                    import fcntl
-
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    handle.seek(0)
-                    if os.name == "nt":
-                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                    else:
-                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-    def _empty(self) -> dict[str, Any]:
-        return {
-            "schema": "local_expert_study_state_v1",
-            "expert_study": {
-                "schema": EXPERT_STUDY_SCHEMA,
-                "sessions": {},
-                "participants": {},
-                "events": [],
-                "expert_proposed_moments": {},
-            },
-        }
-
-    def _read_unlocked(self) -> dict[str, Any]:
-        if not self.path.is_file():
-            return self._empty()
-        payload = json.loads(self.path.read_text(encoding="utf-8"))
-        study = dict(payload.get("expert_study") or {})
-        return {
-            **payload,
-            "schema": "local_expert_study_state_v1",
-            "expert_study": {
-                **study,
-                "schema": EXPERT_STUDY_SCHEMA,
-                "sessions": dict(study.get("sessions") or {}),
-                "participants": dict(study.get("participants") or {}),
-                "events": list(study.get("events") or []),
-                "expert_proposed_moments": dict(study.get("expert_proposed_moments") or {}),
-            },
-        }
-
-    def _write_unlocked(self, payload: Mapping[str, Any]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            delete=False,
-            dir=self.path.parent,
-            prefix="study-state-",
-            suffix=".tmp",
-        ) as handle:
-            json.dump(dict(payload), handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
-            temporary = Path(handle.name)
-        temporary.replace(self.path)
+class ExpertStudyStore(ParticipantStateFiles):
+    """Atomic per-participant storage, separate from the read-only evidence database."""
 
     @staticmethod
     def _session_key(participant_id: str, run_id: str) -> str:
@@ -193,8 +98,8 @@ class ExpertStudyStore:
 
     def progress(self, participant_id: str, run_id: str) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
-        with self._locked():
-            study = self._read_unlocked()["expert_study"]
+        with self._locked(participant_id):
+            study = self._read_unlocked(participant_id)["expert_study"]
             return dict(study["sessions"].get(self._session_key(participant_id, run_id)) or {})
 
     def start_session(
@@ -211,8 +116,8 @@ class ExpertStudyStore:
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
         now = datetime.now(UTC).isoformat()
-        with self._locked():
-            payload = self._read_unlocked()
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
             sessions = payload["expert_study"]["sessions"]
             existing = dict(sessions.get(key) or {})
             row = {
@@ -273,8 +178,8 @@ class ExpertStudyStore:
     ) -> dict[str, Any]:
         """Validate and record one current step in one atomic transaction."""
         participant_id = normalize_participant_id(participant_id)
-        with self._locked():
-            payload = self._read_unlocked()
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
             session = payload["expert_study"]["sessions"].get(
                 self._session_key(participant_id, run_id)
             )
@@ -368,8 +273,8 @@ class ExpertStudyStore:
             "details": dict(details or {}),
             "recorded_at": datetime.now(UTC).isoformat(),
         }
-        with self._locked():
-            payload = self._read_unlocked()
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
             payload["expert_study"]["events"].append(row)
             if event_type == "analysis_completed":
                 session = payload["expert_study"]["sessions"].get(
@@ -382,8 +287,9 @@ class ExpertStudyStore:
 
     def moments(self, participant_id: str, run_id: str) -> list[dict[str, Any]]:
         participant_id = normalize_participant_id(participant_id)
-        with self._locked():
-            values = self._read_unlocked()["expert_study"]["expert_proposed_moments"].values()
+        with self._locked(participant_id):
+            study = self._read_unlocked(participant_id)["expert_study"]
+            values = study["expert_proposed_moments"].values()
             return sorted(
                 [
                     dict(row)
@@ -437,7 +343,7 @@ class ExpertStudyStore:
         audio: dict[str, Any] | None = None
         final_audio: Path | None = None
         if audio_bytes is not None:
-            recordings = self.path.parent / "recordings"
+            recordings = self.recordings_dir
             recordings.mkdir(parents=True, exist_ok=True)
             extension = EXPERT_AUDIO_MIME_TYPES[normalized_mime]
             final_audio = recordings / f"{moment_id}{extension}"
@@ -473,8 +379,8 @@ class ExpertStudyStore:
             "created_at": datetime.now(UTC).isoformat(),
         }
         try:
-            with self._locked():
-                payload = self._read_unlocked()
+            with self._locked(participant_id):
+                payload = self._read_unlocked(participant_id)
                 payload["expert_study"]["expert_proposed_moments"][moment_id] = row
                 self._write_unlocked(payload)
         except Exception:
@@ -485,8 +391,8 @@ class ExpertStudyStore:
 
     def delete_moment(self, participant_id: str, run_id: str, moment_id: str) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
-        with self._locked():
-            payload = self._read_unlocked()
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
             moments = payload["expert_study"]["expert_proposed_moments"]
             row = dict(moments.get(moment_id) or {})
             if (
@@ -499,21 +405,21 @@ class ExpertStudyStore:
             self._write_unlocked(payload)
         filename = Path(str((row.get("audio") or {}).get("file_name") or "")).name
         if filename:
-            (self.path.parent / "recordings" / filename).unlink(missing_ok=True)
+            (self.recordings_dir / filename).unlink(missing_ok=True)
         return row
 
     def audio(self, participant_id: str, run_id: str, moment_id: str) -> tuple[Path, str]:
         participant_id = normalize_participant_id(participant_id)
-        with self._locked():
+        with self._locked(participant_id):
             row = dict(
-                self._read_unlocked()["expert_study"]["expert_proposed_moments"].get(moment_id)
+                self._read_unlocked(participant_id)["expert_study"]["expert_proposed_moments"].get(moment_id)
                 or {}
             )
         if not row or row.get("participant_id") != participant_id or row.get("run_id") != run_id:
             raise KeyError(moment_id)
         audio = row.get("audio") or {}
         filename = Path(str(audio.get("file_name") or "")).name
-        path = self.path.parent / "recordings" / filename
+        path = self.recordings_dir / filename
         if not filename or not path.is_file():
             raise KeyError(moment_id)
         return path, str(audio.get("mime_type") or "application/octet-stream")
@@ -528,8 +434,8 @@ class ExpertStudyStore:
         participant_id = normalize_participant_id(participant_id)
         key = self._session_key(participant_id, run_id)
         now = datetime.now(UTC).isoformat()
-        with self._locked():
-            payload = self._read_unlocked()
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
             sessions = payload["expert_study"]["sessions"]
             session = dict(sessions.get(key) or {})
             if not session:

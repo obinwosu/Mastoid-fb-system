@@ -66,7 +66,8 @@ def advance(service, flow, answers=None, *, participant=PARTICIPANT):
 
 
 def saved(service):
-    return json.loads(service._study().path.read_text(encoding="utf-8"))["expert_study"]
+    path = service._study().participant_path(PARTICIPANT)
+    return json.loads(path.read_text(encoding="utf-8"))["expert_study"]
 
 
 def response_fields(value):
@@ -148,9 +149,9 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
         if stage == "background":
             service.analyze_study(PARTICIPANT)
         # A stale click cannot submit another answer or advance a second time.
-        before = service._study().path.read_bytes()
+        before = service._study().participant_path(PARTICIPANT).read_bytes()
         assert advance(service, previous, answers)[0] == 400
-        assert service._study().path.read_bytes() == before
+        assert service._study().participant_path(PARTICIPANT).read_bytes() == before
         service = reopen(service)
         resumed = service.start_study(PARTICIPANT, order[1])
         assert resumed["review_flow"] == flow
@@ -201,10 +202,10 @@ def test_invalid_background_measurements_never_write(tmp_path, field, value):
     flow = service.start_study(PARTICIPANT)["review_flow"]
     answers = background()
     answers[field]["value"] = value
-    before = service._study().path.read_bytes()
+    before = service._study().participant_path(PARTICIPANT).read_bytes()
     status, result = advance(service, flow, answers)
     assert status == 400 and "error" in result
-    assert service._study().path.read_bytes() == before
+    assert service._study().participant_path(PARTICIPANT).read_bytes() == before
 
 
 @pytest.mark.parametrize("bad_answers", [
@@ -223,10 +224,10 @@ def test_invalid_self_assessment_rejected_without_losing_background(tmp_path, ba
     assert advance(service, flow, background())[0] == 200
     service.analyze_study(PARTICIPANT)
     flow = service.start_study(PARTICIPANT)["review_flow"]
-    before = service._study().path.read_bytes()
+    before = service._study().participant_path(PARTICIPANT).read_bytes()
     status, result = advance(service, flow, bad_answers)
     assert status == 400 and "error" in result
-    assert service._study().path.read_bytes() == before
+    assert service._study().participant_path(PARTICIPANT).read_bytes() == before
 
 
 @pytest.mark.parametrize("mutation", [
@@ -247,9 +248,9 @@ def test_background_rejects_ambiguous_or_obsolete_measurements(tmp_path, mutatio
     else:
         answers["age_status"] = "prefer_not"
         answers["age"] = 30
-    before = service._study().path.read_bytes()
+    before = service._study().participant_path(PARTICIPANT).read_bytes()
     assert advance(service, flow, answers)[0] == 400
-    assert service._study().path.read_bytes() == before
+    assert service._study().participant_path(PARTICIPANT).read_bytes() == before
 
 
 @pytest.mark.parametrize("bad_rating", [False, -1, 5, 2.5, "3", None])
@@ -264,20 +265,21 @@ def test_feedback_rating_bounds_are_not_osats_bounds(tmp_path, bad_rating):
         status, result = advance(service, flow, payload_for(flow))
         assert status == 200, result
         flow = result["review_flow"]
-    before = service._study().path.read_bytes()
+    before = service._study().participant_path(PARTICIPANT).read_bytes()
     assert advance(service, flow, {"clarity": bad_rating, "actionability": 4})[0] == 400
-    assert service._study().path.read_bytes() == before
+    assert service._study().participant_path(PARTICIPANT).read_bytes() == before
     assert advance(service, flow, {"clarity": 0, "actionability": 4})[0] == 200
 
 
 def test_forged_step_id_and_another_participant_cannot_submit_current_answers(tmp_path):
     service = make_service(tmp_path, mode="expert-study")
     flow = service.start_study(PARTICIPANT)["review_flow"]
-    before = service._study().path.read_bytes()
+    before = service._study().participant_path(PARTICIPANT).read_bytes()
     forged = {**flow, "step_id": "self_assessment_2", "stage": "self_assessment"}
     assert advance(service, forged, assessment(2))[0] == 400
     assert advance(service, flow, background(), participant="Unknown-reviewer")[0] == 400
-    assert service._study().path.read_bytes() == before
+    assert service._study().participant_path(PARTICIPANT).read_bytes() == before
+    assert not service._study().participant_path("Unknown-reviewer").exists()
 
 
 def test_background_preserves_optional_unknown_and_zero_without_coercion(tmp_path):
@@ -298,9 +300,10 @@ def test_background_preserves_optional_unknown_and_zero_without_coercion(tmp_pat
 
 
 def test_preopened_second_case_resumes_after_shared_background_is_submitted(tmp_path):
-    path = tmp_path / "shared-study.json"
-    first = ExpertStudyStore(path, "audit")
-    second = ExpertStudyStore(path, "audit")
+    directory = tmp_path / "participants"
+    first = ExpertStudyStore(directory, "audit")
+    second = ExpertStudyStore(directory, "audit")
+    path = first.participant_path(PARTICIPANT)
     first_args = dict(participant_id=PARTICIPANT, run_id="first", stimulus_ids=[])
     second_args = dict(participant_id=PARTICIPANT, run_id="second", stimulus_ids=[])
     first_session = first.start_session(**first_args, final_case=False)
@@ -333,9 +336,10 @@ def test_legacy_flow_and_earlier_responses_are_not_recast_as_new_baselines(tmp_p
         }}, "transitions": [], "created_at": "old-time", "completed_at": None,
     }
     historic = {"answers": {"feedback_usefulness": 5}, "submitted_at": "earlier-time"}
-    path = service._study().path
+    path = service._study().participant_path(PARTICIPANT)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
-        "schema": "local_expert_study_state_v1",
+        "schema": "local_expert_study_state_v1", "participant_id": PARTICIPANT,
         "expert_study": {"schema": "expert_feedback_study_v1", "events": [],
                          "expert_proposed_moments": {}, "sessions": {
             PARTICIPANT + "::case": {
@@ -392,7 +396,7 @@ def test_two_case_services_share_background_but_only_last_case_asks_preference(t
 
 
 def test_separate_store_instances_do_not_lose_concurrent_events(tmp_path):
-    path = tmp_path / "shared-study.json"
+    path = tmp_path / "participants"
     stores = [ExpertStudyStore(path, "audit") for _ in range(4)]
     gate = threading.Barrier(4)
 
@@ -400,13 +404,14 @@ def test_separate_store_instances_do_not_lose_concurrent_events(tmp_path):
         gate.wait(timeout=10)
         for number in range(10):
             stores[index].add_event(
-                participant_id=f"Audit-{index}", run_id="case", event_type="study_started",
+                participant_id=PARTICIPANT, run_id="case", event_type="study_started",
                 details={"worker": index, "number": number},
             )
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         list(pool.map(write_events, range(4)))
-    events = json.loads(path.read_text(encoding="utf-8"))["expert_study"]["events"]
+    participant_file = stores[0].participant_path(PARTICIPANT)
+    events = json.loads(participant_file.read_text(encoding="utf-8"))["expert_study"]["events"]
     assert len(events) == 40
     assert {(e["details"]["worker"], e["details"]["number"]) for e in events} == {
         (worker, number) for worker in range(4) for number in range(10)
