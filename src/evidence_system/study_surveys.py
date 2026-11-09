@@ -13,14 +13,19 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-SURVEY_VERSION = "mastoid_surveys_v1"
+SURVEY_VERSION = "mastoid_surveys_v3_resident"
 FLOW_SCHEMA = "sequential_review_v2"
 ROLE_UNITS = {
-    "medical_student": "medical_school_year",
     "resident": "pgy",
-    "fellow": "fellowship_year",
+    "fellow": "pgy",
     "attending": "independent_practice_years",
 }
+# PGY bubbles by role: residents PGY 1-5, fellows PGY 6-7. Attendings type years in practice.
+ROLE_PGY = {"resident": [1, 2, 3, 4, 5], "fellow": [6, 7]}
+# The resident study leaves out the three self-assessments for now (2026-11-07).
+# Set True to bring them back; nothing else needs to change.
+SELF_ASSESSMENTS = False
+MASTOIDECTOMY_COUNTS = ["0", "1_5", "6_10", "11_20", "over_20"]
 
 SELF_ASSESSMENT_ITEMS = [
     {
@@ -132,68 +137,27 @@ SURVEY_DEFINITION: dict[str, Any] = {
         "total_score_defined": False,
         "pass_threshold_defined": False,
         "second_exposure": "Interpret as additional exposure after the first feedback format",
+        "self_assessments_included": SELF_ASSESSMENTS,
     },
     "background": {
-        "title": "Pre-session questionnaire",
+        "title": "Background Questionnaire",
         "instructions": (
-            "Please describe your experience before the procedure you are reviewing today. "
-            "Estimates are welcome."
+            "A few questions about your training and experience before today's session."
         ),
         "fields": {
             "role": {
                 "label": "Current role",
                 "options": list(ROLE_UNITS),
             },
-            "age": {"label": "Age", "unit": "years", "optional": True},
-            "age_status": {"options": ["provided", "unanswered", "prefer_not"]},
-            "gender": {
-                "label": "Gender", "optional": True,
-                "options": ["woman", "man", "non_binary", "self_describe", "prefer_not"],
+            "training_stage": {
+                "label": "Current training year", "role_units": ROLE_UNITS, "role_pgy": ROLE_PGY,
+                "description": "Residents choose PGY 1-5; fellows choose PGY 6 or 7; "
+                               "attendings type their years in practice.",
             },
-            "gender_self_description": {"label": "Self-description", "optional": True},
-            "training_stage": {"label": "Current training year", "role_units": ROLE_UNITS},
-            "otolaryngology_training_months": {
-                "label": "Completed otolaryngology training", "unit": "months",
-                "description": (
-                    "Include completed residency and fellowship. Exclude medical school "
-                    "and independent practice. Not applicable for medical students."
-                ),
-            },
-            "clinical_mastoidectomy_years": {
-                "label": "Clinical mastoidectomy experience", "unit": "years",
-                "description": (
-                    "Approximate years since you first personally drilled during a clinical "
-                    "mastoidectomy, before this procedure. Exclude observation only. "
-                    "Enter 0 for no prior experience; decimals are welcome."
-                ),
-            },
-            "temporal_bone_lab_years": {
-                "label": "Temporal bone laboratory experience", "unit": "years",
-                "description": (
-                    "Approximate years since your first hands-on temporal bone laboratory "
-                    "training, before this procedure. Exclude virtual simulation. "
-                    "Enter 0 for no prior experience; decimals are welcome."
-                ),
-            },
-            "vr_headset_experience": {
-                "label": "Previous VR headset use",
-                "description": "For any purpose, including games, education, or work.",
-                "options": ["yes", "no", "not_sure"],
-            },
-            "other_surgical_simulator_experience": {
-                "label": "Other virtual surgical simulators",
-                "description": (
-                    "Include screen-based and haptic simulators. "
-                    "Exclude the simulator used for this procedure."
-                ),
-                "options": ["yes", "no", "not_sure"],
-            },
-            "this_simulator_attempts": {
-                "label": "Previous attempts in this simulator", "unit": "attempts",
-                "description": (
-                    "Count earlier procedure attempts, including unfinished attempts. "
-                    "Exclude the procedure reviewed today."
-                ),
+            "cortical_mastoidectomies": {
+                "label": "Number of prior cortical mastoidectomies performed",
+                "options": MASTOIDECTOMY_COUNTS,
+                "option_labels": ["0", "1-5", "6-10", "11-20", ">20"],
             },
         },
     },
@@ -227,17 +191,20 @@ SURVEY_DEFINITION: dict[str, Any] = {
         "scale": [
             {"value": value, "label": label}
             for value, label in enumerate([
-                "Strongly disagree", "Disagree", "Neither agree nor disagree",
+                "Strongly disagree", "Disagree", "Neutral",
                 "Agree", "Strongly agree",
             ])
         ],
     },
     "preference": {
-        "title": "Your preference",
-        "question": "Which feedback format would you prefer to use?",
+        "title": "Which feedback format did you prefer?",
+        "question": "Which feedback format did you prefer?",
         "options": [
-            {"value": "event-based", "label": "Event-based"},
-            {"value": "summary", "label": "Summary"},
+            {"value": "event-based", "label": "Event-based feedback",
+             "description": "Highlighting the specific moments where your performance deviated from expert performance."},
+            {"value": "summary", "label": "Summary-based feedback",
+             "description": "Contextualizing your performance metrics against expert performance metrics."},
+            {"value": "combination", "label": "A combination of both"},
             {"value": "no_preference", "label": "No preference"},
         ],
     },
@@ -292,44 +259,18 @@ def validate_background(answers: Any) -> dict[str, Any]:
     role = row["role"]
     if not isinstance(role, str) or role not in ROLE_UNITS:
         raise ValueError("Choose a valid current role")
-    if not isinstance(row["age_status"], str) or row["age_status"] not in {
-        "provided", "unanswered", "prefer_not",
-    }:
-        raise ValueError("Invalid age response status")
-    if row["age_status"] == "provided":
-        _number(row["age"], "Age", minimum=1, integer=True)
-    elif row["age"] is not None:
-        raise ValueError("Age must be null when unanswered or declined")
-    gender = row["gender"]
-    allowed_gender = {None, "woman", "man", "non_binary", "self_describe", "prefer_not"}
-    if not isinstance(gender, str | type(None)) or gender not in allowed_gender:
-        raise ValueError("Invalid gender response")
-    description = row["gender_self_description"]
-    if not isinstance(description, str) or len(description) > 100:
-        raise ValueError("Gender self-description must be at most 100 characters")
-    if gender != "self_describe" and description:
-        raise ValueError("A gender self-description requires the self-describe choice")
-    if gender == "self_describe" and not description.strip():
-        raise ValueError("Enter a gender self-description or choose another option")
     stage = _fields(row["training_stage"], {"status", "value", "unit"}, "Training stage")
     if stage["unit"] != ROLE_UNITS[role]:
         raise ValueError("Training-stage unit does not match the selected role")
-    _measurement(
-        {"status": stage["status"], "value": stage["value"]}, "Training stage",
-        integer=role != "attending", minimum=0 if role == "attending" else 1,
-    )
-    training = _measurement(
-        row["otolaryngology_training_months"], "Otolaryngology training",
-        integer=True, allow_not_applicable=True,
-    )
-    if role == "medical_student" and training["status"] != "not_applicable":
-        raise ValueError("Residency/fellowship training is not applicable to medical students")
-    for key in ("clinical_mastoidectomy_years", "temporal_bone_lab_years"):
-        _measurement(row[key], key)
-    _measurement(row["this_simulator_attempts"], "Previous simulator attempts", integer=True)
-    for key in ("vr_headset_experience", "other_surgical_simulator_experience"):
-        if not isinstance(row[key], str) or row[key] not in {"yes", "no", "not_sure"}:
-            raise ValueError(f"Choose yes, no, or not sure for {key}")
+    if stage["status"] != "provided":
+        raise ValueError("Give your training year or years in practice")
+    _number(stage["value"], "Training stage", minimum=0, integer=True)
+    if role in ROLE_PGY and stage["value"] not in ROLE_PGY[role]:
+        years = ROLE_PGY[role]
+        raise ValueError(f"{role.capitalize()}s choose PGY {years[0]}-{years[-1]}")
+    count = row["cortical_mastoidectomies"]
+    if not isinstance(count, str) or count not in MASTOIDECTOMY_COUNTS:
+        raise ValueError("Choose the number of prior cortical mastoidectomies")
     return copy.deepcopy(row)
 
 
@@ -354,9 +295,9 @@ def validate_answers(stage: str, answers: Any) -> dict[str, Any] | None:
     if stage == "preference":
         row = _fields(answers, {"preferred_view"}, "Preference questionnaire")
         if not isinstance(row["preferred_view"], str) or row["preferred_view"] not in {
-            "event-based", "summary", "no_preference",
+            "event-based", "summary", "combination", "no_preference",
         }:
-            raise ValueError("Choose event-based, summary, or no_preference")
+            raise ValueError("Choose event-based, summary, combination, or no_preference")
         return copy.deepcopy(row)
     if stage == "review":
         if answers is not None:
@@ -376,13 +317,13 @@ def protocol_steps(order: list[str], *, background: bool, final_case: bool) -> l
         }
 
     steps = [step("background", "background", 0)] if background else []
-    steps.append(step("assessment_0", "self_assessment", 0, assessment_round=0))
+    if SELF_ASSESSMENTS:
+        steps.append(step("assessment_0", "self_assessment", 0, assessment_round=0))
     for index, view in enumerate(order):
-        steps.extend([
-            step(f"review_{index}", "review", index, view),
-            step(f"assessment_{index + 1}", "self_assessment", index, view, index + 1),
-            step(f"questionnaire_{index}", "questionnaire", index, view),
-        ])
+        steps.append(step(f"review_{index}", "review", index, view))
+        if SELF_ASSESSMENTS:
+            steps.append(step(f"assessment_{index + 1}", "self_assessment", index, view, index + 1))
+        steps.append(step(f"questionnaire_{index}", "questionnaire", index, view))
     if final_case:
         steps.append(step("preference", "preference", 2))
     steps.append(step("complete", "complete", 2))
@@ -406,13 +347,17 @@ def new_review_flow(
 def public_review_flow(flow: Mapping[str, Any]) -> dict[str, Any]:
     if flow.get("schema") != FLOW_SCHEMA:
         return copy.deepcopy(dict(flow))
-    return {
+    public = {
         key: copy.deepcopy(flow.get(key))
         for key in (
             "schema", "order", "stage", "step_id", "index", "current_view",
             "assessment_round", "created_at", "completed_at", "final_case", "survey_version",
         )
     }
+    steps, cursor = flow.get("steps") or [], flow.get("cursor", 0)
+    # Lets the page name the next step ("Continue to questionnaire").
+    public["next_stage"] = steps[cursor + 1]["stage"] if cursor + 1 < len(steps) else None
+    return public
 
 
 def response_record(

@@ -180,7 +180,10 @@ def configure_anatomy(
     resolution = resolutions[0]
     catalogue, catalogue_hash = authority._trusted_edt_profile(model, edt.name, resolution, hashes)
     spacing = dimensions[0] / (resolution[0] * float(entry["unit"]))
-    authority._close(spacing, representative["SpacingMm"], "model dimension/grid/GUI spacing")
+    # 1e-6 mm: the 2022 calibration was made on an ADF/GUI pair that is not in any
+    # repository; today's RT143 files agree to ~6e-9 mm. Distances use SpacingMm anyway.
+    authority._close(spacing, representative["SpacingMm"], "model dimension/grid/GUI spacing",
+                     tolerance=1e-6)
     if historical:
         quaternion = json.loads(selected_row["UsedRotation"])
         authority._quaternion(
@@ -196,7 +199,10 @@ def configure_anatomy(
         references = [
             row["RecordingID"]
             for row in model_rows
-            if row["RotationSource"] == rotation_source
+            # The 2022 records name a commented line of this ADF that holds the same
+            # orientation as today's active line. Fitted rotations never count.
+            if (row["RotationSource"] == rotation_source
+                or row["RotationSource"].startswith(f"ADF/{adf.name}:commented:"))
             and _same_rotation(json.loads(row["UsedRotation"]), quaternion)
         ]
         if not references:

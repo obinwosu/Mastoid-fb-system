@@ -2,7 +2,9 @@
 
 const summaryParameters = new URL(window.location.href).searchParams;
 const embeddedSummary = summaryParameters.get("embedded") === "1";
-const summaryState = { data: null, phaseIndex: 0, seekHandler: null, mediaAvailable: false, active: !embeddedSummary };
+const summaryState = { data: null, phaseIndex: 0, seekHandler: null, mediaAvailable: false, active: !embeddedSummary,
+  opened: {} };  // phase index -> set of sections (safety, motion) the resident has opened
+const REVIEW_GROUPS = ["safety", "motion"];
 if (embeddedSummary) document.body.classList.add("embedded-summary");
 window.addEventListener("message", event => {
   if (!embeddedSummary || event.origin !== window.location.origin || event.source !== window.parent
@@ -60,6 +62,14 @@ function phaseLabel(phase) {
   return phase.label || labels[phase.phase_name] || "Phase";
 }
 
+// Plain definitions shown under the phase name.
+const phaseDefinitions = {
+  early_surface: "Initial removal of the mastoid cortex.",
+  early_phase: "Initial removal of the mastoid cortex.",
+  antrum: "Identifying and removing Körner's septum to open the mastoid antrum.",
+  incus: "Identifying the short process of the incus.",
+};
+
 function validIntervals(phase) {
   return (phase.intervals || []).filter(interval => finiteNumber(interval.t_start_s)
     && finiteNumber(interval.t_end_s) && interval.t_end_s > interval.t_start_s);
@@ -79,34 +89,42 @@ function referenceValues(reference) {
   return { q25, median, q75, points: plotted, lower: Math.max(0, lower - padding), upper: upper + padding };
 }
 
+// Where this recording sits relative to the middle half of expert recordings.
+function comparison(reference, value) {
+  if (!reference || !finiteNumber(value)) return null;
+  if (value > reference.q75) return { text: "Higher than most experts", kind: "outside" };
+  if (value < reference.q25) return { text: "Lower than most experts", kind: "outside" };
+  return { text: "Similar to most experts", kind: "inside" };
+}
+
 function drawDistribution(svg, metric, reference, value) {
   const width = svg.getBoundingClientRect().width;
   if (width < 25) return;
-  svg.setAttribute("viewBox", `0 0 ${width} 45`);
+  svg.setAttribute("viewBox", `0 0 ${width} 52`);
   svg.replaceChildren();
   const left = 7, right = width - 7;
   const x = number => left + (number - reference.lower) / (reference.upper - reference.lower) * (right - left);
   const currentAvailable = finiteNumber(value);
   svg.append(svgElement("title", {}, `${metric.label}: ${currentAvailable ? `${displayValue(value)} ${metric.unit}` : "current value unavailable"}. Expert band ${displayValue(reference.q25)} to ${displayValue(reference.q75)} ${metric.unit}.`));
-  svg.append(svgElement("line", { x1: left, x2: right, y1: 28, y2: 28, stroke: "#dbe5eb" }));
-  svg.append(svgElement("rect", { x: x(reference.q25), y: 22, width: Math.max(1, x(reference.q75) - x(reference.q25)), height: 8, fill: "#dce6ee" }));
-  svg.append(svgElement("line", { x1: x(reference.median), x2: x(reference.median), y1: 21, y2: 31, stroke: "#324c61", "stroke-width": 1.5 }));
+  svg.append(svgElement("line", { x1: left, x2: right, y1: 32, y2: 32, stroke: "#e1e6ea" }));
+  svg.append(svgElement("rect", { x: x(reference.q25), y: 25, width: Math.max(1, x(reference.q75) - x(reference.q25)), height: 14, rx: 3, fill: "#dfe6eb" }));
+  svg.append(svgElement("line", { x1: x(reference.median), x2: x(reference.median), y1: 24, y2: 40, stroke: "#3d5466", "stroke-width": 2 }));
   reference.points.forEach((point, index) => {
-    const dot = svgElement("circle", { cx: x(point.value), cy: 14 - (index % 3) * 3, r: 1.9, fill: "#8496a6" });
+    const dot = svgElement("circle", { cx: x(point.value), cy: 16 - (index % 3) * 4, r: 2.4, fill: "#93a2ae" });
     dot.append(svgElement("title", {}, `Expert recording: ${displayValue(point.value)} ${metric.unit}`));
     svg.append(dot);
   });
   if (currentAvailable) {
     const currentX = Math.max(left, Math.min(right, x(value)));
-    svg.append(svgElement("line", { x1: currentX, x2: currentX, y1: 8, y2: 31, stroke: "#0a67a9", "stroke-width": 1.4 }));
-    const shape = value > reference.upper ? `M ${right - 7} 3 L ${right} 8 L ${right - 7} 13 Z`
-      : value < reference.lower ? `M ${left + 7} 3 L ${left} 8 L ${left + 7} 13 Z`
-        : `M ${currentX} 1 l 4 4 l -4 4 l -4 -4 Z`;
-    svg.append(svgElement("path", { d: shape, fill: "#0a67a9" }));
+    svg.append(svgElement("line", { x1: currentX, x2: currentX, y1: 10, y2: 40, stroke: "#0e7c6b", "stroke-width": 2 }));
+    const shape = value > reference.upper ? `M ${right - 9} 1 L ${right} 7 L ${right - 9} 13 Z`
+      : value < reference.lower ? `M ${left + 9} 1 L ${left} 7 L ${left + 9} 13 Z`
+        : `M ${currentX} 0 l 6 6 l -6 6 l -6 -6 Z`;
+    svg.append(svgElement("path", { d: shape, fill: "#0e7c6b" }));
   }
-  const ticks = width >= 185 ? [reference.lower, (reference.lower + reference.upper) / 2, reference.upper] : [reference.lower, reference.upper];
+  const ticks = [reference.lower, reference.upper];
   ticks.forEach((value, index) => svg.append(svgElement("text", {
-    x: x(value), y: 43, "font-size": 11, fill: "#607383",
+    x: x(value), y: 51, "font-size": 11, fill: "#8a98a3",
     "text-anchor": index === 0 ? "start" : index === ticks.length - 1 ? "end" : "middle",
   }, displayValue(value))));
 }
@@ -135,9 +153,12 @@ function renderMotion(phase) {
       chart.append(svg);
     } else chart.append(element("p", "plot-unavailable", "Expert reference unavailable"));
     const value = element("div", `metric-value${finiteNumber(current) ? "" : " unavailable"}`, displayValue(current));
+    if (finiteNumber(current)) value.append(element("span", "metric-value-unit", ` ${definition.unit}`));
     if (reference && finiteNumber(current) && (current < reference.lower || current > reference.upper)) {
       value.append(element("span", "offscale-label", current < reference.lower ? "below scale" : "above scale"));
     }
+    const compared = comparison(reference, current);
+    if (compared) name.append(element("span", `comparison-chip ${compared.kind}`, compared.text));
     row.append(name, chart, value);
     if (!finiteNumber(current)) row.append(element("p", "metric-note", "Not enough reliable measurements for this phase."));
     return row;
@@ -145,46 +166,50 @@ function renderMotion(phase) {
   drawPlots();
 }
 
-function safetyRow(label, subtitle, value) {
-  const details = element("details", "safety-metric");
-  const summary = element("summary");
+// Safety rows are always open: a short definition under the name, the value on the
+// right, and (for violations) one line per structure underneath.
+function safetyRow(label, definition, value, state = "") {
+  const row = element("div", "safety-metric");
+  const head = element("div", "safety-head");
   const name = element("span", "safety-name", label);
-  name.append(element("small", "", subtitle));
-  summary.append(name, element("span", "safety-value", value));
+  name.append(element("small", "", definition));
+  head.append(name, element("span", `safety-value ${state}`, value));
   const content = element("div", "safety-details");
-  details.append(summary, content);
-  return { details, content };
+  row.append(head, content);
+  return { row, content };
 }
 
 function renderSafety(phase) {
   const violations = phase.safety?.critical_structure_violation || {};
-  const violationValue = violations.available === true && finiteNumber(violations.count)
-    ? `${displayValue(violations.count)} ${violations.count === 1 ? "event" : "events"}` : "Unavailable";
-  const violationRow = safetyRow("Critical Structure Violation", "Details by structure", violationValue);
-  if (violations.available === true) {
-    const structures = (violations.structures || []).filter(item => item && typeof item.name === "string");
-    if (structures.length) {
-      const list = element("dl", "structure-list");
-      structures.forEach(structure => {
-        const entry = element("div");
-        const count = finiteNumber(structure.count) ? `${displayValue(structure.count)} ${structure.count === 1 ? "event" : "events"}` : "Event count unavailable";
-        const depth = finiteNumber(structure.max_intrusion_mm) ? `${displayValue(structure.max_intrusion_mm)} mm max. intrusion` : "Intrusion depth unavailable";
-        entry.append(element("dt", "", structure.name), element("dd", "", `${count} · ${depth}`));
-        list.append(entry);
-      });
-      violationRow.content.append(list);
-      violationRow.content.append(element("p", "", "Max. intrusion is the greatest depth of bone removal inside the structure during this phase."));
-    } else violationRow.content.append(element("p", "", violations.count === 0 ? "No critical structure violations were detected in this phase." : "Structure-level measurements are unavailable."));
-  } else violationRow.content.append(element("p", "", "Critical structure measurements are unavailable for this phase."));
-  violationRow.content.append(element("p", "", "An expert comparison is not available for this measurement."));
+  const counted = violations.available === true && finiteNumber(violations.count);
+  const violationValue = !counted ? "Unavailable" : violations.count === 0 ? "None"
+    : `${displayValue(violations.count)}`;
+  const violationRow = safetyRow("Critical structure violations",
+    "Number of times the active drill cut into a critical structure.", violationValue,
+    !counted ? "" : violations.count === 0 ? "good" : "warn");
+  const structures = counted
+    ? (violations.structures || []).filter(item => item && typeof item.name === "string") : [];
+  if (structures.length) {
+    const list = element("dl", "structure-list");
+    structures.forEach(structure => {
+      const entry = element("div");
+      const count = finiteNumber(structure.count) ? `${displayValue(structure.count)} ${structure.count === 1 ? "time" : "times"}` : "count unavailable";
+      const depth = finiteNumber(structure.max_intrusion_mm) ? ` · up to ${displayValue(structure.max_intrusion_mm)} mm deep` : "";
+      entry.append(element("dt", "", structure.name), element("dd", "", `${count}${depth}`));
+      list.append(entry);
+    });
+    violationRow.content.append(list);
+  } else violationRow.content.remove();
   const visibility = phase.safety?.drill_visibility || {};
-  const visibilityValue = visibility.available === true && finiteNumber(visibility.duration_s) ? `${displayValue(visibility.duration_s)} s` : "Unavailable";
-  const visibilityRow = safetyRow("Drill Visibility", "Poor visibility duration", visibilityValue);
-  visibilityRow.content.append(element("p", "", visibility.available === true
-    ? "Estimated total time with poor drill visibility during this phase."
-    : "Drill visibility measurements are unavailable for this phase."));
-  visibilityRow.content.append(element("p", "", "An expert comparison is not available for this measurement."));
-  document.getElementById("safetyMetrics").replaceChildren(violationRow.details, visibilityRow.details);
+  const timed = visibility.available === true && finiteNumber(visibility.duration_s);
+  const visibilityValue = !timed ? "Unavailable" : visibility.duration_s === 0 ? "None" : `${displayValue(visibility.duration_s)} s`;
+  // Rule (under_ledge_ray.py): rays from the microscope to the bone the burr is cutting;
+  // half or more blocked by not-yet-drilled bone, sustained >= 0.3 s.
+  const visibilityRow = safetyRow("Time with poor drill visibility",
+    "Time spent drilling with the center of the burr under a bony ledge.",
+    visibilityValue, !timed ? "" : visibility.duration_s === 0 ? "good" : "warn");
+  visibilityRow.content.remove();
+  document.getElementById("safetyMetrics").replaceChildren(violationRow.row, visibilityRow.row);
 }
 
 function goToTime(time) {
@@ -204,6 +229,41 @@ function goToTime(time) {
   }
 }
 
+// The resident must open Safety and Drilling motion in every phase before Next unlocks.
+function reviewProgress() {
+  const phases = summaryState.data.phases.map((phase, index) => ({
+    label: phaseLabel(phase),
+    done: REVIEW_GROUPS.every(group => summaryState.opened[index]?.has(group)),
+  }));
+  return { done: phases.filter(phase => phase.done).length, total: phases.length,
+    remaining: phases.filter(phase => !phase.done).map(phase => phase.label) };
+}
+
+function reportProgress() {
+  const progress = reviewProgress();
+  document.querySelectorAll("[data-phase-index]").forEach(button => {
+    const index = Number(button.dataset.phaseIndex);
+    button.classList.toggle("reviewed", REVIEW_GROUPS.every(group => summaryState.opened[index]?.has(group)));
+  });
+  if (embeddedSummary && window.parent !== window) {
+    window.parent.postMessage({ type: "summary-review-progress", ...progress }, window.location.origin);
+  }
+}
+
+function groupOpened(event) {
+  const group = event.currentTarget.dataset.group;
+  if (event.currentTarget.open) {
+    // One section at a time, so the open one fits on screen without scrolling.
+    document.querySelectorAll(".summary-group[open]").forEach(other => {
+      if (other !== event.currentTarget) other.open = false;
+    });
+    (summaryState.opened[summaryState.phaseIndex] ||= new Set()).add(group);
+    event.currentTarget.classList.add("seen");
+    if (group === "motion") drawPlots();
+    reportProgress();
+  }
+}
+
 function renderPhase() {
   const phase = selectedPhase();
   const intervals = validIntervals(phase);
@@ -213,22 +273,26 @@ function renderPhase() {
     button.tabIndex = selected ? 0 : -1;
   });
   document.getElementById("phaseMeasures").setAttribute("aria-labelledby", `summary-phase-${summaryState.phaseIndex}`);
-  document.getElementById("videoWindow").textContent = `${phaseLabel(phase)}${finiteNumber(phase.duration_s) ? ` · ${timeLabel(phase.duration_s)} total` : ""}`;
-  document.getElementById("phaseIntervals").replaceChildren(...intervals.map((interval, index) => {
-    const row = element("div", "phase-interval");
-    const text = element("span");
-    text.append(element("strong", "", `${phaseLabel(phase)}${intervals.length > 1 ? ` · Part ${index + 1}` : ""}`), document.createElement("br"), document.createTextNode(`${timeLabel(interval.t_start_s)}–${timeLabel(interval.t_end_s)}`));
-    const button = element("button", "", "Go to start");
-    button.type = "button";
-    button.disabled = !summaryState.mediaAvailable;
-    button.setAttribute("aria-label", `Pause video at ${phaseLabel(phase)}, ${timeLabel(interval.t_start_s)}`);
-    button.addEventListener("click", () => goToTime(interval.t_start_s));
-    row.append(text, button);
-    return row;
-  }));
-  if (!intervals.length) document.getElementById("phaseIntervals").append(element("p", "video-status", "This phase was not identified in the recording."));
+  // "Early Drilling Phase", "Antrum Phase", "Incus Phase".
+  document.getElementById("measuresPhase").textContent = `${phaseLabel(phase).replace(/\b\w/g, c => c.toUpperCase())} Phase`;
+  document.getElementById("phaseDefinition").textContent = phaseDefinitions[phase.phase_name] || "";
+  document.getElementById("videoStatus").textContent = intervals.length ? "" : `${phaseLabel(phase)} was not identified in the recording.`;
+  // Each phase starts with both sections closed; ones already opened are marked.
+  document.querySelectorAll(".summary-group").forEach(group => {
+    group.open = false;
+    group.classList.toggle("seen", Boolean(summaryState.opened[summaryState.phaseIndex]?.has(group.dataset.group)));
+  });
   renderSafety(phase);
   renderMotion(phase);
+  reportProgress();
+}
+
+// Choosing a phase shows its measures and pauses the video at the phase's start.
+function selectPhase(index) {
+  summaryState.phaseIndex = index;
+  renderPhase();
+  const first = validIntervals(selectedPhase())[0];
+  if (first) goToTime(first.t_start_s);
 }
 
 function renderTabs() {
@@ -239,7 +303,7 @@ function renderTabs() {
     button.dataset.phaseIndex = String(index);
     button.setAttribute("role", "tab");
     button.setAttribute("aria-controls", "phaseMeasures");
-    button.addEventListener("click", () => { summaryState.phaseIndex = index; renderPhase(); });
+    button.addEventListener("click", () => selectPhase(index));
     button.addEventListener("keydown", event => {
       const count = summaryState.data.phases.length;
       let target = null;
@@ -249,8 +313,7 @@ function renderTabs() {
       if (event.key === "End") target = count - 1;
       if (target != null) {
         event.preventDefault();
-        summaryState.phaseIndex = target;
-        renderPhase();
+        selectPhase(target);
         document.getElementById(`summary-phase-${target}`).focus();
       }
     });
@@ -319,10 +382,10 @@ async function initializeSummary() {
     configureSessions();
     configureMedia();
     renderTabs();
+    document.querySelectorAll(".summary-group").forEach(group => group.addEventListener("toggle", groupOpened));
     status.classList.add("hidden");
     document.getElementById("summaryWorkspace").classList.remove("hidden");
     renderPhase();
-    document.getElementById("referenceDescription").textContent = "Each expert contributes equally to the comparison. Recordings by the current participant are excluded when their identity is known.";
     new ResizeObserver(drawPlots).observe(document.getElementById("motionMetrics"));
   } catch (error) {
     status.classList.add("error");

@@ -22,6 +22,7 @@ LEGACY_ROOTS = {"data", "metadata", "voxels_removed", "burr_change", "drill_forc
 V3_ROOTS = {"vision_data", "physics_data", "metadata_v3"}
 FRAME_NAMES = {
     "time",
+    "user_controls",  # FIVRS recorder: device_clutch, cam_clutch, scope_button per frame
     "l_img",
     "depth",
     "pose_mastoidectomy_drill",

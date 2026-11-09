@@ -259,7 +259,7 @@ class ExpertStudyStore:
                 flow["cursor"] += 1
                 flow.update(flow["steps"][flow["cursor"]])
                 flow["transitions"].append({
-                    "from_stage": "background", "to_stage": "self_assessment",
+                    "from_stage": "background", "to_stage": flow["stage"],
                     "from_step_id": "background", "to_step_id": flow["step_id"],
                     "reason": "background_saved_in_another_case", "at": now,
                 })
@@ -2148,6 +2148,7 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                         {
                             "ok": True,
                             "mode": service.mode,
+                            "intake": bool(getattr(service, "intake", False)),
                             "run_id": service.run_id,
                             "interface_version": service.interface_version,
                             "available_runs": service.available_runs,
@@ -2265,6 +2266,12 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                         ),
                     )
                     return
+                if parsed.path == "/api/expert-study/return-to-simulator":
+                    # The FIVRS launcher that started this server watches its output
+                    # for this line and brings the study window to the front.
+                    print("FIVRS_RETURN_TO_SIMULATOR", flush=True)
+                    self._json(HTTPStatus.OK, {"ok": True})
+                    return
                 if parsed.path == "/api/expert-study/coaching-moment":
                     self._json(HTTPStatus.OK, service.add_moment(participant_id, body))
                     return
@@ -2282,6 +2289,114 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
             return
 
     return Handler
+
+
+INTAKE_RUN_ID = "analysis-pending"
+
+
+class IntakeService:
+    """The background questionnaire alone, served while the session is analysed.
+
+    The FIVRS launcher starts this as soon as the trial ends, so the resident answers
+    the background questions instead of waiting. The answers go to the participant's
+    profile in the same study-state file; when the analysis finishes, the launcher
+    replaces this server with the full one on the same port, which then skips the
+    background step. Anything that needs the analysis reports "pending".
+    """
+
+    mode = "expert-study"
+    intake = True
+    video_path = None
+
+    def __init__(self, *, study_state_path: Path, display_name: str, interface_version: str) -> None:
+        self.run_id = INTAKE_RUN_ID
+        self.available_runs = [{"run_id": INTAKE_RUN_ID, "url": ""}]
+        self.display_name = display_name
+        self.interface_version = interface_version
+        self.study_store = ExpertStudyStore(study_state_path, interface_version)
+
+    def _study(self) -> "ExpertStudyStore":
+        return self.study_store
+
+    def _pending(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise ValueError("Your feedback is still being prepared")
+
+    bootstrap = phase_summary = original_review_frame = _pending
+    add_moment = delete_moment = complete_study = _pending
+
+    def start_study(self, participant_id: str, first_review_view: str = "event-based") -> dict[str, Any]:
+        if first_review_view not in {"event-based", "summary"}:
+            raise ValueError("First review view must be event-based or summary")
+        participant_id = normalize_participant_id(participant_id)
+        session = self.study_store.start_session(
+            participant_id=participant_id, run_id=self.run_id, stimulus_ids=[],
+            first_review_view=first_review_view, final_case=True,
+        )
+        flow = session["review_flow"]
+        return {
+            "schema": "expert_workflow_study_start_v1",
+            "intake": True,
+            "interface_version": self.interface_version,
+            "participant_id": participant_id,
+            "run_id": self.run_id,
+            "first_review_view": session["first_review_view"],
+            "review_flow": public_review_flow(flow),
+            "surveys": flow.get("survey_definition", SURVEY_DEFINITION),
+            "legacy_survey_flow": flow.get("schema") != FLOW_SCHEMA,
+            "survey_warning": None,
+            "analysis_completed": False,
+            "case": {"run_id": self.run_id, "alias": self.display_name or "Case 01",
+                     "index": 1, "total": 1, "next_case_url": None},
+            "media": {"available": False, "url": None},
+            "case_completed": False,
+            "workflow": {"mode": "recorded_session", "disclosure": "", "stages": []},
+            "completion_code": None,
+            "expert_proposed_moments": [],
+        }
+
+    def advance_review(
+        self, participant_id: str, view: str | None, stage: str,
+        step_id: str | None = None, answers: Any = None,
+    ) -> dict[str, Any]:
+        if stage != "background":
+            self._pending()
+        flow = self.study_store.advance_review(
+            participant_id=normalize_participant_id(participant_id), run_id=self.run_id,
+            view=view, stage=stage, step_id=step_id, answers=answers,
+        )
+        return {"review_flow": public_review_flow(flow), "case_completed": False,
+                "completion_code": None}
+
+    def analyze_study(self, participant_id: str) -> dict[str, Any]:
+        return {"pending": True, "message": "Your feedback is still being prepared"}
+
+    def log_event(self, participant_id: str, stimulus_id: str | None, event_type: str,
+                  details: Mapping[str, Any] | None) -> dict[str, Any]:
+        row = self.study_store.add_event(
+            participant_id=normalize_participant_id(participant_id), run_id=self.run_id,
+            stimulus_id=None, event_type=event_type, details=details,
+        )
+        return {"ok": True, "recorded_at": row["recorded_at"]}
+
+
+def serve_intake_app(
+    *, study_state_path: Path, ui_dir: Path, host: str, port: int,
+    display_name: str = "", interface_version: str = DEFAULT_INTERFACE_VERSION,
+) -> None:
+    """Serve only the background questionnaire (see IntakeService)."""
+    ui_dir = _validate_ui_directory("expert-study", ui_dir)
+    service = IntakeService(
+        study_state_path=study_state_path, display_name=display_name,
+        interface_version=interface_version,
+    )
+    server = ThreadingHTTPServer((host, int(port)), _handler(service, ui_dir))
+    print(f"expert-study intake app ready: http://{host}:{server.server_port}/", flush=True)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
 
 
 def serve_feedback_app(

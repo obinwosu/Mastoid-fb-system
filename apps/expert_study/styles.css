@@ -10,13 +10,16 @@ body { margin: 0; color: var(--ink); background: var(--page); font-size: 15px; }
 button, input, textarea, select { font: inherit; }
 button { min-height: 44px; cursor: pointer; }
 .hidden { display: none !important; }
-.topbar { min-height: 76px; padding: 12px 32px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #fff; background: var(--navy); }
+.topbar { min-height: 76px; padding: 12px 32px; display: flex; align-items: center; justify-content: space-between; gap: 20px; color: #fff; background: #13232f; }
 .brand { display: flex; align-items: center; gap: 13px; }
-.brand-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--navy); background: #58bfd6; font-size: 21px; font-weight: 900; }
+.brand-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; color: var(--navy); background: #5cc5a8; font-size: 21px; font-weight: 900; }
 .brand p, .brand h1 { margin: 0; }
 .brand p { color: #b4cfdf; font-size: 11px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .brand h1 { margin-top: 3px; font-size: 20px; }
-.version-badge { margin-left: auto; padding: 5px 9px; border: 1px solid rgba(255,255,255,.24); border-radius: 999px; color: #c9dce7; font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
+/* The interface version is recorded with each response; participants don't need to see it. */
+.version-badge { display: none; }
+.header-status { margin-left: auto; }
+.version-badge-unused { margin-left: auto; padding: 5px 9px; border: 1px solid rgba(255,255,255,.24); border-radius: 999px; color: #c9dce7; font-size: 10px; font-weight: 850; letter-spacing: .07em; text-transform: uppercase; }
 .header-status { display: flex; align-items: center; gap: 13px; color: #d6e6ef; font-size: 13px; font-weight: 750; }
 .divider { width: 1px; height: 20px; background: rgba(255,255,255,.25); }
 main { max-width: 1440px; margin: 0 auto; padding: 24px 28px 48px; }
@@ -101,3 +104,115 @@ input:focus, textarea:focus, button:focus-visible { outline: 3px solid rgba(8,10
   .access-panel, .ready-panel, .processing-panel, .questionnaire-panel, .completion-panel { padding: 22px 18px; }
   .version-badge { margin-left: 0; }
 }
+/* Resident study: the header already names the step, so the line under the step pills goes. */
+#reviewProgressLabel { display: none; }
+.review-progress li { padding: 8px 14px; border: 1.5px solid #d6dde2; border-radius: 999px; color: #4f5f6c; font-size: 14px; }
+.review-progress li[aria-current="step"] { color: #fff; border-color: #0e7c6b; background: #0e7c6b; font-weight: 600; }
+.review-progress li[aria-current="step"] > span { color: #d5eee8; }
+.finish-card .primary-button, #finishExperienceButton { background: #0e7c6b; }
+.finish-card .primary-button:hover, #finishExperienceButton:hover { background: #0a5f52; }
+.finish-card { border-radius: 14px; }
+.finish-card .eyebrow { color: #0e7c6b; }
+.finish-card h2 { color: #18242f; }
+/* The numbered view pills are replaced by a title and description (2026-11-07). */
+#reviewOrder { display: none; }
+#reviewTitle { margin: 4px 0 0; color: #18242f; font-size: 26px; letter-spacing: -.02em; }
+#reviewDescription { max-width: 760px; margin: 6px 0 0; color: #4f5f6c; font-size: 15px; line-height: 1.55; }
+#reviewDescription:empty { display: none; }
+#reviewInstruction { max-width: 760px; margin: 10px 0 0; padding: 10px 14px; border-left: 3px solid #0e7c6b; border-radius: 4px; color: #18242f; background: #e5f3ef; font-size: 15px; line-height: 1.5; }
+#reviewInstruction:empty { display: none; }
+#finishExperienceButton:disabled { cursor: not-allowed; opacity: 1; color: #8a98a3; background: #e6eaed; }
+/* Tighter top (2026-11-07) so the open section fits on a laptop screen without scrolling. */
+.topbar { min-height: 52px; padding: 8px 28px; }
+.brand h1 { margin-top: 0; font-size: 18px; }
+main { padding-top: 14px; }
+.review-progress { margin-bottom: 12px; }
+#reviewTitle { margin: 0; font-size: 22px; }
+#reviewDescription { margin: 2px 0 0; font-size: 14px; }
+#reviewInstruction { margin: 8px 0 0; padding: 6px 12px; font-size: 14px; line-height: 1.45; }
+/* Slim moment timeline under the video: dots only, no phase bands (2026-11-07). */
+#eventBasedReview .video-card .procedure-card { margin: 12px 0 0; padding: 6px 4px 4px; border: 0; background: transparent; box-shadow: none; }
+#eventBasedReview .video-card .phase-map { display: none; }
+#eventBasedReview .moment-timeline { grid-template-columns: 34px minmax(0, 1fr) 40px; }
+#eventBasedReview .coaching-map { height: 22px; }
+#eventBasedReview .map-marker::after { width: 10px; height: 10px; }
+#eventBasedReview .map-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 4px 34px 0; color: #4f5f6c; font-size: 12px; }
+#eventBasedReview .map-legend span { display: inline-flex; align-items: center; gap: 5px; }
+#eventBasedReview .map-legend i { width: 9px; height: 9px; border-radius: 50%; background: var(--category-color); }
+/* One clearly different colour per topic, shared by dots, legend and topic stripes. */
+#eventBasedReview { --boundary-color: #d1343b; --visibility-color: #ef8a00; --speed-color: #2563eb; --length-color: #8b3fd1; }
+
+/* Event-based layout (2026-11-07): topics on the left, video top right; moments live
+   inside their topic; Coaching plan heading, list under the video and explainer removed. */
+#eventBasedReview .event-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+#eventBasedReview .event-workspace .video-card { grid-column: 2; grid-row: 1; }
+#eventBasedReview .event-workspace .feedback-layout { grid-column: 1; grid-row: 1; }
+#eventBasedReview .coaching-heading,
+#eventBasedReview .video-card .clip-heading,
+#eventBasedReview .video-card .clip-scroll,
+#supportDetails { display: none !important; }
+#eventBasedReview .coaching-group + .coaching-group { margin-top: 16px; }
+#eventBasedReview .coaching-group-title { margin: 0 0 8px; text-transform: none; letter-spacing: 0; }
+#eventBasedReview .coaching-group-title h3 { margin: 0; color: #18242f; font-size: 16px; font-weight: 700; }
+#eventBasedReview .coaching-group-title p { margin: 2px 0 0; color: #4f5f6c; font-size: 13px; font-weight: 400; }
+#eventBasedReview .coaching-toggle { align-items: center; }
+#eventBasedReview .coaching-name { display: grid; gap: 2px; flex: 1; min-width: 0; }
+#eventBasedReview .coaching-title { color: #18242f; font-size: 15px; font-weight: 600; }
+#eventBasedReview .coaching-text { color: #4f5f6c; font-size: 13px; font-weight: 400; line-height: 1.4; }
+#eventBasedReview .coaching-count { font-size: 13px; }
+#eventBasedReview .coaching-detail { padding: 4px 12px 12px; }
+#eventBasedReview .topic-moments { max-height: none; overflow: visible; }
+@media (max-width: 820px) {
+  #eventBasedReview .event-workspace { grid-template-columns: 1fr; }
+  #eventBasedReview .event-workspace .video-card { grid-column: 1; grid-row: 1; }
+  #eventBasedReview .event-workspace .feedback-layout { grid-column: 1; grid-row: 2; }
+}
+
+/* Event-based groups match the Summary page drop-downs (2026-11-07): tinted header bar,
+   "(click to expand)", teal edge when open, "✓ Viewed" once every moment inside is opened. */
+#eventBasedReview .event-group { overflow: hidden; border: 1px solid #e1e6ea; border-radius: 12px; background: #fff; }
+#eventBasedReview .event-group + .event-group { margin-top: 10px; }
+#eventBasedReview .event-group-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 0; padding: 10px 16px 10px 12px; border: 0; border-left: 4px solid transparent; background: #eef2f5; color: #18242f; text-align: left; cursor: pointer; }
+#eventBasedReview .event-group-toggle::before { content: "▸"; width: 14px; color: #0e7c6b; font-size: 14px; transition: transform .15s; }
+#eventBasedReview .event-group.open .event-group-toggle::before { transform: rotate(90deg); }
+#eventBasedReview .event-group-toggle:hover { background: #e4eaee; }
+#eventBasedReview .event-group.open .event-group-toggle { background: #dff0eb; border-left-color: #0e7c6b; }
+#eventBasedReview .group-title { display: grid; gap: 2px; flex: 1; min-width: 0; }
+#eventBasedReview .group-name { font-size: 15px; font-weight: 700; }
+#eventBasedReview .event-group.open .group-name { color: #0a5f52; }
+#eventBasedReview .group-text { color: #4f5f6c; font-size: 13px; font-weight: 400; }
+#eventBasedReview .expand-hint { color: #4f5f6c; font-size: 13px; font-weight: 400; }
+#eventBasedReview .expand-hint::after { content: "(click to expand)"; }
+#eventBasedReview .event-group.open .expand-hint::after { content: "(click to collapse)"; }
+#eventBasedReview .group-state { flex: 0 0 auto; white-space: nowrap; font-size: 13px; }
+#eventBasedReview .event-group.viewed .group-state::after { content: "✓ Viewed"; color: #0e7c6b; font-weight: 600; }
+#eventBasedReview .event-group .coaching-items { padding: 10px; }
+#eventBasedReview .event-group .coaching-items[hidden] { display: none; }
+#eventBasedReview .coaching-item.viewed .coaching-count::after { content: " · ✓ Viewed"; color: #0e7c6b; font-weight: 600; }
+/* Moments are single buttons, "▶ Moment 1 @ 1:21" (2026-11-07). */
+#eventBasedReview .topic-moments { grid-auto-rows: auto; gap: 6px; }
+#eventBasedReview .moment-button { display: flex; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 40px; padding: 8px 12px; color: #18242f; font-size: 14px; font-weight: 600; text-align: left; cursor: pointer; }
+#eventBasedReview .moment-button:hover:not(:disabled) { background: #e5f3ef; border-color: #0e7c6b; }
+#eventBasedReview .moment-button[aria-current="true"] { background: #dff0eb; border-color: #0e7c6b; }
+#eventBasedReview .moment-button.active { color: #18242f; background: #dff0eb; }
+#eventBasedReview .moment-play { color: #0e7c6b; font-size: 12px; }
+/* Next box under the session video in the right column (placed by placeNextCard). */
+#experiencePanel { position: relative; }
+#nextCard.beside-video { position: absolute; z-index: 2; margin: 0; flex-direction: column; align-items: stretch; gap: 12px; padding: 16px 18px; }
+#nextCard.beside-video #finishExperienceButton { align-self: flex-end; min-width: 120px; }
+/* The Next box only appears once everything has been reviewed (2026-11-07). */
+#nextCard.locked { display: none; }
+/* Legend sits on its own white box so it reads as a key (2026-11-07). */
+#eventBasedReview .map-legend { margin: 8px 0 0; padding: 6px 12px; border: 1px solid #e1e6ea; border-radius: 8px; background: #fff; }
+/* No "Playing from …" / "Paused at …" status next to the video title. */
+#eventBasedReview #videoWindow { display: none; }
+/* One colour for every moment (user decision 2026-11-07): dots, topic stripes and the
+   moment buttons all use the study teal; the colour legend is no longer needed. */
+#eventBasedReview { --boundary-color: #0e7c6b; --visibility-color: #0e7c6b; --speed-color: #0e7c6b; --length-color: #0e7c6b; }
+#eventBasedReview .map-legend { display: none; }
+/* Completion page (2026-11-08). */
+.completion-panel h2 { color: #18242f; }
+.completion-mark { background: #0e7c6b; }
+#returnToSimulatorButton { margin-top: 18px; background: #0e7c6b; }
+#returnToSimulatorButton:hover { background: #0a5f52; }
+.completion-note { margin: 12px 0 0; color: #4f5f6c; font-size: 14px; }
