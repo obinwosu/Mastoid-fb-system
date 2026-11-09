@@ -66,3 +66,125 @@
 @media (pointer: coarse) {
   .summary-tabs button, .phase-interval button, .safety-metric summary, .comparison-help summary { min-height: 44px; }
 }
+
+/* Resident study redesign (2026-11-07): the questionnaire's teal palette, larger
+   type, plain comparison labels. Later rules override the pilot styles above. */
+:root { --sv-ink: #18242f; --sv-muted: #4f5f6c; --sv-faint: #8a98a3; --sv-line: #e1e6ea;
+  --sv-accent: #0e7c6b; --sv-accent-soft: #e5f3ef; --sv-warn: #a35c00; --sv-warn-soft: #fbf0e1; }
+body { color: var(--sv-ink); background: #f3f5f7; }
+.video-card { padding: 18px; background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; box-shadow: 0 1px 2px rgba(20,40,55,.04); }
+.video-card .section-title h2 { color: var(--sv-ink); font-size: 18px; }
+.media-stage { border-radius: 10px; }
+.phase-interval { padding: 12px 14px; border-radius: 10px; background: #f3f6f8; color: var(--sv-muted); font-size: 14px; }
+.phase-interval strong { color: var(--sv-ink); }
+.phase-interval button { min-height: 38px; padding: 8px 14px; border: 1.5px solid var(--sv-accent); border-radius: 999px; color: var(--sv-accent); background: #fff; font-size: 14px; font-weight: 600; }
+.phase-interval button:hover:not(:disabled) { color: #fff; background: var(--sv-accent); }
+
+.summary-panel { border-color: var(--sv-line); border-radius: 14px; box-shadow: 0 1px 2px rgba(20,40,55,.04); }
+.summary-tabs { gap: 8px; padding: 16px 18px 10px; }
+.summary-tabs button { flex: 1 1 0; display: grid; gap: 2px; min-width: 96px; min-height: 52px; padding: 7px 14px; border: 1.5px solid #c9d3da; border-radius: 12px; color: var(--sv-ink); background: #fff; box-shadow: none; font-size: 15px; font-weight: 600; text-align: left; }
+.summary-tabs button small { color: var(--sv-muted); font-size: 12px; font-weight: 500; }
+.summary-tabs button[aria-selected="true"] { color: #fff; background: var(--sv-accent); border-color: var(--sv-accent); box-shadow: none; }
+.summary-tabs button[aria-selected="true"] small { color: #d5eee8; }
+.summary-scope { padding: 0 18px 16px; color: var(--sv-muted); font-size: 14px; }
+.summary-section { padding: 12px 18px; background: #f6f8f9; border-color: var(--sv-line); }
+.summary-section h2 { color: var(--sv-ink); font-size: 15px; font-weight: 700; }
+.distribution-legend { gap: 14px; color: var(--sv-muted); font-size: 12px; }
+.expert-key { width: 6px; height: 6px; background: #93a2ae; }
+.band-key { display: inline-block; width: 16px; height: 8px; border-radius: 2px; background: #dfe6eb; }
+.current-key { width: 8px; height: 8px; background: var(--sv-accent); }
+
+.safety-metric summary { padding: 14px 18px; }
+.safety-name { font-size: 15px; font-weight: 600; color: var(--sv-ink); }
+.safety-name small { color: var(--sv-accent); font-size: 13px; font-weight: 500; }
+.safety-value { font-size: 15px; font-weight: 700; }
+.safety-value.good { padding: 3px 11px; border-radius: 999px; color: var(--sv-accent); background: var(--sv-accent-soft); }
+.safety-value.good::before { content: "✓ "; }
+.safety-value.warn { padding: 3px 11px; border-radius: 999px; color: var(--sv-warn); background: var(--sv-warn-soft); }
+.safety-details { padding: 0 18px 14px; color: var(--sv-muted); font-size: 14px; }
+
+/* Name, label and value on one line; the expert comparison full width below. */
+.metric-row { grid-template-columns: minmax(0, 1fr) auto; gap: 6px 14px; min-height: 0; padding: 14px 18px 10px; border-color: var(--sv-line); }
+.metric-chart { grid-column: 1 / -1; grid-row: 2; }
+.metric-name { grid-auto-flow: column; justify-content: start; align-items: center; gap: 10px; }
+.metric-name { display: grid; font-size: 15px; font-weight: 600; color: var(--sv-ink); }
+.metric-unit { display: none; }
+.metric-plot { height: 52px; }
+.metric-value { font-size: 17px; font-weight: 700; color: var(--sv-ink); }
+.metric-value-unit { color: var(--sv-muted); font-size: 12px; font-weight: 500; }
+.comparison-chip { white-space: nowrap; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; line-height: 1.5; }
+.comparison-chip.inside { color: var(--sv-accent); background: var(--sv-accent-soft); }
+.comparison-chip.outside { color: var(--sv-warn); background: var(--sv-warn-soft); }
+.comparison-help { padding: 14px 18px; color: var(--sv-muted); font-size: 14px; line-height: 1.55; }
+.comparison-help summary { color: var(--sv-accent); font-weight: 600; }
+@media (max-width: 420px) {
+  .metric-name { grid-auto-flow: row; justify-items: start; gap: 4px; }
+}
+
+/* Layout (2026-11-07): measures on the left; video top right with the phase buttons under it. */
+.summary-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+.summary-workspace .video-card { grid-column: 2; grid-row: 1; }
+.summary-workspace .summary-panel { grid-column: 1; grid-row: 1; }
+.video-card .summary-tabs { padding: 14px 0 0; }
+.summary-phase-title { margin: 0; padding: 18px 18px 4px; color: var(--sv-ink); font-size: 20px; font-weight: 700; }
+.summary-panel .summary-scope { padding-top: 0; }
+@media (max-width: 820px) {
+  .summary-workspace { grid-template-columns: 1fr; }
+  .summary-workspace .video-card { grid-column: 1; grid-row: 1; }
+  .summary-workspace .summary-panel { grid-column: 1; grid-row: 2; }
+}
+/* Phase buttons: just the phase name, centred (2026-11-07). */
+.summary-tabs button { display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 48px; text-align: center; }
+
+/* Safety and Drilling motion are drop-downs that start closed (2026-11-07). */
+.summary-group > summary { cursor: pointer; list-style: none; }
+.summary-group > summary::-webkit-details-marker { display: none; }
+.summary-group > summary::before { content: "▸"; width: 14px; color: var(--sv-accent); font-size: 14px; transition: transform .15s; }
+.summary-group[open] > summary::before { transform: rotate(90deg); }
+.summary-group > summary { justify-content: flex-start; gap: 8px; min-height: 52px; background: #fff; }
+.summary-group > summary:hover { background: #f6f8f9; }
+.summary-group + .summary-group > summary { border-top: 0; }
+.summary-group .group-state { margin-left: auto; color: var(--sv-muted); font-size: 13px; font-weight: 500; }
+.summary-group:not(.seen) .group-state::after { content: "Click to open"; }
+.summary-group.seen .group-state::after { content: "✓ Viewed"; color: var(--sv-accent); font-weight: 600; }
+.summary-group[open] .group-state::after { content: ""; }
+.group-legend { padding: 10px 18px 2px; }
+.summary-tabs button.reviewed:not([aria-selected="true"])::after { content: " ✓"; color: var(--sv-accent); }
+.group-title { display: grid; gap: 2px; }
+.group-title p { margin: 0; color: var(--sv-muted); font-size: 13px; font-weight: 400; line-height: 1.4; }
+.summary-group > summary { align-items: center; padding-top: 12px; padding-bottom: 12px; }
+.summary-group > summary { flex-wrap: nowrap; }
+.summary-group .group-state { flex: 0 0 auto; white-space: nowrap; }
+/* Phase buttons sit at the top of the measures panel, above the phase name. */
+.summary-panel > .summary-tabs { padding: 16px 18px 4px; }
+
+/* Safety rows are always open, with a definition under each name (2026-11-07). */
+.safety-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 18px; }
+.safety-name small { color: var(--sv-muted); font-size: 13px; font-weight: 400; line-height: 1.4; }
+.safety-name small::after { content: none; }
+.safety-details { padding: 0 18px 14px 30px; }
+.structure-list > div { padding: 6px 10px; border-radius: 8px; background: var(--sv-warn-soft); }
+.structure-list dt { font-weight: 600; }
+.structure-list dd { color: var(--sv-warn); font-weight: 600; }
+/* Tighter spacing (2026-11-07) so the open section fits without scrolling. */
+.summary-panel > .summary-tabs { padding: 12px 16px 2px; }
+.summary-tabs button { min-height: 42px; }
+.summary-phase-title { padding: 10px 18px 2px; font-size: 19px; }
+.summary-panel .summary-scope { padding-bottom: 10px; }
+.summary-group > summary { min-height: 0; padding-top: 9px; padding-bottom: 9px; }
+.group-legend { padding: 6px 18px 0; }
+.metric-row { padding: 10px 18px 6px; gap: 2px 14px; }
+.safety-head { padding: 10px 18px; }
+
+/* Section headers stand apart from their rows (2026-11-07): tinted bar, teal edge when open. */
+.summary-group > summary { background: #eef2f5; border-top: 1px solid #dde4e9; border-bottom: 1px solid #dde4e9; border-left: 4px solid transparent; padding-left: 14px; }
+.summary-group > summary:hover { background: #e4eaee; }
+.summary-group[open] > summary { background: #dff0eb; border-left-color: var(--sv-accent); }
+.summary-group[open] > summary:hover { background: #d3e9e2; }
+.summary-group[open] > summary h2 { color: #0a5f52; }
+.summary-group[open] .group-state::after { content: "Click to close"; color: var(--sv-accent); font-weight: 500; }
+/* "(click to expand)" after each section name; the right side keeps only "✓ Viewed". */
+.expand-hint { color: var(--sv-muted); font-size: 13px; font-weight: 400; }
+.expand-hint::after { content: "(click to expand)"; }
+.summary-group[open] .expand-hint::after { content: "(click to collapse)"; }
+.summary-group:not(.seen) .group-state::after, .summary-group[open] .group-state::after { content: ""; }

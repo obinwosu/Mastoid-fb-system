@@ -205,6 +205,14 @@ def test_new_model_never_borrows_a_historical_fitted_rotation(source_catalog):
         configure(base, raw=new_directory(base), model="TESTSPECIMEN")
 
 
+def test_new_model_accepts_history_from_a_commented_adf_line_with_the_same_rotation(source_catalog):
+    # The R4 RT143 rows cite ADF line 14 (commented); today's active line holds the same angles.
+    base = source_catalog
+    rewrite_rows(base, lambda rows: rows[0].update(
+        RotationSource="ADF/volume_256_TESTSPECIMEN.yaml:commented:L14"))
+    configure(base, raw=new_directory(base), model="TESTSPECIMEN")
+
+
 def test_current_model_can_coexist_with_fitted_history_without_selecting_it(source_catalog):
     base = source_catalog
 

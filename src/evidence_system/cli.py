@@ -19,7 +19,7 @@ from .source_config import (
     load_source_roots,
     resolve_run_sources,
 )
-from .web import APP_MODES, serve_feedback_app
+from .web import APP_MODES, serve_feedback_app, serve_intake_app
 
 
 def _path(value: str | Path, *, base: Path = PROJECT_ROOT) -> Path:
@@ -435,6 +435,19 @@ def _direct_serve_options(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def serve_intake_command(args: argparse.Namespace) -> int:
+    """Background questionnaire only, while process-hdf5 runs (FIVRS resident study)."""
+    serve_intake_app(
+        study_state_path=_path(args.study_state),
+        ui_dir=(PROJECT_ROOT / "apps" / "expert_study").resolve(),
+        host=args.host or "127.0.0.1",
+        port=args.port or 8790,
+        display_name=args.display_name or "Case 01",
+        interface_version=args.interface_version or "expert-feedback-v1",
+    )
+    return 0
+
+
 def serve_command(args: argparse.Namespace) -> int:
     options = _manifest_serve_options(args) if args.manifest else _direct_serve_options(args)
     serve_feedback_app(**options)
@@ -656,6 +669,17 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--source", type=Path, required=True)
     migrate.add_argument("--output-dir", type=Path, default=Path("study_data/participants"))
     migrate.set_defaults(handler=migrate_study_state_command)
+
+    intake = subparsers.add_parser(
+        "serve-intake",
+        help="Serve only the expert-study background questionnaire while the analysis runs",
+    )
+    intake.add_argument("--study-state", type=Path, required=True)
+    intake.add_argument("--display-name")
+    intake.add_argument("--interface-version")
+    intake.add_argument("--host")
+    intake.add_argument("--port", type=int)
+    intake.set_defaults(handler=serve_intake_command)
     return parser
 
 

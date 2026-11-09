@@ -47,6 +47,35 @@ DEFAULT_PROTOCOL = {
     "stride_s": 5.0,
     "persistence_windows": 1,
 }
+# A low-speed window is not flagged when the resident spent this share of it moving the
+# microscope (camera pose changed, camera clutch or microscope button held) or holding
+# the stylus clutch: the drill is expected to sit still then (user decision 2026-11-07).
+USER_CONTROL_MAX_FRACTION = 0.2
+CAMERA_MOVE_POSITION_M = 1e-5   # 0.01 mm between frames
+CAMERA_MOVE_ANGLE_DEG = 0.05
+
+
+def _camera_moved(previous: Mapping, current: Mapping) -> bool:
+    try:
+        a = [float(previous[f"camera_{k}"]) for k in ("x", "y", "z", "qx", "qy", "qz", "qw")]
+        b = [float(current[f"camera_{k}"]) for k in ("x", "y", "z", "qx", "qy", "qz", "qw")]
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not all(math.isfinite(v) for v in a + b):
+        return False
+    if math.dist(a[:3], b[:3]) > CAMERA_MOVE_POSITION_M:
+        return True
+    dot = min(1.0, abs(sum(x * y for x, y in zip(a[3:], b[3:], strict=True))))
+    return math.degrees(2 * math.acos(dot)) > CAMERA_MOVE_ANGLE_DEG
+
+
+def _user_control(previous: Mapping, current: Mapping) -> bool:
+    held = any(
+        current.get(name) is True for name in ("device_clutch", "cam_clutch", "scope_button")
+    )
+    return held or _camera_moved(previous, current)
+
+
 CLAIM_BOUNDARY = (
     "This is a descriptive comparison with experienced participants, not a skill score, "
     "clinical abnormality threshold, or instruction to increase drilling speed. "
@@ -280,6 +309,7 @@ def build_motion_windows(
     rows = []
     derived_id = None
     derived_count = 0
+    previous_frame = None
     for frame in frames:
         required = ("t_abs", "t_video_s", "drill_x", "drill_y", "drill_z", "frame_removed_mm3")
         if any(key not in frame for key in required):
@@ -311,8 +341,10 @@ def build_motion_windows(
                 "phase_id": phase_id,
                 "position_m": [_number(frame[key]) for key in ("drill_x", "drill_y", "drill_z")],
                 "removed_mm3": removal,
+                "user_control": previous_frame is not None and _user_control(previous_frame, frame),
             }
         )
+        previous_frame = frame
     native = [r["t_abs"] - rows[0]["t_abs"] for r in rows]
     video = [r["t_video_s"] for r in rows]
     windows = []
@@ -332,7 +364,7 @@ def build_motion_windows(
                 end = start + policy["window_s"]
                 first = max(run_start, bisect_right(native, start) - 1)
                 last = min(run_end - 1, bisect_left(native, end))
-                path = valid = stationary = removal_valid = removed = excluded = 0.0
+                path = valid = stationary = removal_valid = removed = excluded = control = 0.0
                 valid_segments = 0
                 display_valid = True
                 for index in range(first + 1, last + 1):
@@ -345,6 +377,8 @@ def build_motion_windows(
                         video[index] - video[index - 1] <= policy["max_display_clock_step_s"] + 1e-9
                     )
                     previous, current = rows[index - 1], rows[index]
+                    if current["user_control"]:
+                        control += overlap
                     if short and all(
                         v is not None for v in previous["position_m"] + current["position_m"]
                     ):
@@ -395,6 +429,7 @@ def build_motion_windows(
                         "eligible": coverage + 1e-9 >= policy["min_coverage"],
                         "removal_eligible": removal_coverage + 1e-9 >= policy["min_coverage"],
                         "display_clock_valid": display_valid,
+                        "user_control_fraction": min(1.0, control / policy["window_s"]),
                     }
                 )
         run_start = run_end
@@ -1178,6 +1213,7 @@ def compare_motion_windows(
         row["candidate_low"] = bool(
             speed["status"] == "compared"
             and row["display_clock_valid"]
+            and (row.get("user_control_fraction") or 0.0) < USER_CONTROL_MAX_FRACTION
             and speed["percentile"] <= policy["low_percentile"]
             and speed["relative_deficit"] is not None
             and speed["relative_deficit"] >= policy["min_relative_deficit"]

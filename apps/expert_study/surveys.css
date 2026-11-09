@@ -1,52 +1,84 @@
 /* Questionnaire styles are scoped so the approved review pages remain unchanged. */
 .legacy-survey-notice { max-width: 940px; margin: 16px auto; color: var(--muted); font-size: 12px; line-height: 1.6; }
-#surveyPanel { max-width: 940px; margin: 18px auto; }
+#surveyPanel {
+  --sv-ink: #18242f; --sv-muted: #4f5f6c; --sv-faint: #7b8995; --sv-line: #e1e6ea;
+  --sv-accent: #0e7c6b; --sv-accent-dark: #0a5f52; --sv-accent-soft: #e5f3ef; --sv-field: #c9d3da;
+  max-width: 780px; margin: 28px auto; color: var(--sv-ink);
+}
 #surveyPanel.survey-self_assessment { max-width: none; }
-#surveyPanel .survey-page-title { margin-bottom: 20px; }
-#surveyPanel .survey-page-title h2 { font-size: 25px; }
-#surveyPanel .survey-page-title > p:last-child { color: var(--muted); font-size: 13px; line-height: 1.6; margin: 10px 0 0; }
+#surveyPanel .survey-page-title { margin: 0 4px 22px; }
+#surveyPanel .survey-page-title .eyebrow { color: var(--sv-accent); letter-spacing: .1em; }
+#surveyPanel .survey-page-title h2 { color: var(--sv-ink); font-size: 30px; letter-spacing: -.02em; }
+#surveyPanel .survey-page-title > p:last-child { color: var(--sv-muted); font-size: 16px; line-height: 1.6; margin: 10px 0 0; max-width: 640px; }
 #surveyPanel form { margin: 0; }
-#surveyPanel:not(.survey-self_assessment) form { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 0 26px; }
 #surveyPanel p { line-height: 1.5; }
-#surveyPanel h3 { margin: 0; color: var(--navy); font-size: 16px; font-weight: 650; }
+#surveyPanel h3 { margin: 0; color: var(--sv-ink); font-size: 18px; font-weight: 700; }
 #surveyPanel fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
-#surveyPanel legend { padding: 0; margin: 0 0 8px; color: var(--ink); font-size: 13px; font-weight: 600; }
-#surveyPanel label { margin: 0; color: var(--ink); font-size: 13px; font-weight: 500; }
-#surveyPanel input[type="radio"], #surveyPanel input[type="checkbox"] { width: 15px; height: 15px; margin: 0; flex: 0 0 auto; accent-color: var(--blue); }
-#surveyPanel .survey-section { padding: 22px 0; }
-#surveyPanel .survey-section + .survey-section { border-top: 1px solid var(--line); }
-#surveyPanel .survey-section-title { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 6px 15px; margin-bottom: 18px; }
-#surveyPanel .survey-section-title h3 { display: flex; gap: 11px; align-items: baseline; }
-#surveyPanel .survey-section-title > span, #surveyPanel .survey-section-title h3 span { font-size: 11px; color: var(--muted); font-weight: 400; }
-#surveyPanel .survey-role-field { margin-bottom: 18px; }
-#surveyPanel .survey-role-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
-#surveyPanel .survey-role-options label { min-height: 44px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; cursor: pointer; }
-#surveyPanel .survey-role-options label:has(input:checked) { background: #e8f2fc; border-color: var(--blue); color: var(--blue); }
-#surveyPanel .survey-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px 26px; align-items: start; }
-#surveyPanel .survey-field { min-width: 0; }
-#surveyPanel .survey-field > label:first-child, #surveyPanel #survey-gender-detail > label { margin-bottom: 7px; }
-#surveyPanel .survey-optional { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 6px; }
-#surveyPanel .survey-number { display: flex; align-items: center; min-width: 0; min-height: 42px; border: 1px solid #aec2ce; border-radius: 6px; background: #fff; }
-#surveyPanel .survey-number input { width: 100%; min-width: 0; min-height: 40px; border: 0; border-radius: 6px; padding: 9px 11px; background: transparent; color: var(--ink); font-size: 13px; }
-#surveyPanel .survey-number > span { color: var(--muted); padding: 0 10px 0 5px; font-size: 11px; white-space: nowrap; }
-#surveyPanel .survey-number:has(input:disabled) { background: #edf3f7; }
-#surveyPanel select, #surveyPanel input[type="text"] { border-radius: 6px; font-size: 13px; min-height: 42px; }
+#surveyPanel legend { padding: 0; margin: 0; }
+#surveyPanel label { margin: 0; color: var(--sv-ink); font-weight: 500; }
+#surveyPanel input[type="radio"], #surveyPanel input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex: 0 0 auto; accent-color: var(--sv-accent); }
+#surveyPanel input:focus-visible, #surveyPanel select:focus-visible { outline: 3px solid rgba(14,124,107,.25); outline-offset: 1px; border-color: var(--sv-accent); }
+
+/* Background questionnaire: one card per section, one question per row. */
+#surveyPanel .survey-background { display: grid; gap: 16px; }
+#surveyPanel .survey-section { padding: 24px 28px 8px; background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; box-shadow: 0 1px 2px rgba(20,40,55,.04); }
+#surveyPanel .survey-section-title { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; margin-bottom: 6px; }
+#surveyPanel .survey-section-number { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--sv-accent); font-size: 14px; font-weight: 700; }
+#surveyPanel .survey-section-note { flex-basis: 100%; margin-left: 40px; color: var(--sv-muted); font-size: 14px; }
+#surveyPanel .survey-q { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 10px 28px; align-items: start; padding: 18px 0; }
+#surveyPanel .survey-q + .survey-q { border-top: 1px solid var(--sv-line); }
+#surveyPanel .survey-q-wide { grid-template-columns: 1fr; }
+/* Background: label above its answers; the pill rows need the full width. */
+#surveyPanel .survey-background .survey-q { grid-template-columns: 1fr; gap: 12px; }
+#surveyPanel .survey-background .survey-q:not(.hidden) ~ .survey-q { border-top: 1px solid var(--sv-line); }
+#surveyPanel .survey-q-label { display: block; color: var(--sv-ink); font-size: 16px; font-weight: 600; line-height: 1.4; }
+#surveyPanel .survey-help { color: var(--sv-muted); font-size: 14px; line-height: 1.5; margin: 4px 0 0; }
+#surveyPanel .survey-optional { margin-left: 6px; padding: 1px 7px; border-radius: 999px; color: var(--sv-muted); background: #eef1f3; font-size: 12px; font-weight: 500; vertical-align: 1px; }
+#surveyPanel .survey-q-control { min-width: 0; }
+
+#surveyPanel .survey-role-options { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+#surveyPanel .survey-role-options label, #surveyPanel .survey-segmented label { position: relative; cursor: pointer; }
+#surveyPanel .survey-role-options input, #surveyPanel .survey-segmented input, #surveyPanel .survey-chip input { position: absolute; opacity: 0; pointer-events: none; }
+#surveyPanel .survey-role-options span { min-height: 52px; display: grid; place-items: center; padding: 10px; border: 1.5px solid var(--sv-field); border-radius: 10px; font-size: 15px; font-weight: 600; text-align: center; transition: background .12s, border-color .12s; }
+#surveyPanel .survey-role-options label:hover span, #surveyPanel .survey-segmented label:hover span { border-color: var(--sv-accent); }
+#surveyPanel .survey-role-options input:checked + span, #surveyPanel .survey-segmented input:checked + span { color: #fff; background: var(--sv-accent); border-color: var(--sv-accent); }
+#surveyPanel .survey-role-options input:focus-visible + span, #surveyPanel .survey-segmented input:focus-visible + span, #surveyPanel .survey-chip input:focus-visible + span { outline: 3px solid rgba(14,124,107,.3); outline-offset: 2px; }
+
+#surveyPanel .survey-segmented { display: inline-flex; flex-wrap: wrap; gap: 8px; }
+#surveyPanel .survey-segmented span { min-width: 84px; min-height: 42px; display: grid; place-items: center; padding: 8px 16px; border: 1.5px solid var(--sv-field); border-radius: 999px; font-size: 15px; font-weight: 600; }
+
+#surveyPanel .survey-number-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 12px; }
+#surveyPanel .survey-number { display: flex; align-items: center; width: 170px; min-height: 44px; border: 1.5px solid var(--sv-field); border-radius: 10px; background: #fff; }
+#surveyPanel .survey-number:focus-within { border-color: var(--sv-accent); box-shadow: 0 0 0 3px rgba(14,124,107,.15); }
+#surveyPanel .survey-number input { width: 100%; min-width: 0; min-height: 42px; border: 0; border-radius: 10px; padding: 9px 12px; background: transparent; color: var(--sv-ink); font-size: 16px; outline: none; }
+#surveyPanel .survey-number > span { color: var(--sv-muted); padding: 0 12px 0 4px; font-size: 14px; white-space: nowrap; }
+#surveyPanel .survey-number:has(input:disabled) { background: #f2f4f6; border-color: #dde3e8; }
+#surveyPanel .survey-number:has(input:disabled) > span { color: var(--sv-faint); }
+#surveyPanel select, #surveyPanel input[type="text"] { width: 100%; max-width: 320px; min-height: 44px; border: 1.5px solid var(--sv-field); border-radius: 10px; font-size: 16px; color: var(--sv-ink); }
 #surveyPanel #survey-gender-detail { margin-top: 12px; }
-#surveyPanel .survey-help { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
-#surveyPanel .survey-check { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; margin-top: 7px; min-height: 25px; cursor: pointer; }
-#surveyPanel .survey-flags { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 15px; }
-#surveyPanel .survey-before-options { margin: 0 0 10px; min-height: 33px; }
-#surveyPanel .survey-inline-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; }
-#surveyPanel .survey-inline-options label { display: flex; align-items: center; gap: 7px; min-height: 32px; cursor: pointer; }
-#surveyPanel .survey-entry-help { padding-top: 8px; color: var(--muted); font-size: 12px; }
-#surveyPanel .survey-entry-help strong { font-weight: 600; color: var(--ink); }
-#surveyPanel .survey-entry-help p { margin: 7px 0 0; max-width: 310px; }
-#surveyPanel .survey-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 19px 0; border-top: 1px solid var(--line); }
-#surveyPanel #surveyProgress { color: var(--muted); font-size: 12px; margin: 0; }
-#surveyPanel #surveySubmit { font-size: 13px; font-weight: 650; border-radius: 7px; }
-#surveyPanel #surveySubmit:disabled { cursor: default; }
-#surveyPanel #surveyError { margin: 0; padding-bottom: 18px; }
-#surveyPanel .survey-draft-notice { color: var(--muted); font-size: 12px; padding-bottom: 16px; }
+#surveyPanel .survey-sub-label { display: block; margin-bottom: 6px; font-size: 14px; color: var(--sv-muted); }
+
+#surveyPanel .survey-flags { display: flex; flex-wrap: wrap; gap: 8px; }
+#surveyPanel .survey-chip { position: relative; cursor: pointer; }
+#surveyPanel .survey-chip span { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 13px; border: 1px solid var(--sv-field); border-radius: 999px; color: var(--sv-muted); font-size: 14px; font-weight: 500; }
+#surveyPanel .survey-chip:hover span { border-color: var(--sv-accent); color: var(--sv-ink); }
+#surveyPanel .survey-chip input:checked + span { color: var(--sv-accent-dark); background: var(--sv-accent-soft); border-color: var(--sv-accent); font-weight: 600; }
+#surveyPanel .survey-chip input:checked + span::before { content: "✓"; margin-right: 6px; }
+#surveyPanel .survey-chip input:disabled + span { opacity: .45; cursor: default; }
+
+/* Sticky footer: progress and Continue stay in view. */
+#surveyPanel .survey-submit-row { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; padding: 14px 20px; background: rgba(255,255,255,.96); border: 1px solid var(--sv-line); border-radius: 14px; box-shadow: 0 -4px 18px rgba(20,40,55,.06); backdrop-filter: blur(4px); }
+#surveyPanel .survey-progress { flex: 1; min-width: 0; }
+#surveyPanel .survey-progress-track { height: 6px; max-width: 320px; margin-bottom: 7px; border-radius: 999px; background: #e8edf0; overflow: hidden; }
+#surveyPanel #surveyProgressBar { width: 0; height: 100%; border-radius: 999px; background: var(--sv-accent); transition: width .2s; }
+#surveyPanel #surveyProgress { color: var(--sv-muted); font-size: 14px; margin: 0; }
+#surveyPanel #surveySubmit { min-width: 150px; min-height: 46px; font-size: 16px; font-weight: 700; border-radius: 10px; background: var(--sv-accent); }
+#surveyPanel #surveySubmit:hover:not(:disabled) { background: var(--sv-accent-dark); }
+#surveyPanel #surveySubmit:disabled { cursor: default; opacity: 1; color: #8a98a3; background: #e6eaed; }
+#surveyPanel #surveyError { margin: 10px 4px 0; }
+#surveyPanel .survey-draft-notice { color: var(--sv-muted); font-size: 13px; margin: 10px 4px 0; }
+/* Feedback-format questionnaire and preference keep a single card until they are redesigned. */
+#surveyPanel.survey-questionnaire form, #surveyPanel.survey-preference form { background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; padding: 0 26px 18px; }
 #surveyPanel .survey-self-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 20px; align-items: start; }
 #surveyPanel .survey-video-column { min-width: 0; position: sticky; top: 18px; }
 #surveyPanel .survey-video-card { padding: 12px; background: #edf3f7; border: 1px solid var(--line); border-radius: 12px; }
@@ -112,20 +144,28 @@
 }
 @media (max-width: 700px) {
   #surveyPanel .survey-role-options { grid-template-columns: 1fr 1fr; }
-  #surveyPanel .survey-grid { column-gap: 18px; }
-  #surveyPanel:not(.survey-self_assessment) form { padding: 0 18px; }
+  #surveyPanel .survey-q { grid-template-columns: 1fr; }
+  #surveyPanel .survey-section { padding: 20px 18px 6px; }
 }
 @media (max-width: 550px) {
-  #surveyPanel .survey-grid { grid-template-columns: 1fr; }
   #surveyPanel .survey-page-title h2 { font-size: 23px; }
   #surveyPanel .survey-number input, #surveyPanel select, #surveyPanel input[type="text"] { font-size: 16px; min-height: 44px; }
-  #surveyPanel .survey-before-options { min-height: 0; }
-  #surveyPanel .survey-submit-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+    #surveyPanel .survey-submit-row { align-items: flex-start; flex-direction: column; gap: 12px; }
   #surveyPanel .survey-agreement-scale { grid-template-columns: 1fr; gap: 6px; }
   #surveyPanel .survey-agreement-scale label { min-height: 46px; flex-direction: row; gap: 12px; text-align: left; padding: 9px 12px; }
   #surveyPanel .survey-agreement-scale strong { width: 15px; font-size: 16px; }
   #surveyPanel .survey-rating-item { padding: 13px 11px; }
 }
 @media (pointer: coarse) {
-  #surveyPanel .survey-check, #surveyPanel .survey-inline-options label, #surveyPanel .survey-numeric label, #surveyPanel .survey-guide-toggle, #surveyPanel .survey-missing-options label { min-height: 44px; }
+  #surveyPanel .survey-chip span, #surveyPanel .survey-numeric label, #surveyPanel .survey-guide-toggle, #surveyPanel .survey-missing-options label { min-height: 44px; }
 }
+
+/* Preference page (2026-11-07): the question is the title; options carry a short definition. */
+#surveyPanel .survey-preference { padding: 22px 0 6px; }
+#surveyPanel .survey-preference label { align-items: flex-start; gap: 12px; min-height: 0; padding: 14px 16px; border: 1.5px solid #c9d3da; border-radius: 10px; }
+#surveyPanel .survey-preference label:hover { border-color: var(--sv-accent); }
+#surveyPanel .survey-preference label:has(input:checked) { background: var(--sv-accent-soft); border-color: var(--sv-accent); }
+#surveyPanel .survey-preference input { margin-top: 3px; }
+#surveyPanel .preference-option { display: grid; gap: 3px; }
+#surveyPanel .preference-option strong { color: var(--sv-ink); font-size: 16px; font-weight: 600; }
+#surveyPanel .preference-option small { color: var(--sv-muted); font-size: 14px; line-height: 1.45; }

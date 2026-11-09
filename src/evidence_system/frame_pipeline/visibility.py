@@ -231,7 +231,8 @@ def enrich_visibility(
             drill_poses = handle["data/pose_mastoidectomy_drill"][()]
             camera_poses = handle["data/pose_main_camera"][()]
             rgb_frames = handle["data/l_img"]
-            depth_frames = handle["data/depth"]
+            # Optional: without depth the under-ledge candidate is not evaluable.
+            depth_frames = handle.get("data/depth")
             for source_index in range(len(times)):
                 if global_index >= len(rows):
                     raise ValueError("Raw HDF5 contains more visibility frames than core frames")
@@ -286,6 +287,11 @@ def enrich_visibility(
                         and not result["frozen"]
                         and result["tip_center"] is not None
                     ):
+                        if depth_frames is None:
+                            row["under_ledge"] = "not_evaluable_no_depth"
+                            previous_pose = current_pose
+                            global_index += 1
+                            continue
                         depth = depth_frames[source_index].astype(np.float32)
                         metrics = overhang_metrics(rgb, depth, result["tip_center"])
                         if metrics is None:

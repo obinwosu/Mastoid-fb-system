@@ -22,55 +22,81 @@ from evidence_system.study_surveys import (
 from evidence_system.web import ExpertStudyStore
 
 
+@pytest.fixture(autouse=True)
+def _with_self_assessments(monkeypatch):
+    """These tests cover the full protocol, kept for when self-assessments return."""
+    from evidence_system import study_surveys
+    monkeypatch.setattr(study_surveys, "SELF_ASSESSMENTS", True)
+
+
+STAGE_FOR_ROLE = {"resident": 2, "fellow": 6, "attending": 0}
+
+
 def background(role="resident"):
     return {
-        "role": role, "age": None, "age_status": "unanswered", "gender": None,
-        "gender_self_description": "",
-        "training_stage": {"status": "provided", "value": 2, "unit": ROLE_UNITS[role]},
-        "otolaryngology_training_months": {
-            "status": "not_applicable" if role == "medical_student" else "provided",
-            "value": None if role == "medical_student" else 14,
+        "role": role,
+        "training_stage": {
+            "status": "provided", "value": STAGE_FOR_ROLE[role], "unit": ROLE_UNITS[role],
         },
-        "clinical_mastoidectomy_years": {"status": "provided", "value": 0},
-        "temporal_bone_lab_years": {"status": "provided", "value": 0.5},
-        "vr_headset_experience": "no", "other_surgical_simulator_experience": "not_sure",
-        "this_simulator_attempts": {"status": "provided", "value": 0},
+        "cortical_mastoidectomies": "0",
     }
 
 
 @pytest.mark.parametrize("role", list(ROLE_UNITS))
-def test_role_units_optional_demographics_and_zero_experience_are_preserved(role):
+def test_roles_and_zero_experience_are_preserved(role):
     answers = background(role)
     validated = validate_background(answers)
     assert validated == answers
     validated["training_stage"]["value"] = 3
-    assert answers["training_stage"]["value"] == 2
+    assert answers["training_stage"]["value"] == STAGE_FOR_ROLE[role]
 
 
-@pytest.mark.parametrize("field", [
-    "clinical_mastoidectomy_years", "temporal_bone_lab_years",
-    "this_simulator_attempts", "otolaryngology_training_months",
-])
-def test_unknown_experience_stays_missing_instead_of_becoming_zero(field):
+@pytest.mark.parametrize("count", ["0", "1_5", "6_10", "11_20", "over_20"])
+def test_every_mastoidectomy_count_choice_is_accepted(count):
     answers = background()
-    answers[field] = {"status": "not_sure", "value": None}
-    assert validate_background(answers)[field] == {"status": "not_sure", "value": None}
+    answers["cortical_mastoidectomies"] = count
+    assert validate_background(answers)["cortical_mastoidectomies"] == count
+
+
+@pytest.mark.parametrize("role,value", [
+    ("resident", 1), ("resident", 5), ("fellow", 6), ("fellow", 7),
+    ("attending", 0), ("attending", 25),
+])
+def test_each_role_accepts_its_own_years(role, value):
+    answers = background(role)
+    answers["training_stage"]["value"] = value
+    assert validate_background(answers)["training_stage"]["value"] == value
+
+
+@pytest.mark.parametrize("role,value", [
+    ("resident", 0), ("resident", 6), ("fellow", 5), ("fellow", 8),
+    ("attending", -1), ("attending", 2.5),
+])
+def test_each_role_rejects_years_outside_its_choices(role, value):
+    answers = background(role)
+    answers["training_stage"]["value"] = value
+    with pytest.raises(ValueError):
+        validate_background(answers)
+
+
+@pytest.mark.parametrize("role", list(ROLE_UNITS))
+def test_training_year_must_be_given(role):
+    answers = background(role)
+    answers["training_stage"] = {"status": "not_sure", "value": None, "unit": ROLE_UNITS[role]}
+    with pytest.raises(ValueError):
+        validate_background(answers)
 
 
 @pytest.mark.parametrize("field,value", [
-    ("age_status", []), ("age_status", {}), ("role", []),
-    ("gender", []), ("gender_self_description", 42),
+    ("role", []), ("role", "medical_student"),
     ("training_stage", {"status": "provided", "value": 2, "unit": "medical_school_year"}),
     ("training_stage", {"status": "provided", "value": 1.5, "unit": "pgy"}),
-    ("clinical_mastoidectomy_years", {"status": "not_sure", "value": 0}),
-    ("clinical_mastoidectomy_years", {"status": "provided", "value": True}),
-    ("clinical_mastoidectomy_years", {"status": "provided", "value": -1}),
-    ("clinical_mastoidectomy_years", {"status": "provided", "value": float("nan")}),
-    ("clinical_mastoidectomy_years", {"status": "provided", "value": float("inf")}),
-    ("clinical_mastoidectomy_years", {"status": "provided", "value": 10**400}),
-    ("this_simulator_attempts", {"status": "provided", "value": 1.5}),
-    ("otolaryngology_training_months", {"status": "provided", "value": 2.5}),
-    ("vr_headset_experience", False),
+    ("training_stage", {"status": "provided", "value": 6, "unit": "pgy"}),
+    ("cortical_mastoidectomies", 3), ("cortical_mastoidectomies", "3"),
+    ("cortical_mastoidectomies", None),
+    ("training_stage", {"status": "provided", "value": True, "unit": "pgy"}),
+    ("training_stage", {"status": "provided", "value": float("nan"), "unit": "pgy"}),
+    ("training_stage", {"status": "provided", "value": 10**400, "unit": "pgy"}),
 ])
 def test_invalid_background_values_raise_value_error(field, value):
     answers = background()
@@ -79,23 +105,12 @@ def test_invalid_background_values_raise_value_error(field, value):
         validate_background(answers)
 
 
-def test_age_gender_and_role_dependent_fields_are_consistent():
-    answers = background("medical_student")
-    answers["otolaryngology_training_months"] = {"status": "provided", "value": 0}
-    with pytest.raises(ValueError, match="not applicable"):
-        validate_background(answers)
-    answers = background("attending")
-    answers["training_stage"]["value"] = 0.5
-    assert validate_background(answers)["training_stage"]["value"] == 0.5
-    answers["age"] = 30
-    with pytest.raises(ValueError, match="Age must be null"):
-        validate_background(answers)
-    answers["age_status"] = "provided"
-    answers["gender"] = "self_describe"
-    with pytest.raises(ValueError, match="self-description"):
-        validate_background(answers)
-    answers["gender_self_description"] = "My description"
-    assert validate_background(answers)["gender_self_description"] == "My description"
+def test_removed_questions_are_rejected():
+    for removed in ("age", "temporal_bone_lab_years"):
+        answers = background()
+        answers[removed] = None
+        with pytest.raises(ValueError, match="must contain exactly"):
+            validate_background(answers)
 
 
 @pytest.mark.parametrize("value", [True, False, 0, 6, 1.0, None, "3", {}, []])
@@ -193,3 +208,22 @@ def test_unrelated_state_metadata_survives_survey_transactions(tmp_path):
     assert saved["custom_metadata"] == {"keep": True}
     assert saved["expert_study"]["custom_study"] == [1, 2]
     assert saved["expert_study"]["participants"]["Old"] == {"custom_profile": "keep"}
+
+
+def test_default_resident_study_flow_has_no_self_assessments(monkeypatch):
+    from evidence_system import study_surveys
+    monkeypatch.setattr(study_surveys, "SELF_ASSESSMENTS", False)
+    flow = new_review_flow("summary", "start-time", background=True, final_case=True)
+    stages = [step["stage"] for step in flow["steps"]]
+    assert stages == ["background", "review", "questionnaire", "review", "questionnaire",
+                      "preference", "complete"]
+
+
+@pytest.mark.parametrize("choice", ["event-based", "summary", "combination", "no_preference"])
+def test_preference_accepts_each_resident_study_option(choice):
+    assert validate_answers("preference", {"preferred_view": choice}) == {"preferred_view": choice}
+
+
+def test_preference_rejects_unknown_option():
+    with pytest.raises(ValueError):
+        validate_answers("preference", {"preferred_view": "both"})

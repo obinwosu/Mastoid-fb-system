@@ -211,7 +211,8 @@ def inspect_hdf5(
                 ("data/pose_mastoidectomy_volume", "volume_pose_count", "pose"),
                 ("data/pose_main_camera", "camera_pose_count", "pose"),
             ):
-                value = field(name, required=is_frame) if is_frame else None
+                # Depth is optional: the FIVRS RTX recorder saves colour frames only.
+                value = field(name, required=is_frame and kind != "depth") if is_frame else None
                 if value is None:
                     continue
                 shape = tuple(value.shape)
@@ -525,7 +526,11 @@ def build_source_audit(
         "all_frame_modalities_aligned": all(
             item["frame_count"]
             == item["image_frame_count"]
-            == item["depth_frame_count"]
+            == (
+                item["frame_count"]
+                if item["depth_frame_count"] is None  # depth is optional
+                else item["depth_frame_count"]
+            )
             == item["drill_pose_count"]
             == item["volume_pose_count"]
             == item["camera_pose_count"]
