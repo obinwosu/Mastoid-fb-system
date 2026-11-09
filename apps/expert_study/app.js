@@ -28,13 +28,14 @@ const eventReview = EventReview.create({
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
-    document.getElementById("videoWindow").textContent = "Choose a review moment";
+    document.getElementById("videoWindow").textContent = "";
     state.currentClipIndex = null;
     if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
       logEvent("feedback_item_opened", { source, title: eventReview.titleFor(item) }, item.feedback_id);
     }
   },
   onOpen: openReviewMoment,
+  isReviewed: (item, index) => state.reviewedMoments?.has(`${item.feedback_id}:${index}`) || false,
 });
 
 const studySurveys = StudySurveys.create({
@@ -118,6 +119,83 @@ function logEvent(eventType, details = {}, feedbackId = state.selectedId) {
   }).catch(() => {});
 }
 
+const REVIEW_DESCRIPTIONS = {
+  summary: {
+    title: "Summary-based feedback",
+    text: "An overview of your performance in each phase of the procedure compared with expert surgeons.",
+    instruction: "Select each phase below, then review the Safety and Drilling motion performance metrics for that phase. Once you have reviewed the Safety and Drilling motion metrics in every phase, you may advance: please click Next below.",
+  },
+  "event-based": {
+    title: "Event-based feedback",
+    text: "Specific moments from your session flagged for review, each linked to the video.",
+    instruction: "Review every moment: open each topic below, or click the dots under the video. Once you have reviewed every moment, you may advance: please click Next below.",
+  },
+};
+
+// Summary-based feedback: Next stays locked until the summary page reports that
+// Safety and Drilling motion were opened in every phase.
+state.summaryProgress = null;
+window.addEventListener("message", event => {
+  if (event.origin !== window.location.origin || event.data?.type !== "summary-review-progress") return;
+  const frame = document.getElementById("summaryReviewFrame");
+  if (event.source !== frame?.contentWindow) return;
+  state.summaryProgress = { done: event.data.done, total: event.data.total, remaining: event.data.remaining || [] };
+  updateReviewGate();
+});
+
+function summaryGateOpen() {
+  const progress = state.summaryProgress;
+  return Boolean(progress && progress.total > 0 && progress.done >= progress.total);
+}
+
+// Event-based feedback: Next stays locked until every moment of every topic was opened
+// (key frame, go to moment, or play context).
+state.reviewedMoments = new Set();
+
+function eventProgress() {
+  const ordered = [...feedbackItems()].sort((a, b) => EventReview.describe(a).order - EventReview.describe(b).order);
+  const topics = ordered.map(item => {
+    const total = eventReview.clipsFor(item).length;
+    let done = 0;
+    for (let i = 0; i < total; i += 1) if (state.reviewedMoments.has(`${item.feedback_id}:${i}`)) done += 1;
+    return { title: eventReview.titleFor(item), total, done };
+  });
+  return {
+    done: topics.reduce((sum, t) => sum + t.done, 0),
+    total: topics.reduce((sum, t) => sum + t.total, 0),
+    remaining: topics.filter(t => t.done < t.total).map(t => `${t.title} (${t.total - t.done})`),
+  };
+}
+
+function updateReviewGate() {
+  window.requestAnimationFrame(placeNextCard);
+  const button = document.getElementById("finishExperienceButton");
+  const hint = document.getElementById("reviewNextHint");
+  if (state.reviewFlow?.stage === "review" && state.reviewView === "event-based" && state.experience) {
+    const progress = eventProgress();
+    const open = progress.done >= progress.total;
+    hint.textContent = open ? "You have reviewed every moment. Select Next when you are ready."
+      : `Review every moment to continue (${progress.done} of ${progress.total} done). Still to review: ${progress.remaining.join(", ")}.`;
+    if (!state.reviewNextPending) button.disabled = !open;
+    document.getElementById("nextCard").classList.toggle("locked", !open);
+    return;
+  }
+  const gated = state.reviewFlow?.stage === "review" && state.reviewView === "summary";
+  if (!gated) {
+    hint.textContent = "When you have finished reviewing this view, select Next.";
+    if (!state.reviewNextPending) button.disabled = false;
+    document.getElementById("nextCard").classList.remove("locked");
+    return;
+  }
+  const progress = state.summaryProgress;
+  if (summaryGateOpen()) hint.textContent = "You have reviewed every phase. Select Next when you are ready.";
+  else hint.textContent = progress
+    ? `Review every phase to continue (${progress.done} of ${progress.total} done). Still to review: ${progress.remaining.join(", ")}.`
+    : "Review every phase to continue.";
+  if (!state.reviewNextPending) button.disabled = !summaryGateOpen();
+  document.getElementById("nextCard").classList.toggle("locked", !summaryGateOpen());
+}
+
 function setHeaderStatus(text) {
   document.getElementById("workflowStatus").textContent = text;
 }
@@ -125,6 +203,10 @@ function setHeaderStatus(text) {
 function caseHeader() {
   const value = state.start.case;
   document.getElementById("caseLabel").textContent = `${value.alias} of ${value.total}`;
+  // One recording per resident: "Case 01 of 1" only adds noise.
+  const single = Number(value.total) <= 1;
+  document.getElementById("caseLabel").classList.toggle("hidden", single);
+  document.querySelector("#headerStatus .divider").classList.toggle("hidden", single);
 }
 
 async function enterStudy(participantId, firstReviewView) {
@@ -170,7 +252,49 @@ async function enterStudy(participantId, firstReviewView) {
   showReady();
 }
 
-function showReady() {
+// The launcher has already analysed the recording, so go straight to the feedback.
+// The pilot's start screen and progress animation only appear if loading fails.
+async function showReady() {
+  studySurveys.hide();
+  document.getElementById("reviewProgress").classList.add("hidden");
+  setHeaderStatus("Loading your feedback");
+  try {
+    const experience = await api("/api/expert-study/analyze", { participant_id: state.participantId });
+    if (experience.pending) {
+      waitForFeedback();
+      return;
+    }
+    document.getElementById("preparingPanel").classList.add("hidden");
+    prepareExperience(experience);
+  } catch (error) {
+    showReadyPanel();
+    showToast(error.message);
+  }
+}
+
+// The launcher serves only the background questionnaire while the session is
+// analysed, then restarts the server here with the feedback. Reload once it has.
+function waitForFeedback() {
+  studySurveys.hide();
+  document.getElementById("preparingPanel").classList.remove("hidden");
+  setHeaderStatus("Preparing your feedback");
+  const check = async () => {
+    try {
+      const response = await fetch("/api/health", { cache: "no-store" });
+      const value = await response.json();
+      if (response.ok && value.ok && !value.intake) {
+        window.location.reload();
+        return;
+      }
+    } catch {
+      // The server is restarting with the feedback.
+    }
+    window.setTimeout(check, 2000);
+  };
+  window.setTimeout(check, 2000);
+}
+
+function showReadyPanel() {
   studySurveys.hide();
   document.getElementById("reviewProgress").classList.add("hidden");
   setHeaderStatus("Session ready");
@@ -251,11 +375,47 @@ function pauseReviewMedia() {
   if (frame.hasAttribute("src")) frame.contentWindow?.postMessage({ type: "study-review-visibility", active: false, viewport_height: window.innerHeight }, window.location.origin);
 }
 
+// The Next box sits in the right column directly under the session video, on both
+// review pages, so the whole review fits on one screen. Stacked (narrow) layouts keep
+// it at the bottom.
+function placeNextCard() {
+  const panel = document.getElementById("experiencePanel");
+  const card = document.getElementById("nextCard");
+  card.classList.remove("beside-video");
+  panel.style.minHeight = "";
+  if (panel.classList.contains("hidden") || window.innerWidth <= 820) return;
+  let video = null, offsetTop = 0, offsetLeft = 0;
+  if (state.reviewView === "summary") {
+    const frame = document.getElementById("summaryReviewFrame");
+    video = frame.contentDocument?.querySelector(".video-card");
+    const box = frame.getBoundingClientRect();
+    offsetTop = box.top; offsetLeft = box.left;
+  } else video = document.querySelector("#eventBasedReview .video-card");
+  if (!video) return;
+  const rect = video.getBoundingClientRect(), base = panel.getBoundingClientRect();
+  if (rect.width < 50) return;
+  card.classList.add("beside-video");
+  card.style.top = `${offsetTop + rect.bottom - base.top + 16}px`;
+  card.style.left = `${offsetLeft + rect.left - base.left}px`;
+  card.style.width = `${rect.width}px`;
+  const bottom = card.offsetTop + card.offsetHeight;
+  panel.style.minHeight = `${bottom}px`;
+}
+window.addEventListener("resize", () => window.requestAnimationFrame(placeNextCard));
+// Video cards change height when the video loads; keep the Next box under them.
+const nextCardObserver = new ResizeObserver(() => window.requestAnimationFrame(placeNextCard));
+nextCardObserver.observe(document.querySelector("#eventBasedReview .video-card"));
+document.getElementById("summaryReviewFrame").addEventListener("load", event => {
+  const card = event.currentTarget.contentDocument?.querySelector(".video-card");
+  if (card) nextCardObserver.observe(card);
+});
+
 function resizeSummaryFrame() {
   const frame = document.getElementById("summaryReviewFrame");
   if (document.getElementById("summaryReview").classList.contains("hidden")) return;
   const content = frame.contentDocument?.querySelector("main");
   if (content) frame.style.height = `${Math.max(420, Math.ceil(content.getBoundingClientRect().height) + 2)}px`;
+  placeNextCard();
 }
 
 function loadSummaryFrame() {
@@ -298,6 +458,7 @@ function selectReviewView(value, log = true) {
     }
     window.requestAnimationFrame(resizeSummaryFrame);
   } else syncReviewVideo(document.getElementById("sessionVideo"), currentTime);
+  window.requestAnimationFrame(placeNextCard);
   if (log) logEvent("review_view_opened", { view, review_index: state.reviewFlow.index }, null);
 }
 
@@ -354,7 +515,13 @@ function returnToVideo() {
 }
 
 function openReviewMoment(item, clip, index, mode) {
+  state.reviewedMoments.add(`${item.feedback_id}:${index}`);
+  eventReview.refreshViewed();
+  updateReviewGate();
   const title = eventReview.titleFor(item);
+  if (mode === "play") { playMoment(clip, index); return; }
+  // Safety moments: pause the video at the event's time point (no still image).
+  if (mode === "frame") { pauseAtMoment(clip, index); return; }
   if (mode === "context") { playClip(clip, title, index); return; }
   if (keyframeFor(clip)) { jumpToKeyframe(clip, title, index); return; }
   if (!state.experience.media?.available || clip.t_start_s == null || !Number.isFinite(Number(clip.t_start_s))) return;
@@ -370,6 +537,52 @@ function openReviewMoment(item, clip, index, mode) {
     video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
   });
   logEvent("feedback_interval_opened", { clip_index: index, interval_start_s: time });
+}
+
+function pauseAtMoment(clip, index) {
+  const video = document.getElementById("sessionVideo");
+  const time = EventReview.momentTime(clip);
+  if (!state.experience.media?.available || time == null) return;
+  const action = beginMediaAction();
+  state.currentClipIndex = index;
+  state.stopAt = null;
+  state.keyframeIntent = false;
+  document.getElementById("keyframeOverlay")?.classList.add("hidden");
+  document.getElementById("keyframeStatus")?.classList.add("hidden");
+  video.pause();
+  document.getElementById("videoWindow").textContent = `Paused at ${fmtTime(time)}`;
+  markClip(index, "review");
+  afterMetadata(action, () => {
+    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
+  });
+  logEvent("feedback_moment_opened", { clip_index: index, time_s: time });
+}
+
+// Clicking a moment: start at the moment's labelled time and play through the flagged
+// stretch plus MOMENT_CONTEXT_AFTER_S of what followed.
+const MOMENT_CONTEXT_AFTER_S = 5;
+function playMoment(clip, index) {
+  const video = document.getElementById("sessionVideo");
+  // Start where the moment's label starts ("Moment @ 1:26 to 1:31").
+  const start = Number.isFinite(Number(clip.t_start_s)) ? Math.max(0, Number(clip.t_start_s)) : EventReview.momentTime(clip);
+  if (!state.experience.media?.available || start == null) return;
+  const action = beginMediaAction();
+  state.currentClipIndex = index;
+  state.keyframeIntent = false;
+  document.getElementById("keyframeOverlay")?.classList.add("hidden");
+  document.getElementById("keyframeStatus")?.classList.add("hidden");
+  video.pause();
+  const end = Number.isFinite(Number(clip.t_end_s)) ? Number(clip.t_end_s) : start;
+  // Keep playing 5 s past the flagged window for context (user decision 2026-11-07).
+  const stop = Math.min(Number(state.experience.session.duration_s), Math.max(end, start + 5) + MOMENT_CONTEXT_AFTER_S);
+  document.getElementById("videoWindow").textContent = `Playing from ${fmtTime(start)}`;
+  markClip(index, "play");
+  afterMetadata(action, () => {
+    video.currentTime = start;
+    state.stopAt = stop;
+    video.play().catch(() => {});
+  });
+  logEvent("feedback_moment_played", { clip_index: index, playback_start_s: start, playback_end_s: stop });
 }
 
 function playClip(clip, title, index) {
@@ -498,6 +711,7 @@ function renderReviewFlow() {
   document.getElementById("experiencePanel").classList.add("hidden");
   document.getElementById("questionnairePanel").classList.add("hidden");
   document.getElementById("readyPanel").classList.add("hidden");
+  document.getElementById("preparingPanel").classList.add("hidden");
   document.getElementById("completionPanel").classList.add("hidden");
   if (flow.stage === "complete") {
     showCompletion();
@@ -514,9 +728,15 @@ function renderReviewFlow() {
   const label = reviewViewLabel(flow.current_view);
   const step = `${flow.index + 1} of ${flow.order.length}`;
   document.getElementById("reviewProgressLabel").textContent = `${flow.stage === "questionnaire" ? "Questionnaire" : "Review"} ${step} · ${label}`;
+  // A title and plain description replace the numbered view pills: the resident
+  // has not met the other view yet, so naming it here only confuses.
+  const about = REVIEW_DESCRIPTIONS[flow.current_view] || {};
+  document.getElementById("reviewTitle").textContent = about.title || label;
+  document.getElementById("reviewDescription").textContent = about.text || "";
+  document.getElementById("reviewInstruction").textContent = flow.stage === "review" ? about.instruction || "" : "";
   if (modern && ["background", "self_assessment", "questionnaire", "preference"].includes(flow.stage)) {
     document.getElementById("reviewProgress").classList.add("hidden");
-    const status = flow.stage === "background" ? "Background questionnaire"
+    const status = flow.stage === "background" ? "Background Questionnaire"
       : flow.stage === "self_assessment" ? `Self-assessment ${flow.assessment_round + 1} of 3`
         : flow.stage === "preference" ? "Feedback preference" : `Questionnaire ${step} · ${label}`;
     setHeaderStatus(status);
@@ -537,10 +757,13 @@ function renderReviewFlow() {
     document.getElementById("questionnairePanel").classList.remove("hidden");
     setHeaderStatus(`Questionnaire ${flow.index + 1} of ${flow.order.length}`);
   } else {
-    document.getElementById("reviewNextTitle").textContent = modern ? "Continue to self-assessment" : "Continue to questionnaire";
+    const nextStage = modern ? flow.next_stage : "questionnaire";
+    document.getElementById("reviewNextTitle").textContent = nextStage === "self_assessment"
+      ? "Continue to self-assessment" : "Continue to questionnaire";
     document.getElementById("experiencePanel").classList.remove("hidden");
     setHeaderStatus(`Review ${step} · ${label}`);
     selectReviewView(flow.current_view);
+    updateReviewGate();
   }
 }
 
@@ -584,9 +807,11 @@ async function advanceReviewFlow(answers = null) {
     state.reviewNextPending = false;
     if (surveyStep) studySurveys.setPending(false);
     buttons.forEach(button => { button.disabled = false; });
+    updateReviewGate();
   }
 }
 
+// End of the study: a check mark, a thank-you and a way back to the launcher.
 function showCompletion() {
   pauseReviewMedia();
   studySurveys.hide();
@@ -594,19 +819,18 @@ function showCompletion() {
     document.getElementById(id).classList.add("hidden");
   });
   document.getElementById("completionPanel").classList.remove("hidden");
-  setHeaderStatus("Case complete");
-  const nextButton = document.getElementById("nextCaseButton");
-  const codeBlock = document.getElementById("completionCodeBlock");
-  if (state.start.case.next_case_url) {
-    document.getElementById("completionMessage").textContent = "Both review views are complete. Continue when you are ready to review the next recorded session.";
-    nextButton.classList.remove("hidden");
-    codeBlock.classList.add("hidden");
-  } else {
-    document.getElementById("completionTitle").textContent = "Expert workflow experience complete";
-    document.getElementById("completionMessage").textContent = "All configured cases are complete. Please provide the completion code to the study team.";
-    nextButton.classList.add("hidden");
-    document.getElementById("completionCode").textContent = state.start.completion_code || "Complete";
-    codeBlock.classList.remove("hidden");
+  setHeaderStatus("Session complete");
+  // More recorded cases would continue here; the resident study has one.
+  document.getElementById("nextCaseButton").classList.toggle("hidden", !state.start.case.next_case_url);
+  document.getElementById("returnToSimulatorButton").classList.toggle("hidden", Boolean(state.start.case.next_case_url));
+}
+
+async function returnToSimulator() {
+  try {
+    await api("/api/expert-study/return-to-simulator", { participant_id: state.participantId });
+    document.getElementById("returnToSimulatorNote").classList.remove("hidden");
+  } catch (error) {
+    showToast("Please switch to the study window on the desktop.");
   }
 }
 
@@ -640,9 +864,15 @@ document.getElementById("accessForm").addEventListener("submit", async event => 
   }
 });
 document.getElementById("startAnalysisButton").addEventListener("click", startAnalysis);
-document.getElementById("finishExperienceButton").addEventListener("click", () => advanceReviewFlow());
+document.getElementById("finishExperienceButton").addEventListener("click", () => {
+  if (state.reviewFlow?.stage === "review" && state.reviewView === "summary" && !summaryGateOpen()) return;
+  if (state.reviewFlow?.stage === "review" && state.reviewView === "event-based" && state.experience
+      && eventProgress().done < eventProgress().total) return;
+  advanceReviewFlow();
+});
 document.getElementById("questionnaireNextButton").addEventListener("click", () => advanceReviewFlow());
 document.getElementById("nextCaseButton").addEventListener("click", goToNextCase);
+document.getElementById("returnToSimulatorButton").addEventListener("click", returnToSimulator);
 document.getElementById("summaryReviewFrame").addEventListener("load", event => {
   state.summaryResizeObserver?.disconnect();
   const content = event.currentTarget.contentDocument?.querySelector("main");

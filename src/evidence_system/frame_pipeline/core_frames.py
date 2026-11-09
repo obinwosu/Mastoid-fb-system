@@ -225,6 +225,20 @@ def map_native_event_times(event_times: Any, frame_times: Any, video_times: Any)
     return result
 
 
+USER_CONTROL_FIELDS = ("device_clutch", "cam_clutch", "scope_button")
+
+
+def _user_control_fields(values: Any) -> dict[str, Any]:
+    """Clutch / microscope-button flags for one frame; None when not recorded."""
+    if values is None:
+        return {}
+    out = {}
+    for name, value in zip(USER_CONTROL_FIELDS, list(values), strict=False):
+        value = int(value)
+        out[name] = None if value < 0 else bool(value)
+    return out
+
+
 def _drilling_mask(
     frame_times: Any, removal_times: Any, gap_s: float = DRILLING_TIMESTAMP_GAP_S
 ) -> Any:
@@ -397,6 +411,11 @@ def extract_core_frames(
                     _dataset_array(handle, "data/pose_mastoidectomy_volume"), dtype=float
                 )
                 camera = np.asarray(_dataset_array(handle, "data/pose_main_camera"), dtype=float)
+                # Optional (FIVRS recorder): device_clutch, cam_clutch, scope_button.
+                controls = _dataset_array(handle, "data/user_controls", required=False)
+                controls = None if controls is None else np.asarray(controls).reshape(len(times), -1)
+                # Depth is optional: the FIVRS RTX recorder saves colour frames only.
+                has_depth = handle.get("data/depth") is not None
                 expected = len(times)
                 if any(len(array) != expected for array in (drill, volume, camera)):
                     raise ValueError(f"Frame modality length mismatch in {path.name}")
@@ -411,6 +430,8 @@ def extract_core_frames(
                             "drill_pose": drill[local_idx],
                             "volume_pose": volume[local_idx],
                             "camera_pose": camera[local_idx],
+                            "user_controls": None if controls is None else controls[local_idx],
+                            "has_depth": has_depth,
                         }
                     )
 
@@ -621,6 +642,8 @@ def extract_core_frames(
                 "depth_frame_ref": (
                     f"{source['source_hdf5']}:{reader.dataset_path('data/depth')}:"
                     f"{source['source_frame_idx']}"
+                    if source.get("has_depth", True)
+                    else ""
                 ),
                 "frame_removed_voxels": int(frame_removed_counts[index]),
                 "frame_removed_voxels_cum": int(cumulative[index]),
@@ -634,6 +657,7 @@ def extract_core_frames(
                     if np.isnan(dt[index])
                     else float(frame_removed_counts[index] * voxel_volume_mm3 / dt[index])
                 ),
+                **_user_control_fields(source.get("user_controls")),
                 "removed_voxel_row_start": voxel_start[index],
                 "removed_voxel_row_end_exclusive": voxel_end[index],
             }
@@ -665,8 +689,10 @@ def extract_core_frames(
         == len(frame_rows),
         "assigned_removed_voxel_conservation": int(np.sum(frame_removed_counts))
         == int(np.sum(valid_voxels)),
-        "modalities_have_source_references": all(
-            row["rgb_frame_ref"] and row["depth_frame_ref"] for row in frame_rows
+        "modalities_have_source_references": all(row["rgb_frame_ref"] for row in frame_rows)
+        and (
+            all(row["depth_frame_ref"] for row in frame_rows)
+            or not any(row["depth_frame_ref"] for row in frame_rows)
         ),
         (
             "automatic_phase_deferred_without_manual_input"

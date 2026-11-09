@@ -17,20 +17,19 @@ PARTICIPANT = "SURVEY-AUDIT"
 ITEMS = ("protection", "visibility", "control", "removal", "orientation", "planning")
 
 
+
+@pytest.fixture(autouse=True)
+def _with_self_assessments(monkeypatch):
+    """These tests cover the full protocol, kept for when self-assessments return."""
+    from evidence_system import study_surveys
+    monkeypatch.setattr(study_surveys, "SELF_ASSESSMENTS", True)
+
+
 def background():
     return {
         "role": "resident",
-        "age": None,
-        "age_status": "unanswered",
-        "gender": None,
-        "gender_self_description": "",
         "training_stage": {"status": "provided", "value": 3, "unit": "pgy"},
-        "otolaryngology_training_months": {"status": "provided", "value": 24},
-        "clinical_mastoidectomy_years": {"status": "provided", "value": 1.5},
-        "temporal_bone_lab_years": {"status": "provided", "value": 2.5},
-        "vr_headset_experience": "no",
-        "other_surgical_simulator_experience": "yes",
-        "this_simulator_attempts": {"status": "provided", "value": 0},
+        "cortical_mastoidectomies": "1_5",
     }
 
 
@@ -107,7 +106,7 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
     evidence_before = service.retriever.db_path.read_bytes()
     start = service.start_study(PARTICIPANT, first)
     instrument = deepcopy(start["surveys"])
-    assert instrument["version"] == "mastoid_surveys_v1"
+    assert instrument["version"] == "mastoid_surveys_v3_resident"
     for key in (
         "user_review_performed", "clinician_review_performed",
         "total_score_defined", "pass_threshold_defined",
@@ -183,18 +182,18 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
     assert sa[1]["answers"]["orientation"] == "cannot_assess"
     assert sa[2]["answers"]["planning"] == "not_applicable"
     profile = stored["participants"][PARTICIPANT]
-    assert profile["background"]["answers"]["clinical_mastoidectomy_years"]["value"] == 1.5
-    assert profile["background"]["answers"]["temporal_bone_lab_years"]["value"] == 2.5
+    assert profile["background"]["answers"]["cortical_mastoidectomies"] == "1_5"
+    assert profile["background"]["answers"]["training_stage"]["value"] == 3
     assert profile["preference"]["answers"] == {"preferred_view": "no_preference"}
 
 
 @pytest.mark.parametrize("field,value", [
-    ("clinical_mastoidectomy_years", True),
-    ("clinical_mastoidectomy_years", -1),
-    ("clinical_mastoidectomy_years", float("nan")),
-    ("clinical_mastoidectomy_years", float("inf")),
-    ("this_simulator_attempts", 0.5),
-    ("otolaryngology_training_months", False),
+    ("training_stage", True),
+    ("training_stage", -1),
+    ("training_stage", float("nan")),
+    ("training_stage", float("inf")),
+    ("training_stage", 0.5),
+    ("training_stage", 6),
 ])
 def test_invalid_background_measurements_never_write(tmp_path, field, value):
     service = make_service(tmp_path, mode="expert-study")
@@ -230,23 +229,22 @@ def test_invalid_self_assessment_rejected_without_losing_background(tmp_path, ba
 
 
 @pytest.mark.parametrize("mutation", [
-    "status_value", "wrong_role_unit", "old_case_count", "age", "malformed_age_status",
+    "status_value", "wrong_role_unit", "old_case_years", "removed_age", "count_as_number",
 ])
 def test_background_rejects_ambiguous_or_obsolete_measurements(tmp_path, mutation):
     service = make_service(tmp_path, mode="expert-study")
     flow = service.start_study(PARTICIPANT)["review_flow"]
     answers = background()
     if mutation == "status_value":
-        answers["clinical_mastoidectomy_years"] = {"status": "not_sure", "value": 5}
-    elif mutation == "malformed_age_status":
-        answers["age_status"] = []
+        answers["training_stage"] = {"status": "not_sure", "value": 5, "unit": "pgy"}
     elif mutation == "wrong_role_unit":
-        answers["training_stage"]["unit"] = "medical_school_year"
-    elif mutation == "old_case_count":
-        answers["clinical_mastoidectomy_cases"] = answers.pop("clinical_mastoidectomy_years")
-    else:
-        answers["age_status"] = "prefer_not"
+        answers["training_stage"]["unit"] = "independent_practice_years"
+    elif mutation == "old_case_years":
+        answers["clinical_mastoidectomy_years"] = {"status": "provided", "value": 1}
+    elif mutation == "removed_age":
         answers["age"] = 30
+    else:
+        answers["cortical_mastoidectomies"] = 5
     before = service._study().path.read_bytes()
     assert advance(service, flow, answers)[0] == 400
     assert service._study().path.read_bytes() == before
@@ -280,17 +278,14 @@ def test_forged_step_id_and_another_participant_cannot_submit_current_answers(tm
     assert service._study().path.read_bytes() == before
 
 
-def test_background_preserves_optional_unknown_and_zero_without_coercion(tmp_path):
+def test_background_preserves_zero_without_coercion(tmp_path):
     service = make_service(tmp_path, mode="expert-study")
     flow = service.start_study(PARTICIPANT)["review_flow"]
     answers = background()
     answers.update(
-        role="medical_student", age_status="prefer_not", gender="prefer_not",
-        training_stage={"status": "not_sure", "value": None, "unit": "medical_school_year"},
-        otolaryngology_training_months={"status": "not_applicable", "value": None},
-        clinical_mastoidectomy_years={"status": "provided", "value": 0},
-        temporal_bone_lab_years={"status": "not_sure", "value": None},
-        vr_headset_experience="not_sure",
+        role="attending",
+        training_stage={"status": "provided", "value": 0, "unit": "independent_practice_years"},
+        cortical_mastoidectomies="0",
     )
     assert advance(service, flow, answers)[0] == 200
     record = saved(service)["participants"][PARTICIPANT]["background"]

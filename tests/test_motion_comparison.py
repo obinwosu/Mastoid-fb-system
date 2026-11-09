@@ -357,3 +357,32 @@ def test_extra_feedback_camera_and_stroke_fields_cannot_affect_measurements_or_i
     assert baseline["windows"] == changed["windows"]
     assert baseline["input_rows_sha256"] == changed["input_rows_sha256"]
     assert baseline["artifact_sha256"] == artifact_sha256(baseline)
+
+
+def _camera(rows, moving_from=None):
+    for i, row in enumerate(rows):
+        shift = (i - moving_from) * 1e-3 if moving_from is not None and i >= moving_from else 0.0
+        row.update(camera_x=0.1 + shift, camera_y=0.0, camera_z=0.0,
+                   camera_qx=0.0, camera_qy=0.0, camera_qz=0.0, camera_qw=1.0)
+    return rows
+
+
+def test_slow_windows_while_moving_the_microscope_or_clutched_are_not_flagged():
+    # Still camera: the slow drill is flagged as before.
+    still = compare_motion_windows(build(1, rows=_camera(frames(1))), reference())
+    assert len(still["episodes"]) == 1
+    assert all(w["user_control_fraction"] == 0 for w in still["windows"])
+    # The camera moves the whole time: the drill is expected to be still.
+    moving = compare_motion_windows(build(1, rows=_camera(frames(1), moving_from=0)), reference())
+    assert moving["episodes"] == []
+    assert all(w["user_control_fraction"] > 0.9 for w in moving["windows"])
+    # Stylus clutch held (recorded flag), camera still.
+    rows = _camera(frames(1))
+    for row in rows:
+        row["device_clutch"] = True
+    assert compare_motion_windows(build(1, rows=rows), reference())["episodes"] == []
+    # A brief camera adjustment (well under a fifth of the window) does not suppress it.
+    rows = _camera(frames(1))
+    rows[10].update(camera_x=0.2)
+    brief = compare_motion_windows(build(1, rows=rows), reference())
+    assert len(brief["episodes"]) == 1

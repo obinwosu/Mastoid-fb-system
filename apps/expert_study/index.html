@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Expert Workflow Experience</title>
+  <title>FIVRS session feedback</title>
   <meta name="description" content="End-to-end surgeon experience of automated simulator feedback" />
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/review-styles.css" />
@@ -13,8 +13,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">M</span>
-      <div><p>Recorded-session pilot</p><h1>Expert Workflow Experience</h1></div>
+      <div><h1>Session Feedback</h1></div>
     </div>
     <span id="interfaceVersion" class="version-badge">Pilot UI v1.4.1</span>
     <div id="headerStatus" class="header-status hidden" aria-live="polite">
@@ -68,6 +67,12 @@
       <button id="startAnalysisButton" class="primary-button large-button">Start automatic session analysis</button>
     </section>
 
+    <section id="preparingPanel" class="panel processing-panel hidden" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <h2>Preparing your feedback</h2>
+      <p class="lead">Thank you. Your session is still being analyzed. This page will continue on its own when your feedback is ready.</p>
+    </section>
+
     <section id="processingPanel" class="panel processing-panel hidden" aria-live="polite">
       <div class="spinner" aria-hidden="true"></div>
       <p class="eyebrow">Automatic processing</p>
@@ -79,26 +84,19 @@
     <section id="reviewProgress" class="review-progress hidden" aria-label="Review order" aria-live="polite">
       <ol id="reviewOrder"></ol>
       <p id="reviewProgressLabel"></p>
+      <h2 id="reviewTitle"></h2>
+      <p id="reviewDescription"></p>
+      <p id="reviewInstruction"></p>
     </section>
 
     <section id="experiencePanel" class="hidden">
       <div id="eventBasedReview" aria-label="Event-based review">
-      <section class="procedure-card" aria-labelledby="procedureHeading">
-      <h2 id="procedureHeading" class="sr-only">Procedure map</h2>
-      <span id="durationLabel" class="sr-only"></span>
-      <div id="phaseMap" class="phase-map"></div>
-      <div class="moment-timeline">
-        <span class="timeline-time">0:00</span>
-        <div id="coachingMap" class="coaching-map" aria-label="Individual coaching moments"></div>
-        <span id="timelineEnd" class="timeline-time">—</span>
-      </div>
-    </section>
 
     <section class="review-workspace event-workspace" aria-label="Video and coaching review">
         <aside class="video-card" id="videoCard" aria-labelledby="videoHeading">
           <div class="section-title video-title">
             <div><h2 id="videoHeading">Session video</h2></div>
-            <span id="videoWindow">Full session</span>
+            <span id="videoWindow"></span>
           </div>
           <div class="media-stage" id="mediaStage">
             <video id="sessionVideo" controls preload="metadata" playsinline>Your browser does not support the local review video.</video>
@@ -109,6 +107,18 @@
             </div>
           </div>
           <p id="keyframeStatus" class="keyframe-status hidden" role="status" aria-live="polite"></p>
+          <!-- Slim timeline of moments under the video (2026-11-07); phase bands hidden. -->
+      <section class="procedure-card" aria-labelledby="procedureHeading">
+          <h2 id="procedureHeading" class="sr-only">Procedure map</h2>
+          <span id="durationLabel" class="sr-only"></span>
+          <div id="phaseMap" class="phase-map"></div>
+          <div class="moment-timeline">
+            <span class="timeline-time">0:00</span>
+            <div id="coachingMap" class="coaching-map" aria-label="Individual coaching moments"></div>
+            <span id="timelineEnd" class="timeline-time">—</span>
+          </div>
+          <div id="mapLegend" class="map-legend"></div>
+          </section>
           <div class="clip-heading"><h3>Review moments</h3><span id="clipCategory"></span></div>
           <div class="clip-scroll">
             <div id="clipList" class="clip-list" role="region" aria-label="Review moments"></div>
@@ -127,8 +137,8 @@
         <iframe id="summaryReviewFrame" class="summary-review-frame" title="Whole-phase summary and session video" allowfullscreen></iframe>
       </section>
 
-      <section class="finish-card panel">
-        <div><p class="eyebrow">Next step</p><h2 id="reviewNextTitle">Continue to self-assessment</h2><p>When you have finished reviewing this view, select Next.</p><p id="reviewNextError" class="form-error hidden" role="alert"></p></div>
+      <section id="nextCard" class="finish-card panel">
+        <div><p class="eyebrow">Next step</p><h2 id="reviewNextTitle">Continue to questionnaire</h2><p id="reviewNextHint">When you have finished reviewing this view, select Next.</p><p id="reviewNextError" class="form-error hidden" role="alert"></p></div>
         <button id="finishExperienceButton" class="primary-button" type="button">Next</button>
       </section>
 
@@ -152,13 +162,11 @@
 
     <section id="completionPanel" class="panel completion-panel hidden" aria-live="polite">
       <div class="completion-mark" aria-hidden="true">✓</div>
-      <p class="eyebrow">Case complete</p>
-      <h2 id="completionTitle">Thank you for completing this case.</h2>
-      <p id="completionMessage" class="lead"></p>
+      <h2 id="completionTitle">Session Complete</h2>
+      <p id="completionMessage" class="lead">Thank you for participating in this study.</p>
+      <button id="returnToSimulatorButton" class="primary-button" type="button">Return to the simulator study window</button>
+      <p id="returnToSimulatorNote" class="completion-note hidden">The study window is now in front. You can close this browser tab.</p>
       <button id="nextCaseButton" class="primary-button hidden">Continue to next case</button>
-      <div id="completionCodeBlock" class="completion-code hidden">
-        <span>Completion code</span><strong id="completionCode">—</strong>
-      </div>
     </section>
   </main>
 
