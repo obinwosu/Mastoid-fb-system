@@ -73,3 +73,119 @@ the feedback system's author. Started 2026-11-07.
    residents, so the summary page can chart them like the motion metrics.
 5. **Repository hygiene test.** `test_candidate_tree_contains_only_publishable_source_files`
    fails on a Windows path in `README.md` (line 80); not caused by these changes.
+
+## Author follow-up and additional review (2026-11-09)
+
+This section records the current decisions and evidence without replacing the
+historical questions above. The application questionnaire, page content, visibility
+wording, active five-second reference and event thresholds remain unchanged.
+
+### Questionnaire proposal: keep two questions and add two
+
+Prepared a private, editable [questionnaire discussion draft](https://chatgpt.com/space/page_680efcb4e2448191b3e6bbfa1f6ee201).
+It is a proposal, not an activated application page or validated scale. The existing
+Clarity and Actionability questions would remain, with two additional questions
+after **each** feedback format:
+
+1. **New insight:** "This feedback helped me recognize aspects of my performance
+   that I had not noticed before." Use the existing agreement scale:
+   0 Strongly disagree, 1 Disagree, 2 Neutral, 3 Agree, 4 Strongly agree.
+2. **Overall performance:** "How would you rate your overall performance in the
+   recorded procedure?" Proposed anchors: 1 Very poor, 2 Poor, 3 Fair, 4 Good,
+   5 Very good; a separate Unable to judge response is missing, not zero.
+
+Ask the identical Overall performance question once **before any feedback**.
+This gives one baseline rating and four questions after each format; it does not
+restore the old six-item self-assessment at all three time points.
+
+Together these questions address reported new insight and change in self-rating.
+A rating decrease can reflect reassessment, and an unchanged overall rating can
+coexist with new insight. Neither answer establishes improved surgical skill or
+more accurate self-assessment. Accuracy needs an independent expert assessment
+using comparable criteria. Treat the ratings as exploratory ordinal outcomes;
+report transitions, signed changes and missingness without combining the four
+items into a total score. The second format follows prior feedback, so its effect
+is additional exposure rather than an independent first-exposure effect.
+
+Before any implementation, settle the rating anchors, missing-response handling,
+order balancing/randomization and analysis plan; introduce a new questionnaire
+version and preserve all previous responses. Current order assignment is study
+entry selection, not automatic randomization. Visibility wording stays as agreed.
+
+### Responses to the five original questions
+
+- **Window meaning:** five seconds is the local aggregation unit. Stroke length
+  is measured over each complete eligible recorded stroke and assigned by its
+  endpoint on (window start, window end]; strokes are not cut into five-second
+  pieces. The current event detector also uses these windows, so aggregation
+  duration and trigger persistence are separate design questions. Whole-phase
+  summary statistics are a third aggregation, calculated from source observations.
+- **Additional ten-second result:** rebuilt from hash-verified R4 frame and phase
+  sources, with ten-second nonoverlapping native-time windows. Following the
+  author's clarification, v2 also retains an entire observed phase shorter than
+  ten seconds using its actual duration; two early-phase samples (4.36/9.64 s)
+  are restored. Longer-phase incomplete tails retain the original omission rule.
+  The original strict-ten-second result is preserved. See the
+  [distribution comparison](motion-window-distribution-review.md) for artifacts,
+  weighting, counts and numeric results. This is an extra offline reference only.
+  It does not change the active five-second UI or evaluate a ten-second detector.
+- **Persistence:** two/three current nonoverlapping five-second windows span
+  10/15 seconds; the old overlapping three-window rule spanned seven seconds.
+  A recount of one historical saved output gives Speed 13/6/4 and Length 19/12/4
+  episodes at minimum 1/2/3 windows. That output predates clutch suppression;
+  it is not a current replay or evidence that false positives decreased.
+- **Phase accuracy:** use the author's requested existing P2T1-only excluded
+  recording-holdout analysis: 87.44% over 3,073 known one-second endpoints in
+  14 recordings. Other P2 recordings remain included, and the original full
+  report is preserved. The same deployed checkpoint was used; no retraining.
+  Existing ordinal boundary diagnostics have median absolute error 9.876 s
+  across 27 observable boundaries. They do not validate exact anatomical onset,
+  the clinical annotation rubric, or the reported 106-second novice recording.
+- **Safety/visibility distributions:** current-case Ray-v3 Poor Drill Visibility
+  can be computed when its bound source requirements are met; an existing
+  completed build verifies that path. The older RGB-depth detector is a separate
+  path and is not evaluable without depth. A matched expert safety reference is
+  still absent: it needs original expert sources processed with the same
+  per-structure safety and Ray rules. Old CSV proximity/visibility fields are
+  not substitutes. No wording or safety threshold is changed here.
+- **Hygiene:** the README URL false positive was fixed in the merge. The
+  subsequent complete suite passed 547 tests; the original question is historical.
+
+### Additional issues to address before interpreting a study
+
+1. **Old motion-result compatibility: reproduced, unresolved.** The incoming
+   control filter adds a `user_control` input field and a
+   `user_control_fraction` window field while retaining the existing window
+   schema. `web.py` rebuilds saved windows with current code and requires exact
+   input-digest/window equality. With identical synthetic observations and
+   protocol, a current sidecar is available, but one built by pre-change commit
+   `83e38b6` returns `current_motion_source_unbound`. This can hide motion
+   comparisons for archived runs; it does not demonstrate a new-recording
+   failure. Receipt:
+   `.local/validation/ten_second_distribution_20261109_v1/archive_compatibility.json`.
+   Suggested repair: explicitly version the control enrichment, verify historical
+   fields with the historical contract, then derive current control-aware windows
+   from the already-bound observations without rewriting the archive or loosening
+   source identity checks. Validate both old and new recordings.
+2. **Study documentation differs from current behavior.** README still describes
+   three six-item self-assessments even though `SELF_ASSESSMENTS = False`.
+   Its older statement that background intake is not implemented also needs
+   reconciliation: `serve-intake` and `IntakeService` now exist. The referenced
+   `scripts/study_gui/study_mode.py` launcher is outside this application checkout,
+   so this review does not independently confirm the whole external launch flow.
+3. **Viewed is currently an interaction proxy.** Opening phases/moments enables
+   progression; it does not demonstrate watching the whole clip or understanding
+   feedback. Review sets are browser-memory state and reset on reload. Report
+   this limitation and define any future persisted exposure/duration logging
+   before using review completion as an analysis variable.
+4. **Questionnaire versions and exposure order matter.** Existing participant
+   profiles can reuse previously collected background data. Preserve their
+   questionnaire versions instead of treating old and new fields as identical.
+   Keep format order in analysis; a single overall rating can miss a change in
+   one particular skill even when it reduces participant burden.
+
+This follow-up executed reference aggregation, numerical checks and a synthetic
+compatibility reproduction. It did not alter source data, fit a model, rerun
+resident cases, restart a study server, change participant responses or establish
+new clinical review. The compatibility repair and questionnaire activation remain
+future work.

@@ -57,9 +57,14 @@ def _configured_phase_reference() -> Path | None:
 TRUSTED_R4_CATALOG_SHA256 = "99fc284bef5e3cbf843be99da1ce5678df735a20257adbf89f02103f04304e7a"
 
 
-def build_motion_reference(catalog: Path, output: Path) -> dict[str, Any]:
+def build_motion_reference(
+    catalog: Path, output: Path, *, window_seconds: int = 5, include_short_phases: bool = False
+) -> dict[str, Any]:
     """Build a portable reference from frozen R4 inputs, never feedback text."""
     from .motion_comparison import (
+        DEFAULT_PROTOCOL,
+        TEN_SECOND_PROTOCOL,
+        TEN_SECOND_SHORT_PHASE_PROTOCOL,
         add_stroke_frequency,
         add_stroke_length,
         build_expert_reference,
@@ -67,6 +72,15 @@ def build_motion_reference(catalog: Path, output: Path) -> dict[str, Any]:
         write_motion_artifact,
     )
 
+    if window_seconds not in (5, 10):
+        raise ValueError("Supported native aggregation windows are 5 or 10 seconds")
+    protocol = DEFAULT_PROTOCOL if window_seconds == 5 else TEN_SECOND_PROTOCOL
+    if include_short_phases:
+        if window_seconds != 10:
+            raise ValueError(
+                "Whole short-phase fallback is supported only for the offline 10s grid"
+            )
+        protocol = TEN_SECOND_SHORT_PHASE_PROTOCOL
     catalog, output = Path(catalog).resolve(), Path(output).resolve()
     if output.exists():
         raise FileExistsError("Use a new reference filename; existing references are preserved")
@@ -146,6 +160,7 @@ def build_motion_reference(catalog: Path, output: Path) -> dict[str, Any]:
                         frames,
                         global_run_id=f"R4:{rid}",
                         participant_id=record["ParticipantID"],
+                        protocol=protocol,
                         provenance={
                             "pose_source": "canonical_vision_pose",
                             "position_unit": "m",
@@ -206,7 +221,13 @@ def build_motion_reference(catalog: Path, output: Path) -> dict[str, Any]:
 
 
 def motion_reference_command(args: argparse.Namespace) -> int:
-    print(json.dumps(build_motion_reference(_path(args.catalog), _path(args.output)), indent=2))
+    result = build_motion_reference(
+        _path(args.catalog),
+        _path(args.output),
+        window_seconds=args.window_seconds,
+        include_short_phases=args.include_short_phases,
+    )
+    print(json.dumps(result, indent=2))
     return 0
 
 
@@ -621,10 +642,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     reference = subparsers.add_parser(
         "build-motion-reference",
-        help="Build a portable five-second reference from the verified R4 catalog",
+        help="Build a portable native-time reference from the verified R4 catalog",
     )
     reference.add_argument("--catalog", type=Path, required=True)
     reference.add_argument("--output", type=Path, required=True)
+    reference.add_argument(
+        "--window-seconds",
+        type=int,
+        choices=(5, 10),
+        default=5,
+        help="Offline aggregation duration and stride; does not update deployment configuration",
+    )
+    reference.add_argument(
+        "--include-short-phases",
+        action="store_true",
+        help="With 10s aggregation, retain a shorter whole phase using its actual duration",
+    )
     reference.set_defaults(handler=motion_reference_command)
 
     phase_reference = subparsers.add_parser(
@@ -651,7 +684,8 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--ray-v3-dir", type=Path)
     serve.add_argument("--cohort-benchmark", type=Path)
     serve.add_argument(
-        "--study-state", type=Path,
+        "--study-state",
+        type=Path,
         help=(
             "Participant JSON directory, e.g. study_data/participants; "
             "legacy JSON paths import once"

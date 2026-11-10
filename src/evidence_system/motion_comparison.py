@@ -47,11 +47,24 @@ DEFAULT_PROTOCOL = {
     "stride_s": 5.0,
     "persistence_windows": 1,
 }
+# Optional offline aggregation. Deployment continues to use DEFAULT_PROTOCOL.
+TEN_SECOND_PROTOCOL = {
+    **deepcopy(DEFAULT_PROTOCOL),
+    "schema": "motion_window_protocol_v3",
+    "window_s": 10.0,
+    "stride_s": 10.0,
+    "policy_date": "2026-11-09",
+}
+TEN_SECOND_SHORT_PHASE_PROTOCOL = {
+    **deepcopy(TEN_SECOND_PROTOCOL),
+    "schema": "motion_window_protocol_v4",
+    "short_phase_policy": "whole_observed_phase_if_shorter_than_window",
+}
 # A low-speed window is not flagged when the resident spent this share of it moving the
 # microscope (camera pose changed, camera clutch or microscope button held) or holding
 # the stylus clutch: the drill is expected to sit still then (user decision 2026-11-07).
 USER_CONTROL_MAX_FRACTION = 0.2
-CAMERA_MOVE_POSITION_M = 1e-5   # 0.01 mm between frames
+CAMERA_MOVE_POSITION_M = 1e-5  # 0.01 mm between frames
 CAMERA_MOVE_ANGLE_DEG = 0.05
 
 
@@ -199,7 +212,13 @@ def _number(value: Any) -> float | None:
 
 def _protocol(value: Mapping | None) -> dict:
     result = deepcopy(DEFAULT_PROTOCOL if value is None else dict(value))
-    if set(result) != set(DEFAULT_PROTOCOL):
+    expected = {
+        "motion_window_protocol_v1": LEGACY_PROTOCOL,
+        "motion_window_protocol_v2": DEFAULT_PROTOCOL,
+        "motion_window_protocol_v3": TEN_SECOND_PROTOCOL,
+        "motion_window_protocol_v4": TEN_SECOND_SHORT_PHASE_PROTOCOL,
+    }.get(result.get("schema"))
+    if expected is None or set(result) != set(expected):
         raise ValueError("Motion protocol fields differ from the supported version")
     fixed = (
         "schema",
@@ -213,12 +232,9 @@ def _protocol(value: Mapping | None) -> dict:
         "policy_date",
         "percentile_tie_abs_tolerance",
         "percentile_tie_rel_tolerance",
+        "short_phase_policy",
     )
-    expected = {
-        "motion_window_protocol_v1": LEGACY_PROTOCOL,
-        "motion_window_protocol_v2": DEFAULT_PROTOCOL,
-    }.get(result.get("schema"))
-    if expected is None or any(result[key] != expected[key] for key in fixed):
+    if any(result.get(key) != expected.get(key) for key in fixed):
         raise ValueError("Unsupported motion source, taxonomy, time basis, or window contract")
     for key in (
         "max_gap_s",
@@ -295,12 +311,12 @@ def build_motion_windows(
     provenance: Mapping,
     protocol: Mapping | None = None,
 ) -> dict:
-    """Measure full 5s windows within each contiguous observed phase interval.
+    """Measure protocol windows, optionally retaining a whole shorter phase.
 
     All observed vision rows remain present, including stationary/non-removal rows.
     Path uses linear clipping of *valid short* adjacent pose segments only. Removal
     uses frame-assigned counts on (start,end], omitting counts whose preceding
-    interval is missing/too long. Its denominator is always the full five seconds;
+    interval is missing/too long. Its denominator is always the full window duration;
     no removal events are invented or proportionally redistributed at boundaries.
     """
     policy, source = _protocol(protocol), _provenance(provenance)
@@ -359,9 +375,13 @@ def build_motion_windows(
         if identity[0] is not None:
             span = native[run_end - 1] - native[run_start]
             count = max(0, math.floor((span - policy["window_s"] + 1e-9) / policy["stride_s"]) + 1)
+            short_phase = bool(policy.get("short_phase_policy") and 0 < span < policy["window_s"])
+            if short_phase:
+                count = 1
             for ordinal in range(count):
                 start = native[run_start] + ordinal * policy["stride_s"]
-                end = start + policy["window_s"]
+                window_duration = span if short_phase else policy["window_s"]
+                end = native[run_end - 1] if short_phase else start + window_duration
                 first = max(run_start, bisect_right(native, start) - 1)
                 last = min(run_end - 1, bisect_left(native, end))
                 path = valid = stationary = removal_valid = removed = excluded = control = 0.0
@@ -399,8 +419,8 @@ def build_motion_windows(
                     _interpolate(start, native, video),
                     _interpolate(end, native, video),
                 )
-                coverage = min(1.0, valid / policy["window_s"])
-                removal_coverage = min(1.0, removal_valid / policy["window_s"])
+                coverage = min(1.0, valid / window_duration)
+                removal_coverage = min(1.0, removal_valid / window_duration)
                 display_valid = bool(display_valid and t_end > t_start)
                 windows.append(
                     {
@@ -422,18 +442,25 @@ def build_motion_windows(
                         "stationary_duration_s": stationary,
                         "stationary_fraction": stationary / valid if valid > 0 else None,
                         "removed_mm3": removed,
-                        "removal_rate_mm3_s": removed / policy["window_s"],
+                        "removal_rate_mm3_s": removed / window_duration,
                         "removal_valid_duration_s": removal_valid,
                         "removal_coverage_fraction": removal_coverage,
                         "excluded_gap_removal_mm3": excluded,
                         "eligible": coverage + 1e-9 >= policy["min_coverage"],
                         "removal_eligible": removal_coverage + 1e-9 >= policy["min_coverage"],
                         "display_clock_valid": display_valid,
-                        "user_control_fraction": min(1.0, control / policy["window_s"]),
+                        "user_control_fraction": min(1.0, control / window_duration),
                     }
                 )
+                if policy.get("short_phase_policy"):
+                    windows[-1].update(
+                        window_duration_s=window_duration,
+                        window_kind="whole_short_phase" if short_phase else "full_window",
+                        phase_native_start_s=native[run_start],
+                        phase_native_end_s=native[run_end - 1],
+                    )
         run_start = run_end
-    return _seal(
+    result = _seal(
         {
             "schema": WINDOW_SCHEMA,
             "global_run_id": str(global_run_id),
@@ -451,19 +478,21 @@ def build_motion_windows(
             "eligible_window_count": sum(w["eligible"] for w in windows),
             "measurement_contract": {
                 "window_grid": (
-                    f"5 native seconds, stride{policy['stride_s']:g}, "
+                    f"{policy['window_s']:g} native seconds, stride{policy['stride_s']:g}, "
                     "anchored at each contiguous observed phase's first row"
                 ),
                 "speed": "sum valid clipped adjacent path mm / valid observed native seconds",
-                "coverage": "valid adjacent native seconds / full5seconds; never bridge long gaps",
+                "coverage": (
+                    f"valid adjacent native seconds / full{policy['window_s']:g}seconds; "
+                    "never bridge long gaps"
+                ),
                 "removal": (
                     "frame-assigned counts on(start,end], omit long/missing predecessor "
-                    "intervals; divide by full5seconds"
+                    f"intervals; divide by full{policy['window_s']:g}seconds"
                 ),
                 "boundary_counts": "frame endpoint assignment, no subframe removal interpolation",
                 "stationary": (
-                    "exactly zero observed displacement, "
-                    "not inferred from absent removal"
+                    "exactly zero observed displacement, not inferred from absent removal"
                 ),
                 "phase": (
                     "no cross-phase_id segments or windows; predrilling and unknown phases excluded"
@@ -478,6 +507,24 @@ def build_motion_windows(
             "claim_boundary": CLAIM_BOUNDARY,
         }
     )
+    if policy.get("short_phase_policy"):
+        result["measurement_contract"].update(
+            window_grid=(
+                "10 native seconds, stride10, anchored at each contiguous observed phase's "
+                "first row; a positive phase shorter than 10s is one whole-phase window; "
+                "longer-phase partial tails remain omitted"
+            ),
+            coverage=(
+                "valid adjacent native seconds / actual window_duration_s; never bridge long gaps"
+            ),
+            removal=(
+                "frame-assigned counts on(start,end], omit long/missing predecessor intervals; "
+                "divide by actual window_duration_s"
+            ),
+            short_phase="actual native bounds retained; zero-duration phases have no rate window",
+        )
+        _seal(result)
+    return result
 
 
 def _recorded_stroke_source(window_build: Mapping, frames: Sequence[Mapping]):
@@ -537,9 +584,10 @@ def _recorded_stroke_source(window_build: Mapping, frames: Sequence[Mapping]):
             )
         nonfinite = int(np.count_nonzero(~np.isfinite(angles)))
         status = "nonfinite_legacy_turn_angles" if nonfinite else "recorded_legacy_segmentation"
+    contract = _stroke_frequency_contract(window_build["protocol"])
     metadata = {
-        "schema": STROKE_FREQUENCY_CONTRACT["schema"],
-        "contract": deepcopy(STROKE_FREQUENCY_CONTRACT),
+        "schema": contract["schema"],
+        "contract": contract,
         "input_sha256": _digest(rows),
         "source_status": status,
         "nonfinite_turn_angle_count": nonfinite,
@@ -547,6 +595,75 @@ def _recorded_stroke_source(window_build: Mapping, frames: Sequence[Mapping]):
         "source_drilling_frame_count": len(selected),
     }
     return rows, native, metadata
+
+
+def _stroke_frequency_contract(protocol: Mapping) -> dict:
+    contract = deepcopy(STROKE_FREQUENCY_CONTRACT)
+    if protocol["window_s"] != 5:
+        contract.update(
+            schema="recorded_stroke_frequency_v2",
+            stroke_frequency_hz=(
+                "stroke_end_count on (start,end] / full window_s "
+                f"({protocol['window_s']:g} seconds)"
+            ),
+            legacy_adaptation=(
+                f"legacy unique-ID/drilling-time formula on native {protocol['window_s']:g}s "
+                "windows; original phase statistic used t_video"
+            ),
+        )
+    if protocol.get("short_phase_policy"):
+        contract.update(
+            schema="recorded_stroke_frequency_v3",
+            stroke_frequency_hz="stroke_end_count on (start,end] / actual window_duration_s",
+            legacy_adaptation=(
+                "legacy unique-ID/drilling-time formula on native 10s windows or whole "
+                "shorter phases; original phase statistic used t_video"
+            ),
+        )
+    return contract
+
+
+def _window_duration(window: Mapping, protocol: Mapping) -> float:
+    return (
+        window["window_duration_s"] if protocol.get("short_phase_policy") else protocol["window_s"]
+    )
+
+
+def _validate_window_duration(row: Mapping, policy: Mapping, recording_duration: float) -> float:
+    if not policy.get("short_phase_policy"):
+        duration = policy["window_s"]
+    else:
+        fields = ("window_duration_s", "phase_native_start_s", "phase_native_end_s")
+        if any(_number(row.get(key)) is None for key in fields):
+            raise ValueError(
+                "Short-phase protocol requires actual duration and observed phase bounds"
+            )
+        duration, phase_start, phase_end = (row[key] for key in fields)
+        phase_span = phase_end - phase_start
+        if not (
+            0 <= phase_start < phase_end <= recording_duration + 1e-7
+            and phase_start <= row["native_start_s"] < row["native_end_s"] <= phase_end + 1e-7
+            and 0 < duration <= policy["window_s"]
+        ):
+            raise ValueError("Motion window or duration lies outside its observed phase")
+        short = phase_span < policy["window_s"]
+        kind = "whole_short_phase" if short else "full_window"
+        expected = phase_span if short else policy["window_s"]
+        if row.get("window_kind") != kind or not math.isclose(duration, expected, abs_tol=1e-7):
+            raise ValueError("Motion window kind/duration differs from the short-phase policy")
+        if short:
+            if not (
+                math.isclose(row["native_start_s"], phase_start, abs_tol=1e-7)
+                and math.isclose(row["native_end_s"], phase_end, abs_tol=1e-7)
+            ):
+                raise ValueError("Short window must cover the whole observed phase")
+        else:
+            step = (row["native_start_s"] - phase_start) / policy["stride_s"]
+            if not math.isclose(step, round(step), abs_tol=1e-8):
+                raise ValueError("Full motion window is off the phase-anchored grid")
+    if abs(row["native_end_s"] - row["native_start_s"] - duration) > 1e-7:
+        raise ValueError("Motion window does not span the protocol's native duration")
+    return duration
 
 
 def add_stroke_frequency(window_build: Mapping, frames: Sequence[Mapping]) -> dict:
@@ -571,7 +688,7 @@ def add_stroke_frequency(window_build: Mapping, frames: Sequence[Mapping]) -> di
             stroke_end_count=ends,
             stroke_drilling_frame_count=len(active),
             stroke_drilling_time_s=duration,
-            stroke_frequency_hz=ends / result["protocol"]["window_s"],
+            stroke_frequency_hz=ends / _window_duration(window, result["protocol"]),
             stroke_rate_per_s=count / duration if duration > 0 else None,
             stroke_frequency_eligible=bool(window["eligible"] and good_source),
             stroke_rate_eligible=bool(
@@ -708,9 +825,10 @@ def validate_window_build(payload: Mapping) -> None:
         raise ValueError("Motion eligible window inventory mismatch")
     stroke = payload.get("stroke_frequency_metadata")
     if stroke is not None:
+        expected_frequency = _stroke_frequency_contract(policy)
         if (
-            stroke.get("schema") != STROKE_FREQUENCY_CONTRACT["schema"]
-            or stroke.get("contract") != STROKE_FREQUENCY_CONTRACT
+            stroke.get("schema") != expected_frequency["schema"]
+            or stroke.get("contract") != expected_frequency
             or not _sha(stroke.get("input_sha256"))
             or stroke.get("source_status")
             not in {
@@ -802,8 +920,7 @@ def validate_window_build(payload: Mapping) -> None:
         )
         if any(_number(row.get(key)) is None for key in numeric):
             raise ValueError("Motion window has missing/nonfinite measurements")
-        if abs(row["native_end_s"] - row["native_start_s"] - policy["window_s"]) > 1e-7:
-            raise ValueError("Motion window does not span five native seconds")
+        window_duration = _validate_window_duration(row, policy, payload["native_duration_s"])
         if row["native_start_s"] < 0 or row["native_end_s"] > payload["native_duration_s"] + 1e-7:
             raise ValueError("Motion window lies outside the observed recording")
         if not (
@@ -834,8 +951,8 @@ def validate_window_build(payload: Mapping) -> None:
             ("removal_valid_duration_s", "removal_coverage_fraction"),
         ):
             if not (
-                0 <= row[duration] <= policy["window_s"] + 1e-7
-                and math.isclose(row[coverage], row[duration] / policy["window_s"], abs_tol=1e-8)
+                0 <= row[duration] <= window_duration + 1e-7
+                and math.isclose(row[coverage], row[duration] / window_duration, abs_tol=1e-8)
             ):
                 raise ValueError("Motion duration and coverage disagree")
         expected_speed = (
@@ -848,7 +965,7 @@ def validate_window_build(payload: Mapping) -> None:
             raise ValueError("Motion speed disagrees with observed path/time")
         if not math.isclose(
             row["removal_rate_mm3_s"],
-            row["removed_mm3"] / policy["window_s"],
+            row["removed_mm3"] / window_duration,
             rel_tol=1e-10,
             abs_tol=1e-10,
         ):
@@ -892,10 +1009,10 @@ def validate_window_build(payload: Mapping) -> None:
             )
             if (
                 duration is None
-                or not 0 <= duration <= policy["window_s"] + 1e-7
+                or not 0 <= duration <= window_duration + 1e-7
                 or frequency is None
                 or not math.isclose(
-                    frequency, row["stroke_end_count"] / policy["window_s"], abs_tol=1e-10
+                    frequency, row["stroke_end_count"] / window_duration, abs_tol=1e-10
                 )
                 or (duration == 0 and row.get("stroke_rate_per_s") is not None)
                 or (
@@ -980,7 +1097,7 @@ def validate_expert_reference(payload: Mapping) -> None:
         "artifact_sha256"
     ) != artifact_sha256(payload):
         raise ValueError(
-            "Unsupported expert reference schema or content digest; phase means are not 5s windows"
+            "Unsupported expert reference schema or content digest; phase means are not windows"
         )
     protocol = _protocol(payload.get("protocol"))
     if payload.get("protocol_sha256") != _digest(protocol) or not payload.get("provenance", {}).get(
@@ -1058,6 +1175,53 @@ def _distribution(recordings: list[Mapping], phase: str, metric: str) -> dict:
     }
 
 
+def summarize_expert_reference(reference: Mapping) -> dict:
+    """Export descriptive weighted distributions without selecting a review policy."""
+    validate_expert_reference(reference)
+    recordings = reference["recordings"]
+    result = {
+        "schema": "motion_reference_distribution_summary_v1",
+        "source_artifact_sha256": reference["artifact_sha256"],
+        "protocol": deepcopy(reference["protocol"]),
+        "participant_count": reference["participant_count"],
+        "recording_count": reference["recording_count"],
+        "window_count": sum(r["window_count"] for r in recordings),
+        "weighting": reference["weighting"],
+        "quantile": reference["quantile"],
+        "self_exclusion": "full reference cohort; no current participant comparison",
+        "metrics": {
+            metric: {
+                "unit": unit,
+                "phases": {phase: _distribution(recordings, phase, metric) for phase in PHASES},
+            }
+            for metric, unit in (
+                ("speed_mm_s", "mm/s"),
+                ("removal_rate_mm3_s", "mm3/s"),
+                ("mean_stroke_length_mm", "mm"),
+            )
+        },
+        "claim_boundary": reference["claim_boundary"],
+        "usage": (
+            "offline descriptive window-size comparison; no deployment change, "
+            "clinical validation or persistence evaluation"
+        ),
+    }
+    if reference["protocol"].get("short_phase_policy"):
+        windows = [w for r in recordings for w in r["windows"]]
+        short_count = sum(w["window_kind"] == "whole_short_phase" for w in windows)
+        durations = [w["window_duration_s"] for w in windows]
+        result["window_layout"] = {
+            "label": "10s_or_whole_short_phase",
+            "full_window_n": len(windows) - short_count,
+            "whole_short_phase_n": short_count,
+            "actual_duration_min_s": min(durations) if durations else None,
+            "actual_duration_max_s": max(durations) if durations else None,
+            "within_recording_weight": "equal eligible window, not proportional to duration",
+            "long_phase_tail_policy": "omit incomplete tail when the phase is at least 10s",
+        }
+    return result
+
+
 def compare_motion_windows(
     window_build: Mapping,
     reference: Mapping | None,
@@ -1066,6 +1230,8 @@ def compare_motion_windows(
 ) -> dict:
     validate_window_build(window_build)
     policy = window_build["protocol"]
+    if policy.get("short_phase_policy"):
+        raise ValueError("Whole short-phase windows are offline distributions, not an event policy")
     known_participant = window_build.get("participant_id")
     if (
         participant_id is not None

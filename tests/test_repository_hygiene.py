@@ -13,6 +13,14 @@ MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024
 # Explicit user authorization (2026-11-04): carry these frozen runtime resources
 # with the project for migration. No other data or changed bytes are exempt.
 AUTHORIZED_RESOURCE_HASHES = {
+    # Follow-up user decision: retain each whole observed phase shorter than 10s.
+    "references/r4_motion_windows_10s_v2.json": (
+        "d5913b47a7bf3e8722cfb42b76d22e3a4379945973245507050abdc93a66e54e"
+    ),
+    # User-requested additional offline ten-second distribution (2026-11-09).
+    "references/r4_motion_windows_10s_v1.json": (
+        "f5b197bd02df375d69d5497a3e4440a721a432ee096062666e20c80f7e8058ff"
+    ),
     "references/r4_phase_summary_v1.json": (
         "ba091b3489acf7432c9c335d435f6ceae2574f9865c55806e0f99023fc2f1c47"
     ),
