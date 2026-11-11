@@ -19,7 +19,6 @@ const metricDefinitions = [
   { key: "stroke_length_mm", label: "Stroke length", unit: "mm" },
   { key: "tool_speed_mm_s", label: "Tool speed", unit: "mm/s" },
   { key: "removal_rate_mm3_s", label: "Removal rate", unit: "mm³/s" },
-  { key: "stroke_frequency_hz", label: "Stroke frequency", unit: "strokes/s" },
 ];
 const svgNamespace = "http://www.w3.org/2000/svg";
 const numericFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });

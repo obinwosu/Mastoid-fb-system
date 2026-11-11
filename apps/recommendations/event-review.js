@@ -1,4 +1,4 @@
-/* Shared presentation for the standalone and sequential Event-based reviews. */
+/* Shared presentation for standalone and sequential Event-based reviews. */
 window.EventReview = (() => {
   const names = {
     pre_drilling: "Predrilling", early_phase: "Early drilling", early_surface: "Early drilling",
@@ -6,48 +6,46 @@ window.EventReview = (() => {
   };
   const escape = value => String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;");
+  const finite = value => value != null && Number.isFinite(Number(value));
+  const finiteTime = value => finite(value) && Number(value) >= 0;
   const timeLabel = seconds => {
     const total = Math.max(0, Number(seconds || 0));
     return `${Math.floor(total / 60)}:${(total % 60).toFixed(1).padStart(4, "0")}`;
   };
-  const finiteTime = value => value != null && Number.isFinite(Number(value)) && Number(value) >= 0;
-
-  // Topic names and definitions match the Summary-based feedback page (2026-11-07).
-  const GROUP_TEXT = {
-    Safety: "These metrics describe how safely you operated.",
-    "Drilling motion": "These metrics describe how you handled your drill.",
-  };
+  const valueLabel = value => Number(value).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
   function describe(item) {
-    const id = String(item.feedback_id || "");
-    if (id === "coaching:working_corridor" || item.category === "exposure") {
-      return { category: "visibility", group: "Safety", order: 1, title: "Poor Drill Visibility",
-        text: "Instances of drilling with the center of the burr under a bony ledge." };
+    const id = String(item.feedback_id || ""), key = item.metric_key;
+    if (key === "poor_drill_visibility" || id === "coaching:working_corridor" || item.category === "exposure") {
+      return { category: "visibility", group: "Safety", order: 1, title: "Poor Drill Visibility" };
     }
-    if (id === "coaching:safety_contacts" || item.category === "safety") {
-      return { category: "boundary", group: "Safety", order: 0, title: "Critical Structure Violation",
-        text: "Instances of contacting a critical structure with an active burr." };
+    if (key === "critical_structure_violation" || id === "coaching:safety_contacts" || item.category === "safety") {
+      return { category: "boundary", group: "Safety", order: 0, title: "Critical Structure Violation" };
     }
-    if (id === "coaching:motion_reference") {
-      return { category: "speed", group: "Drilling motion", order: 2, title: "Tool speed",
-        text: "Moments when your tool moved more slowly than most expert surgeons." };
+    if (key === "speed_mm_s" || id === "coaching:motion_reference") {
+      return { category: "speed", group: "Drilling motion", order: 2, title: "Tool speed" };
     }
-    if (id === "coaching:short_strokes") {
-      return { category: "length", group: "Drilling motion", order: 3, title: "Stroke length",
-        text: "Moments when your drill strokes were shorter than most expert surgeons." };
+    if (key === "mean_stroke_length_mm" || id === "coaching:short_strokes") {
+      return { category: "length", group: "Drilling motion", order: 3, title: "Stroke length" };
     }
-    return { category: "other", group: "Other feedback", order: 4, title: item.title || "Session feedback",
-      text: item.observed_issue || item.evidence_summary || "" };
+    if (key === "removal_rate_mm3_s") {
+      return { category: "removal", group: "Drilling motion", order: 4, title: "Removal rate" };
+    }
+    return { category: "other", group: "Other feedback", order: 5, title: item.title || "Session feedback" };
   }
 
   function clipsFor(item) {
     const rows = item.clips || item.review_clips || item.evidence_segments || [];
-    const clips = rows.length ? rows : [{ t_start_s: item.t_start_s, t_end_s: item.t_end_s }];
+    // Empty ranked categories stay empty; the server has already selected and ranked them.
+    if (item.metric_key) return [...rows];
+    const clips = rows.length ? rows : finiteTime(item.t_start_s)
+      ? [{ t_start_s: item.t_start_s, t_end_s: item.t_end_s }] : [];
     return [...clips].sort((a, b) => Number(a.t_start_s || 0) - Number(b.t_start_s || 0));
   }
 
   function phaseLabel(clip, item) {
-    const phases = clip.phases?.length ? clip.phases : [clip.phase || clip.phase_name || item.phase];
+    const assigned = clip.phase || clip.phase_name;
+    const phases = assigned ? [assigned] : clip.phases?.length ? clip.phases : [item.phase];
     const labels = [...new Set(phases.filter(value => value && value !== "session")
       .map(value => names[value] || String(value).replaceAll("_", " ")))];
     return labels.length ? labels.join(" / ") : "Phase unavailable";
@@ -59,245 +57,235 @@ window.EventReview = (() => {
       const url = new URL(clip.keyframe_url, window.location.href);
       if (url.origin !== window.location.origin || url.pathname !== "/api/media/keyframe") return null;
       return { url: url.href, time: Number(clip.keyframe_time_s) };
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
-  // The time a moment is labelled with: its key frame when there is one, else its start.
   function momentTime(clip) {
-    const keyframe = keyframeFor(clip);
-    if (keyframe) return keyframe.time;
-    return finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : null;
+    return keyframeFor(clip)?.time ?? (finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : null);
   }
-  const shortTime = seconds => {
-    const total = Math.max(0, Math.floor(Number(seconds || 0)));
-    return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
-  };
+
+  const reviewKey = (item, index) => clipsFor(item)[index]?.clip_id || `${item.feedback_id}:${index}`;
+
+  // Keep source indexes when filtering so playback, Viewed and logging refer to
+  // the same globally selected moment. A phase filter never fills empty slots.
+  function visibleClips(item, phase = "all") {
+    return clipsFor(item).map((clip, index) => ({ clip, index }))
+      .filter(({ clip }) => phase === "all" || (clip.phase || item.phase) === phase);
+  }
+
+  function allClipsViewed(item, isReviewed) {
+    const clips = clipsFor(item);
+    return clips.length > 0 && clips.every((_, index) => isReviewed(item, index));
+  }
+
+  function contextBounds(clip, duration) {
+    if (!finiteTime(clip.t_start_s)) return null;
+    const start = Math.max(0, Number(clip.t_start_s) - 5);
+    const end = finiteTime(clip.t_end_s) ? Number(clip.t_end_s) : Number(clip.t_start_s);
+    const limit = finiteTime(duration) && Number(duration) > 0 ? Number(duration) : Infinity;
+    return { start: Math.min(start, limit), end: Math.min(Math.max(end, Number(clip.t_start_s)) + 5, limit) };
+  }
+
+  function comparisonSentence(item, clip, reference) {
+    if (!finite(clip.observed) || ![reference.q25, reference.q75].every(finite)) return "";
+    const lower = Number(clip.observed) < Number(reference.q25);
+    if (!lower && Number(clip.observed) <= Number(reference.q75)) return "";
+    const category = describe(item).category;
+    if (category === "length") return `Mean stroke length in this clip was ${lower ? "shorter" : "longer"} than typical expert values for this phase.`;
+    const metric = category === "speed" ? "tool speed" : category === "removal" ? "bone removal rate" : null;
+    return metric ? `In this clip, ${metric} was ${lower ? "lower" : "higher"} than typical expert values for this phase.` : "";
+  }
+
+  function safetyHtml(item, clip) {
+    if (!finite(clip.observed)) return "";
+    const anatomy = typeof clip.anatomy === "string"
+      ? clip.anatomy.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2") : "";
+    const fact = describe(item).category === "boundary"
+      ? `Up to ${valueLabel(clip.observed)} ${clip.unit || item.unit || "mm"} deep`
+      : `${valueLabel(clip.observed)} ${clip.unit || item.unit || "s"} of poor visibility`;
+    return `<div class="event-safety-facts"><strong>${escape(fact)}</strong>${anatomy ? `<span>${escape(anatomy)}</span>` : ""}</div>`;
+  }
+
+  function comparisonHtml(item, clip) {
+    const reference = clip.reference || item.reference;
+    if (!reference?.available || !finite(clip.observed)) return "";
+    const { q25, median, q75 } = reference;
+    if (![q25, median, q75].every(finite) || Number(q25) > Number(median) || Number(median) > Number(q75)) return "";
+    const points = (reference.points || []).filter(finite).map(Number);
+    if (!points.length) return "";
+    // Trim only the displayed expert tails. Ranking and the selected value are untouched.
+    const spread = Number(q75) - Number(q25);
+    const trimmed = points.filter(value => value >= q25 - 1.5 * spread && value <= Number(q75) + 1.5 * spread);
+    const visible = trimmed.length ? trimmed : points;
+    const observed = Number(clip.observed);
+    const lower = Math.min(observed, Number(q25), ...visible);
+    const upper = Math.max(observed, Number(q75), ...visible);
+    const padding = Math.max((upper - lower) * .09, Math.abs(upper) * .02, .1);
+    const lo = Math.max(0, lower - padding), hi = upper + padding;
+    const x = value => 18 + (Number(value) - lo) / Math.max(hi - lo, .001) * 564;
+    const px = x(observed);
+    const unit = clip.unit || item.unit || reference.unit || "";
+    const label = `${valueLabel(observed)} ${unit}`;
+    const title = `${describe(item).title}: ${label}. Same-phase expert five-second window distribution; central half ${valueLabel(q25)} to ${valueLabel(q75)} ${unit}.`;
+    const sentence = comparisonSentence(item, clip, reference);
+    return `<svg class="event-comparison-plot" viewBox="0 0 600 106" role="img" aria-label="${escape(title)}"><title>${escape(title)}</title>
+      <line x1="18" x2="582" y1="70" y2="70" class="event-axis" />
+      <rect x="${x(q25)}" y="59" width="${Math.max(1, x(q75) - x(q25))}" height="14" rx="3" class="event-band"><title>Middle half of expert values</title></rect>
+      <line x1="${x(median)}" x2="${x(median)}" y1="56" y2="76" class="event-median" />
+      ${visible.map((value, index) => `<circle cx="${x(value)}" cy="${47 - index % 4 * 5}" r="2.3" class="event-expert-dot" />`).join("")}
+      <line x1="${px}" x2="${px}" y1="32" y2="77" class="event-current" />
+      <path d="M${px},26 l5,5 -5,5 -5,-5 Z" class="event-current-dot" />
+      ${[lo, (lo + hi) / 2, hi].map(value => `<text x="${x(value)}" y="96" text-anchor="middle" class="event-axis-label">${valueLabel(value)}</text>`).join("")}
+      </svg><div class="event-comparison-legend"><span title="Same-phase expert five-second windows"><i></i>Experts</span><span title="25th–75th percentiles of same-phase expert five-second window values"><i class="event-middle-half"></i>Middle half of experts</span><span><i class="event-this-clip"></i>This clip</span><span class="event-axis-unit">${escape(unit)}</span></div>${sentence ? `<p class="event-comparison-note">${escape(sentence)}</p>` : ""}`;
+  }
 
   function create(options) {
     const focus = document.getElementById("focusList");
-    // Moments are drawn inside the open topic; the old list under the video is only a fallback.
-    const fallbackList = document.getElementById("clipList");
-    let list = fallbackList;
-    const scroll = document.getElementById("clipScroll");
-    const map = document.getElementById("coachingMap");
-    const phaseMap = document.getElementById("phaseMap");
-    let items = [], selectedId = null, selectedIndex = null, expanded = true;
-    let openGroup = null;  // Safety / Drilling motion: closed until clicked, one at a time
-    const reviewed = options.isReviewed || (() => false);
-    const itemViewed = item => clipsFor(item).every((_, i) => reviewed(item, i));
+    const phaseTabs = document.getElementById("eventPhaseTabs");
+    const detail = document.getElementById("eventMomentDetail");
+    const actions = document.getElementById("eventMediaActions");
+    const keyframeButton = document.getElementById("eventKeyframeButton");
+    const localViewed = new Set();
+    let items = [], phases = [], activePhase = "all", expandedId = null, selectedId = null, selectedIndex = null;
+    const reviewed = options.isReviewed || ((item, index) => localViewed.has(reviewKey(item, index)));
     const selected = () => items.find(item => item.feedback_id === selectedId);
+    const itemViewed = item => allClipsViewed(item, reviewed);
+    const firstVisible = () => items.find(item => visibleClips(item, activePhase).length) || items[0];
 
-    function syncScroll() {
-      const maximum = Math.max(0, list.scrollHeight - list.clientHeight);
-      scroll.max = maximum;
-      scroll.value = list.scrollTop;
-      scroll.disabled = maximum < 1;
-      scroll.hidden = maximum < 1;
-      scroll.style.setProperty("--scroll-thumb-height", `${Math.max(28, list.clientHeight ** 2 / Math.max(1, list.scrollHeight))}px`);
-      const bounds = list.getBoundingClientRect();
-      const visible = [...list.querySelectorAll(".clip-row")].filter(row => {
-        const box = row.getBoundingClientRect();
-        return box.bottom > bounds.top + 1 && box.top < bounds.bottom - 1;
-      });
-      const count = list.children.length;
-      scroll.setAttribute("aria-valuetext", visible.length
-        ? `Moments ${Number(visible[0].dataset.momentIndex) + 1} to ${Number(visible.at(-1).dataset.momentIndex) + 1} of ${count}`
-        : "No review moments");
+    function updateDetail() {
+      const item = selected(), clip = item && selectedIndex != null ? clipsFor(item)[selectedIndex] : null;
+      const safety = item && describe(item).group === "Safety";
+      if (actions) actions.hidden = !clip || !safety || !options.hasMedia() || !keyframeFor(clip);
+      if (keyframeButton) keyframeButton.setAttribute("aria-pressed", "false");
+      if (!detail) return;
+      if (!clip) { detail.replaceChildren(); detail.hidden = true; return; }
+      if (safety) {
+        detail.innerHTML = safetyHtml(item, clip);
+      } else {
+        detail.innerHTML = comparisonHtml(item, clip);
+        if (clip.episode_window_count > 1 && finiteTime(clip.episode_start_s) && finiteTime(clip.episode_end_s)) {
+          detail.innerHTML += `<p class="event-representative-note">Representative window from ${timeLabel(clip.episode_start_s)}–${timeLabel(clip.episode_end_s)}</p>`;
+        }
+      }
+      detail.hidden = !detail.innerHTML;
     }
 
-    function revealMoment(index) {
-      const row = list.querySelector(`[data-moment-index="${index}"]`);
-      if (!row) return;
-      const top = row.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
-      const end = top + row.getBoundingClientRect().height;
-      if (top < list.scrollTop) list.scrollTop = top;
-      else if (end > list.scrollTop + list.clientHeight) list.scrollTop = end - list.clientHeight;
-      syncScroll();
-    }
-
-    function setTime(time) {
-      phaseMap.querySelectorAll(".phase-segment").forEach(segment => {
-        const active = time >= Number(segment.dataset.start) && time < Number(segment.dataset.end);
-        segment.setAttribute("aria-current", String(active));
+    function refreshViewed() {
+      focus.querySelectorAll("[data-feedback-id]").forEach(card => {
+        const item = items.find(row => row.feedback_id === card.dataset.feedbackId);
+        if (!item) return;
+        const complete = itemViewed(item), count = clipsFor(item).length;
+        const shown = visibleClips(item, activePhase).length;
+        card.classList.toggle("viewed", complete);
+        const status = card.querySelector(".event-category-status");
+        const countLabel = activePhase === "all" ? `${count} ${count === 1 ? "moment" : "moments"}` : `${shown} of ${count}`;
+        status.textContent = complete ? `${activePhase === "all" ? "" : `${countLabel} · `}✓ Viewed` : countLabel;
+        status.classList.toggle("event-viewed", complete);
+        card.querySelectorAll("[data-moment-index]").forEach(button => {
+          const index = Number(button.dataset.momentIndex), viewed = reviewed(item, index);
+          button.querySelector(".event-moment-viewed").textContent = viewed ? "✓ Viewed" : "";
+          button.setAttribute("aria-current", String(item.feedback_id === selectedId && index === selectedIndex));
+        });
       });
+
     }
 
     function mark(index, action) {
       if (index >= 0) selectedIndex = index;
-      focus.querySelectorAll(".moment-button").forEach(button => {
-        button.setAttribute("aria-current", "false");
-        button.classList.remove("active");
-      });
-      list.querySelectorAll(".clip-row").forEach(row => {
-        row.setAttribute("aria-current", String(Number(row.dataset.momentIndex) === selectedIndex));
-      });
-      list.querySelectorAll("button").forEach(button => {
-        const value = action === "keyframe" ? button.dataset.keyframeIndex
-          : action === "context" ? button.dataset.clipIndex : button.dataset.momentIndex;
-        const active = index >= 0 && value != null && Number(value) === index;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      });
-      map.querySelectorAll("button").forEach(button => {
-        button.setAttribute("aria-pressed", String(button.dataset.feedbackId === selectedId
-          && Number(button.dataset.momentIndex) === selectedIndex));
-      });
-      if (index >= 0) revealMoment(index);
+      refreshViewed();
+      if (keyframeButton) keyframeButton.setAttribute("aria-pressed", String(action === "keyframe"));
+      document.getElementById("videoHeading").textContent = "Play context";
     }
 
-    function refreshViewed() {
-      focus.querySelectorAll(".coaching-item").forEach(card => {
-        const item = items[Number(card.dataset.coachingIndex)];
-        card.classList.toggle("viewed", Boolean(item) && itemViewed(item));
-      });
-      focus.querySelectorAll(".event-group").forEach(group => {
-        const members = items.filter(item => describe(item).group === group.dataset.group);
-        group.classList.toggle("viewed", members.length > 0 && members.every(itemViewed));
-      });
-    }
-
-    // One button per moment: "Moment @ 1:26". Safety moments are a point in time (their
-    // key frame) and pause the video there; drilling-motion moments play from the start.
-    const showsFrame = item => describe(item).group === "Safety";
-    function momentsHtml(item) {
-      const info = describe(item), frame = showsFrame(item);
-      return clipsFor(item).map((clip, index) => {
-        const start = frame ? momentTime(clip)
-          : finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : momentTime(clip);
-        const label = `Moment${start == null ? "" : ` @ ${shortTime(start)}`}`;
-        const usable = options.hasMedia() && start != null;
-        return `<button type="button" class="clip-row moment-button category-${info.category}" data-moment-index="${index}" aria-current="false" aria-label="${frame ? "Go to" : "Play"} ${escape(label)}" ${usable ? "" : "disabled"}><span class="moment-play" aria-hidden="true">${frame ? "◉" : "▶"}</span><span class="moment-label">${escape(label)}</span></button>`;
-      }).join("");
+    function openMoment(item, index, mode) {
+      const clip = clipsFor(item)[index];
+      if (!clip || !options.hasMedia()) return;
+      if (mode === "keyframe" && (describe(item).group !== "Safety" || !keyframeFor(clip))) return;
+      if (selectedId !== item.feedback_id) options.onSelect(item, "feedback_list");
+      selectedId = item.feedback_id; selectedIndex = index;
+      updateDetail();
+      localViewed.add(reviewKey(item, index));
+      options.onOpen(item, clip, index, mode);
+      refreshViewed();
     }
 
     function renderCards() {
-      if (!items.length) {
-        focus.innerHTML = `<div class="empty-state"><h2>No moments flagged</h2><p>No moments in this session met the review criteria.</p></div>`;
-        list = fallbackList;
+      const visible = items;
+      if (!visible.length) {
+        focus.innerHTML = `<div class="empty-state"><h2>No selected moments</h2><p>No moments are included in the current selection.</p></div>`;
         return;
       }
-      const groups = [...new Set(items.map(item => describe(item).group))];
-      // Opening Safety or Drilling motion shows every topic in it with its moments.
-      focus.innerHTML = groups.map(group => {
-        const groupOpen = group === openGroup;
-        return `<section class="coaching-group event-group${groupOpen ? " open" : ""}" data-group="${escape(group)}"><button type="button" class="event-group-toggle" aria-expanded="${groupOpen}"><span class="group-title"><span class="group-name">${escape(group)} <span class="expand-hint"></span></span>${GROUP_TEXT[group] ? `<span class="group-text">${escape(GROUP_TEXT[group])}</span>` : ""}</span><span class="group-state" aria-hidden="true"></span></button><div class="coaching-items" ${groupOpen ? "" : "hidden"}>${items.filter(item => describe(item).group === group).map(item => {
-        const info = describe(item), index = items.indexOf(item), clips = clipsFor(item);
-        return `<article class="coaching-item open category-${info.category}" data-coaching-index="${index}" data-feedback-id="${escape(item.feedback_id)}"><div class="coaching-toggle"><span class="coaching-name"><span class="coaching-title">${escape(info.title)}</span><span class="coaching-text">${escape(info.text)}</span></span><span class="coaching-count">${clips.length} ${clips.length === 1 ? "moment" : "moments"}</span></div><div class="coaching-detail"><div class="clip-list topic-moments" role="region" aria-label="Moments for ${escape(info.title)}">${groupOpen ? momentsHtml(item) : ""}</div></div></article>`;
-      }).join("")}</div></section>`;
-      }).join("");
-      list = focus.querySelector(`.coaching-item[data-feedback-id="${CSS.escape(selectedId || "")}"] .topic-moments`) || fallbackList;
-      focus.querySelectorAll(".event-group-toggle").forEach(button => button.addEventListener("click", () => {
-        const group = button.closest(".event-group").dataset.group;
-        openGroup = openGroup === group ? null : group;
-        renderCards();
-        focus.querySelector(`.event-group[data-group="${CSS.escape(group)}"] .event-group-toggle`)?.focus({ preventScroll: true });
-      }));
-      focus.querySelectorAll(".moment-button").forEach(button => button.addEventListener("click", () => {
-        const card = button.closest(".coaching-item");
-        const item = items[Number(card.dataset.coachingIndex)];
-        const index = Number(button.dataset.momentIndex);
-        if (item.feedback_id !== selectedId) {
-          selectedId = item.feedback_id;
+      const groups = [...new Set(visible.map(item => describe(item).group))];
+      focus.innerHTML = groups.map(group => `<section class="event-metric-group"><h3>${escape(group)}</h3>${visible.filter(item => describe(item).group === group).map(item => {
+        const info = describe(item), rows = visibleClips(item, activePhase), open = expandedId === item.feedback_id;
+        const bodyId = `event-moments-${items.indexOf(item)}`;
+        const status = activePhase === "all" ? item.status : item.phase_status?.[activePhase]?.status;
+        const empty = status === "unavailable"
+          ? `Review data unavailable${activePhase === "all" ? "" : " for this phase"}.`
+          : activePhase === "all" ? "No moments are included in the current selection."
+            : "No moments from this phase are included in the current selection.";
+        return `<article class="event-category${open ? " open" : ""} category-${info.category}" data-feedback-id="${escape(item.feedback_id)}">
+          <button type="button" class="event-category-toggle" aria-expanded="${open}" aria-controls="${bodyId}"><strong>${escape(info.title)}</strong><span class="event-category-meta"><span class="event-category-status"></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></span></button>
+          <div id="${bodyId}" class="event-ranked-moments" ${open ? "" : "hidden"}>${rows.length ? rows.map(({ clip, index }) => {
+            const start = finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : momentTime(clip);
+            const end = finiteTime(clip.t_end_s) ? Number(clip.t_end_s) : start;
+            const label = start == null ? "Time unavailable" : `${timeLabel(start)}${end > start ? `–${timeLabel(end)}` : ""}`;
+            const available = options.hasMedia() && start != null;
+            const phase = phaseLabel(clip, item);
+            return `<button type="button" class="event-moment" data-moment-index="${index}" aria-current="false" aria-label="Play context for moment ${clip.rank || index + 1}, ${escape(phase)}, ${escape(label)}" ${available ? "" : "disabled"}><span class="event-moment-rank">${clip.rank || index + 1}</span><span class="event-moment-phase">${escape(phase)}</span><span class="event-moment-time">${escape(label)}</span><span class="event-moment-viewed"></span></button>`;
+          }).join("") : `<p class="event-no-moments">${empty}</p>`}</div></article>`;
+      }).join("")}</section>`).join("");
+      focus.querySelectorAll(".event-category-toggle").forEach(button => button.addEventListener("click", () => {
+        const id = button.closest("[data-feedback-id]").dataset.feedbackId;
+        const item = items.find(row => row.feedback_id === id);
+        expandedId = expandedId === id ? null : id;
+        if (selectedId !== id) {
+          selectedId = id; selectedIndex = null;
           options.onSelect(item, "feedback_list");
+          updateDetail();
         }
-        list = card.querySelector(".topic-moments");
-        options.onOpen(item, clipsFor(item)[index], index, showsFrame(item) ? "frame" : "play");
+        renderCards();
+        focus.querySelector(`[data-feedback-id="${CSS.escape(id)}"] .event-category-toggle`)?.focus({ preventScroll: true });
+      }));
+      focus.querySelectorAll(".event-moment").forEach(button => button.addEventListener("click", () => {
+        const item = items.find(row => row.feedback_id === button.closest("[data-feedback-id]").dataset.feedbackId);
+        openMoment(item, Number(button.dataset.momentIndex), "context");
       }));
       refreshViewed();
     }
 
-    function renderClips() {
-      // Moments are drawn inside their topics by renderCards; nothing goes under the video.
-      fallbackList.replaceChildren();
-      document.getElementById("clipCategory").textContent = "";
-      syncScroll();
-    }
-
-    function select(id, index, source, openMoment) {
-      const item = items.find(row => row.feedback_id === id);
-      if (!item) return;
-      selectedId = id;
-      selectedIndex = index;
-      expanded = true;
-      openGroup = describe(item).group;
-      options.onSelect(item, source);
-      renderCards();
-      renderClips();
-      if (index != null) mark(index, "review");
-      if (openMoment) options.onOpen(item, clipsFor(item)[index], index, showsFrame(item) ? "frame" : "play");
-    }
-
-    function layoutMarkers() {
-      const width = map.clientWidth;
-      if (!width) return;
-      const coarse = window.matchMedia("(pointer: coarse)").matches;
-      const hit = coarse ? 36 : 24, rowHeight = coarse ? 36 : 18, lanes = [];
-      const duration = Math.max(1, Number(options.getDuration()));
-      [...map.children].sort((a, b) => Number(a.dataset.time) - Number(b.dataset.time)).forEach(button => {
-        const x = Number(button.dataset.time) / duration * width;
-        let lane = lanes.findIndex(previous => x - previous >= hit + 2);
-        if (lane < 0) { lane = lanes.length; lanes.push(-Infinity); }
-        lanes[lane] = x;
-        button.style.left = `${x}px`;
-        button.style.top = `${lane * rowHeight}px`;
-        button.style.width = `${hit}px`;
-        button.style.height = `${rowHeight}px`;
-      });
-      const height = `${Math.max(2, lanes.length) * rowHeight}px`;
-      if (map.style.height !== height) map.style.height = height;
-    }
-
-    function renderMap() {
-      const duration = Math.max(1, Number(options.getDuration()));
-      document.getElementById("durationLabel").textContent = `${timeLabel(duration)} total`;
-      document.getElementById("timelineEnd").textContent = timeLabel(duration);
-      phaseMap.innerHTML = options.getPhases().map(phase => {
-        const start = Number(phase.t_start_s), end = Number(phase.t_end_s);
-        const name = names[phase.phase_name] || String(phase.phase_name || "").replaceAll("_", " ");
-        const source = phase.phase_name === "pre_drilling" ? "Predrilling rule"
-          : phase.phase_source_kind === "model_phase_prediction" ? "Model-predicted phase" : "Manual phase annotation";
-        return `<div class="phase-segment" data-phase-id="${escape(phase.phase_id || "")}" data-start="${start}" data-end="${end}" style="left:${100 * start / duration}%;width:${100 * (end - start) / duration}%" title="${escape(name)} · ${source} · ${timeLabel(start)}–${timeLabel(end)}" aria-current="false">${escape(name)}</div>`;
-      }).join("");
-      map.innerHTML = items.flatMap(item => clipsFor(item).map((clip, index) => {
-        const info = describe(item), keyframe = keyframeFor(clip);
-        const time = keyframe?.time ?? (finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : null);
-        if (time == null) return "";
-        const label = `${info.title} · Moment ${index + 1} · ${phaseLabel(clip, item)} · ${timeLabel(time)}`;
-        return `<button type="button" class="map-marker category-${info.category}" data-feedback-id="${escape(item.feedback_id)}" data-moment-index="${index}" data-time="${time}" aria-label="${escape(label)}" title="${escape(label)}" aria-pressed="false"></button>`;
-      })).join("");
-      map.querySelectorAll("button").forEach(button => button.addEventListener("click", () => {
-        select(button.dataset.feedbackId, Number(button.dataset.momentIndex), "procedure_map", true);
+    function renderPhases() {
+      if (!phaseTabs) return;
+      phaseTabs.hidden = !phases.length;
+      phaseTabs.innerHTML = [{ phase: "all", label: "All phases" }, ...phases].map(phase => `<button type="button" data-phase="${escape(phase.phase)}" aria-pressed="${phase.phase === activePhase}">${escape(phase.label || names[phase.phase] || phase.phase)}</button>`).join("");
+      phaseTabs.querySelectorAll("button").forEach(button => button.addEventListener("click", () => {
+        if (button.dataset.phase === activePhase) return;
+        activePhase = button.dataset.phase;
+        const first = firstVisible();
+        selectedId = first?.feedback_id || null; selectedIndex = null; expandedId = selectedId;
+        if (first) options.onSelect(first, "phase_selector");
+        renderPhases(); renderCards(); updateDetail();
       }));
-      const legend = document.getElementById("mapLegend");
-      if (legend) {
-        legend.innerHTML = items.map(item => {
-          const info = describe(item);
-          return `<span class="category-${info.category}"><i aria-hidden="true"></i>${escape(info.title)}</span>`;
-        }).join("");
-      }
-      layoutMarkers();
     }
 
-    function refreshLayout() { layoutMarkers(); syncScroll(); }
     function render() {
+      const review = options.getReview?.();
+      phases = review?.phases || [];
       items = [...options.getItems()].sort((a, b) => describe(a).order - describe(b).order);
-      selectedId = items.some(item => item.feedback_id === selectedId) ? selectedId : items[0]?.feedback_id || null;
-      selectedIndex = null;
-      expanded = false;
-      openGroup = null;
-      document.getElementById("clipCount").textContent = `${items.length} ${items.length === 1 ? "topic" : "topics"}`;
-      renderMap(); renderCards(); renderClips();
-      if (selected()) options.onSelect(selected(), "automatic_first_item");
-      document.getElementById("videoHeading").textContent = "Session video";
-      refreshLayout();
+      activePhase = phases.some(phase => phase.phase === activePhase) ? activePhase : "all";
+      const first = firstVisible();
+      selectedId = first?.feedback_id || null; selectedIndex = null; expandedId = selectedId;
+      document.getElementById("clipCount").textContent = "";
+      document.getElementById("videoHeading").textContent = "Play context";
+      renderPhases(); renderCards(); updateDetail();
+      if (first) options.onSelect(first, "automatic_first_item");
     }
-    scroll.addEventListener("input", () => { list.scrollTop = Number(scroll.value); });
-    list.addEventListener("scroll", syncScroll);
-    new ResizeObserver(refreshLayout).observe(list);
-    new ResizeObserver(layoutMarkers).observe(map);
-    return { render, mark, setTime, refreshLayout, refreshViewed, clipsFor, titleFor: item => describe(item).title };
+
+    keyframeButton?.addEventListener("click", () => {
+      const item = selected();
+      if (item && selectedIndex != null) openMoment(item, selectedIndex, "keyframe");
+    });
+    return { render, mark, refreshViewed, clipsFor, titleFor: item => describe(item).title };
   }
-  return { create, describe, clipsFor, phaseLabel, keyframeFor, momentTime };
+  return { create, describe, clipsFor, visibleClips, allClipsViewed, comparisonHtml, comparisonSentence, safetyHtml, phaseLabel, keyframeFor, momentTime, reviewKey, contextBounds };
 })();

@@ -137,28 +137,25 @@ is needed. Restart an already running server after updating the application.
 In the **Study ID** entry (`expert-study` mode), **Show first** selects
 **Event-based** or **Summary**. New Study IDs follow this sequence:
 
-**Background questionnaire → Automatic analysis → Self-assessment before feedback
-→ First view → Self-assessment after first feedback → First-view questionnaire
-→ Second view → Self-assessment after second feedback → Second-view questionnaire
-→ Preference → Complete.**
+**Background questionnaire → Analysis ready → First view → First-view questionnaire
+→ Second view → Second-view questionnaire → Preference → Complete.**
 
 The background questionnaire is collected once per Study ID in that participant's
-file. Each recording has three separate self-assessments of that same
-recorded performance. The two view questionnaires each ask Clarity and
+file. The current resident protocol disables the three self-assessments
+(`SELF_ASSESSMENTS = False`); their versioned forms remain available in code.
+The two view questionnaires each ask Clarity and
 Actionability. Preference is collected after the final configured recording;
 earlier recordings continue to the next case after their second-view questionnaire.
 There are no free-switching tabs during the study. The selected view order is
 preserved across refresh and cases; it is selected at entry, not randomized by
 the application. Study teams can assign balanced orders outside the application.
 
-All questions are in English. The background form adapts the training-year question
-to Medical student, Resident, Fellow or Attending. Age and gender are optional.
-Clinical mastoidectomy and temporal bone laboratory experience use approximate
-**years since first hands-on experience before the recorded procedure**, not case
-or specimen counts. Zero means no prior experience; fractional years are accepted.
-Training duration is recorded in completed months, while prior attempts in this
-simulator remain an estimated count. Unknown and not-applicable answers remain
-distinct from zero.
+All questions are in English. The current `mastoid_surveys_v3_resident` background
+form asks role (Resident, Fellow or Attending), training year (resident PGY 1–5,
+fellow PGY 6–7, or whole years in independent practice), and prior cortical
+mastoidectomies (0, 1–5, 6–10, 11–20, or >20). These answers are required.
+Earlier instruments and submitted answers are preserved. This Event-view update
+does not change the questionnaires.
 
 The proposed OSATS-like self-assessment contains six items: protection of critical
 structures, visibility during drilling, drill control, purposeful bone removal,
@@ -169,7 +166,7 @@ competence threshold or automatic OSATS score is calculated. The same questions
 are repeated with blank responses for each round; earlier submitted ratings are
 not shown. Self-assessment uses the original recording without coaching overlays.
 Clarity and Actionability use 0 (Strongly disagree) through 4 (Strongly agree).
-Preference is Event-based, Summary or No preference.
+Preference is Event-based, Summary, A combination of both, or No preference.
 
 Submitted responses, timestamps, view order and the instrument snapshot are saved
 in **one JSON file per Study ID**, separately from the evidence database. Use
@@ -226,28 +223,47 @@ ratings. Use a **new Study ID** to try the complete questionnaire sequence.
 For measured processing latency and the proposed overlap with these questionnaires,
 see [Processing time and planned background processing](#processing-time-and-planned-background-processing).
 
-The Event-based step uses the same video-left, feedback-right layout and key-frame
-controls as the standalone feedback page. It has no additional coaching-moment
-entry form or audio recording controls. The two columns stack on narrow screens.
+The Event-based study step keeps feedback on the left and video on the right.
+The default **All phases** view shows the session-wide selection. Filters for
+**Early drilling**, **Antrum**, and **Incus** show only selected moments from that
+phase; they never refill the list or change ranks. Expand a category:
+**Safety** contains Critical Structure Violation and Poor Drill Visibility;
+**Drilling motion** contains Tool speed, Stroke length, and Removal rate.
+Each category contains at most four ranked moments across the entire session:
+at most 20 overall, with no phase quotas and no filling of unused slots. Each
+moment identifies its phase. An empty filtered list means no moment from that
+phase is included in this selection, not that the phase has no issues. These
+selected moments do not provide a complete assessment of each phase.
+The moment rows stay on one line; expanding a category shows all its selected
+rows (at most four), without an internal scrollbar. No additional
+coaching-moment entry form or audio recording controls are added.
 
-Coaching cards expand in place, one at a time. **Safety & visibility** contains
-Drill visibility (orange) and Critical Structure Violation (red), followed by
-**Motion**: Low tool movement speed (blue) and Short drill strokes (dark blue).
-Colors identify topics, not priority levels. Cards show the observation and action;
-priority badges and the separate "Why it matters" section are not displayed.
-These presentation labels do not change event qualification or establish injury.
+Clicking a moment row plays its interval with up to five seconds
+before and after it. A small **Key frame** button below the video on the right is
+available only for Safety with video and a verified anchor. It seeks the video
+to that time and pauses; the normal video Play control resumes playback. There
+is no separate frame image or Return to video control. Motion selection shows a
+compact expert distribution with a marker for the selected clip and axis units,
+without a numeric label above the marker. The legend includes **Middle half of
+experts** for the weighted same-phase Q25-Q75 band. A short sentence describes
+whether this clip's value is below or above typical expert values for this phase;
+it does not prescribe an ideal value. Extra playback context is not included in
+the measurement. The plot uses
+same-phase expert windows, while the Summary page continues to use whole-phase
+averages. Safety shows the observed measurement without an expert distribution:
+for example, **Up to 0.21 mm deep** for a critical-structure violation.
+When consecutive motion windows have been merged, the player also identifies
+the longer episode from which the representative five-second window was selected.
 
-The compact procedure map contains one marker per review moment. Selecting a
-marker opens its coaching card and corresponding moment. A verified native frame
-opens as a key frame; otherwise the video pauses at the interval start without
-claiming an exact source frame. All moments remain available in a separate
-scrolling list showing about three single-line rows; moving through this list does
-not scroll the player. Number, phase, time and actions share each row. Narrow
-layouts shorten action labels while retaining full accessible names and times.
-Phase bands and Summary phase controls use neutral grays, with the
-selected Summary phase underlined. Both Event entry modes share this presentation.
-The supporting explanation is a small, collapsed footer at the bottom of the
-Event view, after the Next section in study mode.
+An explicitly opened moment is marked **Viewed**; this means opened, not watched
+to completion. A category is marked Viewed after all its selected moments have
+been opened. In study mode, Next appears below the right-hand video card after all
+selected moments across all phases have been opened; empty categories do not
+block progress. On narrow screens it appears below the review. The separate
+dot timeline is removed; expert dots inside the comparison chart remain.
+Review marks are
+local to the page and reset on reload, as in the existing resident study.
+Questionnaire answers and saved study progression retain their existing storage.
 
 Generated video, phase and events use native HDF5 elapsed time, so their seconds
 can differ from older videos. Both legacy `data/*` and v3 `vision_data/*` /
@@ -320,7 +336,6 @@ phases are model predictions; anatomy/assistance conditions remain pooled.
 | Tool speed (mm/s) | Total valid adjacent path / total valid observed time |
 | Stroke length (mm) | Mean full path of eligible completed strokes in the phase |
 | Removal rate (mm3/s) | Supported removed volume / full observed phase duration |
-| Stroke frequency (strokes/s) | Recorded stroke endpoints / full observed phase duration |
 | Critical Structure Violation | Distinct canonical events with a safety-qualified segment in the phase; details show each structure and maximum supported boundary intrusion |
 | Drill Visibility (s) | Union of qualified visibility detections, clipped to the phase and mapped to native elapsed seconds; an estimated poor-visibility duration |
 
@@ -331,9 +346,10 @@ included even if shorter than five seconds. Speed does not bridge gaps over
 has no within-phase predecessor and is recorded as excluded, as is removal on
 unsupported long gaps. At least 80% valid coverage is required; the existing
 stroke completeness and invalid-segmentation exclusions also apply. Missing or
-ineligible values display **Unavailable**, not zero. Frequency is descriptive and
-adds no coaching trigger. The alternative drilling-time frequency remains saved
-in the window reference; it is not the Summary page's denominator.
+ineligible values display **Unavailable**, not zero. The Summary displays only
+Stroke length, Tool speed and Removal rate under Drilling motion. Stroke frequency
+is retained in the saved reference and analysis output but is not displayed or
+used as a coaching trigger; the reference files do not need regeneration.
 
 Each grey dot is one eligible expert recording. Experts are weighted equally,
 then their recordings equally; a known participant's own recordings are excluded.
@@ -404,12 +420,12 @@ thresholds or skill scores.
 
 | Coaching or metric | Current trigger / behavior |
 | --- | --- |
-| **Shorter strokes (Length)** | A valid window's mean complete-stroke Length is below the same-phase expert Q25, beyond numeric tie tolerance. At least one eligible completed stroke is required. One qualifying window is enough. Frequency is not part of this rule. |
-| **Lower tool-motion speed** | A valid window's speed is at or below the same-phase expert 10th percentile **and** at least 25% below the expert median. One qualifying window is enough. The prompt asks for contextual review, not faster drilling. |
+| **Stroke length** | A valid window's mean complete-stroke length is below same-phase expert Q25 or above Q75, beyond numeric tie tolerance. At least one eligible completed stroke is required. Frequency is not part of this rule. |
+| **Tool speed** | A valid window's speed is below same-phase expert Q25 or above Q75, beyond numeric tie tolerance. Suppress windows with at least 20% microscope/clutch activity. There is no additional 25% difference-from-median threshold for Event selection. |
 | **Safety-boundary / overshoot** | Within one structure and one frame: at least 10 removed voxels have EDT <= 0 and the minimum EDT is <= -0.1 mm, **or** minimum EDT is < -1.0 mm. No minimum duration applies. The weaker raw signal (any removed voxel with EDT <= 0) alone does not necessarily produce coaching. |
 | **Under-ledge / working-corridor exposure (Ray-v3)** | Episode span >= 0.3 s, at least 5 positive frames, mean blocked-contact ray fraction >= 70%, median registered contact count >= 20, and recording-level registered/raw contact-frame fraction >= 80%. Usable contacts and verified source binding are required. |
-| **Removal rate** | Compared with the same-phase reference for description; it does not independently trigger coaching. |
-| **Stroke frequency** | Both denominator definitions are saved in the window reference; neither triggers coaching. The Summary page compares whole-phase endpoint frequency. |
+| **Removal rate** | A valid window's removal rate is below same-phase expert Q25 or above Q75, beyond numeric tie tolerance. This is descriptive review selection, not an efficiency or safety judgment. |
+| **Stroke frequency** | Both denominator definitions remain saved in the window reference; neither triggers coaching. It is not displayed in Summary. |
 
 Ray-v3 marks a candidate frame when at least 50% of its sampled camera-to-contact
 rays are blocked. It samples at most 20 rays per frame after burr-radius + 1 mm
@@ -425,13 +441,37 @@ safety-qualified frames form review segments at gaps up to one second. Ray revie
 clips can combine qualified episodes separated by up to five seconds. These are
 event grouping gaps, not overlapping motion windows.
 
-Adjacent qualifying motion windows in the same phase are combined into one review
-interval for convenience; an isolated qualifying window still produces a clip.
-**Each coaching type appears once** (one Length card, one Speed card), with all its
-clips listed chronologically. Each clip shows its own phase. Phases remain separate
-for calculations and are never merged into one evidence interval.
+All three Motion metrics use the same strict Q25/Q75 eligibility rule. The saved
+reference's older speed-tail and relative-deficit settings remain available to
+legacy coaching consumers; they do not add another gate to this Event selection.
+The expert reference bytes and measurement protocol are unchanged.
 
-Rule definitions live in [motion_comparison.py](src/evidence_system/motion_comparison.py),
+For the Event view, adjacent qualifying windows in the same contiguous phase
+interval and direction form an episode. Gaps, ineligible windows, direction
+changes and phase boundaries break episodes. Keep the single window with the
+largest **absolute difference from its same-phase expert median divided by that
+phase's expert IQR (Q75 minus Q25)**, then rank representatives across all phases
+and retain at most four per metric. High and low values compete in the same list;
+values from different metrics are never ranked against one another. The scale
+makes comparisons across phases relative to each phase's expert variability.
+For a numerically degenerate IQR, use the same-phase 90th-minus-10th percentile
+spread, full reference range, then absolute median, in that order. An all-zero
+constant reference has no relative scale: nonzero departures precede finite
+scores and tie-break by absolute departure; the exported score is null, never
+Infinity. Each clip records its actual scale/method. These are descriptive
+ranking conventions, not calibrated probabilities or clinical severity scores.
+A single qualifying window is sufficient. The selected measurement remains five
+seconds, even when the surrounding episode or playback context is longer.
+
+Safety retains the existing qualification rules above. Rank Critical Structure
+Violation by maximum supported intrusion and Poor Drill Visibility by detected
+episode duration, with at most four per category across the session. Safety has no matched expert
+reference, so its ranking is not described as expert deviation. The original
+canonical events and legacy coaching payload remain available; the additional
+`event_review` payload selects what the ranked Event interface displays.
+
+Ranked selection lives in [event_review.py](src/evidence_system/event_review.py).
+Underlying measurement and rule definitions live in [motion_comparison.py](src/evidence_system/motion_comparison.py),
 [under_ledge_ray.py](src/evidence_system/under_ledge_ray.py),
 [edt_enrichment.py](src/evidence_system/frame_pipeline/edt_enrichment.py),
 [events/builder.py](src/evidence_system/events/builder.py) and
@@ -476,12 +516,18 @@ part of normal installation, migration or processing a new recording.
 
 ## Frame review
 
-**Go to key frame** displays the bound original image and pauses playback;
-**Play context** plays the interval with up to five seconds of context on either
-side. Playback context can overlap between clips; analysis windows do not.
-Original source files must remain readable for exact-frame display. The resampled
-review video can omit source frames, so timeline seeking alone does not guarantee
-the original image. Length anchors use an eligible completed stroke in the interval.
+Click a moment to **Play context** with up to five seconds on either side, clamped
+to video bounds; playback pauses at the context end. The small **Key frame** button
+below the video is Safety-only and seeks the existing video to the bound event
+anchor, then pauses. Continue using the video's normal Play control. The page
+does not load a separate source-frame image or offer a Return to video button.
+The button requires playable video and a verified anchor; no key frame is
+invented when source binding is unavailable.
+Playback context can overlap between clips; analysis windows do not.
+Source identity checks still apply. The resampled review video can omit source
+frames; this control is a video-time seek, not an original-image display. Motion
+moments use context playback and their measured window,
+without a key-frame button.
 
 ## Processing time and planned background processing
 
@@ -648,10 +694,10 @@ flowchart TD
     Read -->|Images and shared native clock| Video
     Saved --> Compare["Serve saved results<br/>Compare current measurements with same-phase experts"]
     Experts["Included expert distribution<br/>references/r4_motion_windows_v6.json<br/>39 expert recordings already processed"] --> Compare
-    Compare --> Coaching["Apply coaching rules<br/>Safety / under-ledge / lower speed / shorter strokes"]
-    Coaching --> Website["Existing feedback website<br/>Phase-labelled clips, Go to key frame, Play context"]
+    Compare --> Coaching["Merge consecutive same-direction motion windows<br/>Rank against same-phase experts across the session<br/>Top 4 per category, at most 20 total"]
+    Coaching --> Website["Event feedback website<br/>Context playback + clip distribution<br/>Safety-only key frame; Viewed markers"]
     Video --> Website
-    Read -->|Original source image for exact key frame| Website
+    Saved -->|Verified event time for paused video seek| Website
     Saved --> WholePhase["Whole-phase measurements<br/>Include partial tails; retain separate phase intervals"]
     PhaseExperts["Included phase reference<br/>references/r4_phase_summary_v1.json<br/>Same 39 recordings, reaggregated once"] --> WholePhase
     WholePhase --> Summary["Summary page: /summary/<br/>Safety values and motion distributions"]
@@ -664,9 +710,9 @@ time alignment. New-recording geometry retains its explicit verification status;
 using the R4 model resources does not certify a new recording's calibration.
 
 The expert JSON is loaded directly when serving feedback; the 39 expert recordings
-are not reprocessed. Speed and Length use the same-phase distribution, and one
-valid qualifying window can trigger coaching. Removal rate remains descriptive;
-whole-phase frequency is compared descriptively on the Summary page. The trigger
+are not reprocessed. Speed, Length and removal rate use the same-phase window
+distribution for ranked Event review; one valid qualifying window is sufficient.
+Summary displays the same three Motion metrics, aggregated over each phase. The trigger
 details are listed above. The Summary reference is loaded separately and does not
 change the event view's five-second coaching rules.
 

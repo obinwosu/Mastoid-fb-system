@@ -22,17 +22,8 @@
   </header>
 
   <main>
-    <section class="procedure-card" aria-labelledby="procedureHeading">
-      <h2 id="procedureHeading" class="sr-only">Procedure map</h2>
-      <span id="durationLabel" class="sr-only"></span>
-      <div id="phaseMap" class="phase-map"></div>
-      <div class="moment-timeline">
-        <span class="timeline-time">0:00</span>
-        <div id="coachingMap" class="coaching-map" aria-label="Individual coaching moments"></div>
-        <span id="timelineEnd" class="timeline-time">—</span>
-      </div>
-    </section>
-
+    <div class="event-selection-note"><p>Up to 4 moments per category, selected across all phases.</p><p>These selected moments do not provide a complete assessment of each phase.</p></div>
+    <nav id="eventPhaseTabs" class="event-phase-tabs" aria-label="Filter selected moments by phase" hidden></nav>
     <section class="review-workspace event-workspace" aria-label="Video and coaching review">
       <aside class="video-card" id="videoCard" aria-labelledby="videoHeading">
         <div class="section-title video-title">
@@ -42,12 +33,10 @@
         <div class="media-stage" id="mediaStage">
           <video id="sessionVideo" controls preload="metadata" playsinline>Your browser does not support the local review video.</video>
           <div id="videoUnavailable" class="video-unavailable hidden">A review video is not available for this session.</div>
-          <div id="keyframeOverlay" class="keyframe-overlay hidden">
-            <img id="keyframeImage" alt="" />
-            <div class="keyframe-caption"><span id="keyframeCaption"></span><button id="returnToVideo" type="button">Return to video</button></div>
-          </div>
         </div>
-        <p id="keyframeStatus" class="keyframe-status hidden" role="status" aria-live="polite"></p>
+        <div id="eventMediaActions" class="event-media-actions" hidden><button id="eventKeyframeButton" type="button" aria-pressed="false">Key frame</button></div>
+        <section id="eventMomentDetail" class="event-moment-detail" aria-label="Selected moment details" aria-live="polite" hidden></section>
+
         <div class="clip-heading"><h3>Review moments</h3><span id="clipCategory"></span></div>
           <div class="clip-scroll">
             <div id="clipList" class="clip-list" role="region" aria-label="Review moments"></div>

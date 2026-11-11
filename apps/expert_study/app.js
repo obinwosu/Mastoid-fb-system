@@ -8,7 +8,6 @@ const state = {
   videoBound: false,
   mediaAction: 0,
   metadataHandler: null,
-  keyframeIntent: false,
   keyframeSeek: null,
   firstReviewView: "event-based",
   reviewView: "event-based",
@@ -20,14 +19,14 @@ const state = {
 
 const eventReview = EventReview.create({
   getItems: feedbackItems,
-  getPhases: () => state.experience?.phases || [],
-  getDuration: () => state.experience?.session?.duration_s || 0,
+  getReview: () => state.experience?.event_review,
   hasMedia: () => Boolean(state.experience?.media?.available),
   onSelect(item, source) {
     beginMediaAction();
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
+    document.getElementById("videoHeading").textContent = "Play context";
     document.getElementById("videoWindow").textContent = "";
     state.currentClipIndex = null;
     if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
@@ -35,7 +34,7 @@ const eventReview = EventReview.create({
     }
   },
   onOpen: openReviewMoment,
-  isReviewed: (item, index) => state.reviewedMoments?.has(`${item.feedback_id}:${index}`) || false,
+  isReviewed: (item, index) => state.reviewedMoments?.has(EventReview.reviewKey(item, index)) || false,
 });
 
 const studySurveys = StudySurveys.create({
@@ -127,8 +126,8 @@ const REVIEW_DESCRIPTIONS = {
   },
   "event-based": {
     title: "Event-based feedback",
-    text: "Specific moments from your session flagged for review, each linked to the video.",
-    instruction: "Review every moment: open each topic below, or click the dots under the video. Once you have reviewed every moment, you may advance: please click Next below.",
+    text: "Selected moments from your session, with matching expert comparisons for motion.",
+    instruction: "Expand a category and select a moment to play its context. Use the phase filters to explore the selection. After opening every selected moment, select Next below.",
   },
 };
 
@@ -157,8 +156,9 @@ function eventProgress() {
   const topics = ordered.map(item => {
     const total = eventReview.clipsFor(item).length;
     let done = 0;
-    for (let i = 0; i < total; i += 1) if (state.reviewedMoments.has(`${item.feedback_id}:${i}`)) done += 1;
-    return { title: eventReview.titleFor(item), total, done };
+    for (let i = 0; i < total; i += 1) if (state.reviewedMoments.has(EventReview.reviewKey(item, i))) done += 1;
+    const title = `${item.phase && item.phase !== "session" ? `${EventReview.phaseLabel({}, item)} · ` : ""}${eventReview.titleFor(item)}`;
+    return { title, total, done };
   });
   return {
     done: topics.reduce((sum, t) => sum + t.done, 0),
@@ -174,7 +174,7 @@ function updateReviewGate() {
   if (state.reviewFlow?.stage === "review" && state.reviewView === "event-based" && state.experience) {
     const progress = eventProgress();
     const open = progress.done >= progress.total;
-    hint.textContent = open ? "You have reviewed every moment. Select Next when you are ready."
+    hint.textContent = open ? (progress.total ? "You have reviewed every moment. Select Next when you are ready." : "No moments require review. Select Next when you are ready.")
       : `Review every moment to continue (${progress.done} of ${progress.total} done). Still to review: ${progress.remaining.join(", ")}.`;
     if (!state.reviewNextPending) button.disabled = !open;
     document.getElementById("nextCard").classList.toggle("locked", !open);
@@ -353,7 +353,7 @@ async function startAnalysis() {
 }
 
 function feedbackItems() {
-  return state.experience?.feedback || [];
+  return state.experience?.event_review?.items || state.experience?.feedback || [];
 }
 
 function prepareExperience(experience) {
@@ -466,25 +466,12 @@ function keyframeFor(clip) {
   return EventReview.keyframeFor(clip);
 }
 
-function clearKeyframe() {
-  state.keyframeIntent = false;
-  state.keyframeSeek = null;
-  const image = document.getElementById("keyframeImage");
-  image.onload = null;
-  image.onerror = null;
-  image.removeAttribute("src");
-  document.getElementById("keyframeOverlay").classList.add("hidden");
-  document.getElementById("keyframeStatus").classList.add("hidden");
-  document.getElementById("sessionVideo").removeAttribute("aria-hidden");
-  document.getElementById("sessionVideo").removeAttribute("tabindex");
-}
-
 function beginMediaAction() {
   state.mediaAction += 1;
   const video = document.getElementById("sessionVideo");
   if (state.metadataHandler) video.removeEventListener("loadedmetadata", state.metadataHandler);
   state.metadataHandler = null;
-  clearKeyframe();
+  state.keyframeSeek = null;
   return state.mediaAction;
 }
 
@@ -506,8 +493,7 @@ function markClip(index, action) {
   eventReview.mark(index, action);
 }
 
-function returnToVideo() {
-  if (!state.keyframeIntent) return;
+function clearKeyframeSelection() {
   beginMediaAction();
   markClip(-1, "context");
   const video = document.getElementById("sessionVideo");
@@ -515,74 +501,13 @@ function returnToVideo() {
 }
 
 function openReviewMoment(item, clip, index, mode) {
-  state.reviewedMoments.add(`${item.feedback_id}:${index}`);
+  if (!state.experience.media?.available || (mode === "keyframe" && !keyframeFor(clip))) return;
+  state.reviewedMoments.add(EventReview.reviewKey(item, index));
   eventReview.refreshViewed();
   updateReviewGate();
   const title = eventReview.titleFor(item);
-  if (mode === "play") { playMoment(clip, index); return; }
-  // Safety moments: pause the video at the event's time point (no still image).
-  if (mode === "frame") { pauseAtMoment(clip, index); return; }
-  if (mode === "context") { playClip(clip, title, index); return; }
-  if (keyframeFor(clip)) { jumpToKeyframe(clip, title, index); return; }
-  if (!state.experience.media?.available || clip.t_start_s == null || !Number.isFinite(Number(clip.t_start_s))) return;
-  const action = beginMediaAction();
-  const video = document.getElementById("sessionVideo");
-  video.pause();
-  state.stopAt = null;
-  state.currentClipIndex = index;
-  const time = Math.max(0, Number(clip.t_start_s));
-  document.getElementById("videoWindow").textContent = `Interval start · ${fmtTime(time)}`;
-  markClip(index, "review");
-  afterMetadata(action, () => {
-    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
-  });
-  logEvent("feedback_interval_opened", { clip_index: index, interval_start_s: time });
-}
-
-function pauseAtMoment(clip, index) {
-  const video = document.getElementById("sessionVideo");
-  const time = EventReview.momentTime(clip);
-  if (!state.experience.media?.available || time == null) return;
-  const action = beginMediaAction();
-  state.currentClipIndex = index;
-  state.stopAt = null;
-  state.keyframeIntent = false;
-  document.getElementById("keyframeOverlay")?.classList.add("hidden");
-  document.getElementById("keyframeStatus")?.classList.add("hidden");
-  video.pause();
-  document.getElementById("videoWindow").textContent = `Paused at ${fmtTime(time)}`;
-  markClip(index, "review");
-  afterMetadata(action, () => {
-    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
-  });
-  logEvent("feedback_moment_opened", { clip_index: index, time_s: time });
-}
-
-// Clicking a moment: start at the moment's labelled time and play through the flagged
-// stretch plus MOMENT_CONTEXT_AFTER_S of what followed.
-const MOMENT_CONTEXT_AFTER_S = 5;
-function playMoment(clip, index) {
-  const video = document.getElementById("sessionVideo");
-  // Start where the moment's label starts ("Moment @ 1:26 to 1:31").
-  const start = Number.isFinite(Number(clip.t_start_s)) ? Math.max(0, Number(clip.t_start_s)) : EventReview.momentTime(clip);
-  if (!state.experience.media?.available || start == null) return;
-  const action = beginMediaAction();
-  state.currentClipIndex = index;
-  state.keyframeIntent = false;
-  document.getElementById("keyframeOverlay")?.classList.add("hidden");
-  document.getElementById("keyframeStatus")?.classList.add("hidden");
-  video.pause();
-  const end = Number.isFinite(Number(clip.t_end_s)) ? Number(clip.t_end_s) : start;
-  // Keep playing 5 s past the flagged window for context (user decision 2026-11-07).
-  const stop = Math.min(Number(state.experience.session.duration_s), Math.max(end, start + 5) + MOMENT_CONTEXT_AFTER_S);
-  document.getElementById("videoWindow").textContent = `Playing from ${fmtTime(start)}`;
-  markClip(index, "play");
-  afterMetadata(action, () => {
-    video.currentTime = start;
-    state.stopAt = stop;
-    video.play().catch(() => {});
-  });
-  logEvent("feedback_moment_played", { clip_index: index, playback_start_s: start, playback_end_s: stop });
+  if (mode === "keyframe") jumpToKeyframe(clip, title, index);
+  else playClip(clip, title, index);
 }
 
 function playClip(clip, title, index) {
@@ -592,55 +517,34 @@ function playClip(clip, title, index) {
   state.currentClipIndex = index;
   state.stopAt = null;
   video.pause();
-  const start = Math.max(0, Number(clip.t_start_s) - 5);
-  const stop = Math.min(Number(state.experience.session.duration_s), Number(clip.t_end_s) + 5);
-  document.getElementById("videoHeading").textContent = "Session video";
-  document.getElementById("videoWindow").textContent = `${fmtTime(start)}–${fmtTime(stop)}`;
+  const bounds = EventReview.contextBounds(clip, state.experience.session.duration_s);
+  if (!bounds) return;
+  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoWindow").textContent = `${fmtTime(bounds.start)}–${fmtTime(bounds.end)}`;
   markClip(index, "context");
   afterMetadata(action, () => {
-    video.currentTime = start;
-    state.stopAt = stop;
+    const duration = Number.isFinite(video.duration) ? Math.min(video.duration, bounds.end) : bounds.end;
+    video.currentTime = Math.min(bounds.start, duration);
+    state.stopAt = duration;
     video.play().catch(() => {});
   });
-  logEvent("feedback_clip_played", { clip_index: index, playback_start_s: start, playback_end_s: stop });
+  logEvent("feedback_clip_played", { clip_index: index, clip_id: clip.clip_id, playback_start_s: bounds.start, playback_end_s: bounds.end });
 }
 
 function jumpToKeyframe(clip, title, index) {
   const keyframe = keyframeFor(clip);
-  if (!keyframe) return;
+  if (!keyframe || !state.experience.media?.available) return;
   const action = beginMediaAction();
   const video = document.getElementById("sessionVideo");
-  const image = document.getElementById("keyframeImage");
-  const status = document.getElementById("keyframeStatus");
   video.pause();
   state.currentClipIndex = index;
   state.stopAt = null;
-  state.keyframeIntent = true;
-  document.getElementById("videoHeading").textContent = "Session video";
-  document.getElementById("videoWindow").textContent = `Key frame · ${fmtTime(keyframe.time)}`;
-  document.getElementById("keyframeCaption").textContent = `Paused · ${fmtTime(keyframe.time)}`;
-  document.getElementById("returnToVideo").classList.toggle("hidden", !state.experience.media?.available);
+  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoWindow").textContent = `Paused · ${fmtTime(keyframe.time)}`;
   markClip(index, "keyframe");
-  status.textContent = "Loading key frame…";
-  status.classList.remove("hidden");
-  image.alt = `${title} — key frame at ${fmtTime(keyframe.time)}`;
-  image.onload = () => {
-    if (action !== state.mediaAction) return;
-    document.getElementById("keyframeOverlay").classList.remove("hidden");
-    status.classList.add("hidden");
-    video.setAttribute("aria-hidden", "true");
-    video.setAttribute("tabindex", "-1");
-  };
-  image.onerror = () => {
-    if (action !== state.mediaAction) return;
-    status.textContent = state.experience.media?.available
-      ? "This key frame could not be loaded. You can still play the surrounding video."
-      : "This key frame could not be loaded.";
-    document.getElementById("videoWindow").textContent = `Review moment · ${fmtTime(keyframe.time)}`;
-  };
-  image.src = keyframe.url;
-  if (state.experience.media?.available) afterMetadata(action, () => {
+  afterMetadata(action, () => {
     const time = Number.isFinite(video.duration) ? Math.min(keyframe.time, video.duration) : keyframe.time;
+    video.pause();
     state.keyframeSeek = time;
     video.currentTime = time;
   });
@@ -648,7 +552,9 @@ function jumpToKeyframe(clip, title, index) {
     clip_index: index,
     signal_time_s: keyframe.time,
     signal_frame_idx: clip.signal_frame_idx,
+    keyframe_frame_idx_global: clip.keyframe_frame_idx_global,
     anatomy: clip.anatomy,
+    presentation: "video_seek_and_pause",
   });
 }
 
@@ -661,7 +567,7 @@ function bindVideo() {
       video.pause();
       return;
     }
-    returnToVideo();
+    clearKeyframeSelection();
     logEvent("video_play", {
       current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
     });
@@ -669,10 +575,9 @@ function bindVideo() {
   video.addEventListener("pause", () => logEvent("video_pause", {
     current_time_s: Number(video.currentTime.toFixed(3)), clip_index: state.currentClipIndex,
   }));
-  document.getElementById("returnToVideo").addEventListener("click", returnToVideo);
   video.addEventListener("seeking", () => {
     if (state.keyframeSeek != null && Math.abs(video.currentTime - state.keyframeSeek) < .001) return;
-    returnToVideo();
+    clearKeyframeSelection();
   });
   video.addEventListener("seeked", () => {
     state.keyframeSeek = null;
@@ -681,7 +586,6 @@ function bindVideo() {
     });
   });
   video.addEventListener("timeupdate", () => {
-    eventReview.setTime(video.currentTime);
     if (state.stopAt != null && video.currentTime >= state.stopAt) {
       state.stopAt = null;
       video.pause();

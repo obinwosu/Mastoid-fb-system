@@ -4,6 +4,127 @@ Running list for the FIVRS resident study (branch `resident-study`). It records 
 was removed or changed from the original design, and open questions to discuss with
 the feedback system's author. Started 2026-11-07.
 
+## Current Event detail and Summary refinement (2026-11-10)
+
+The author approved the interactive design, then clarified that Key frame should
+seek the video and pause rather than display a separate original image.
+
+- Expanding a category shows all selected rows (at most four), without internal
+  scrolling. Global selection, phase filters, Viewed and Next rules are unchanged.
+- Key frame uses the verified event time in the existing video. It pauses there;
+  the normal video Play control continues. Removed the separate frame image,
+  caption, loading mode and Return to video control from both Event entry modes.
+  No image-only review action is offered when playable video is unavailable.
+- Event distributions retain expert dots, the current clip marker and units,
+  remove the numeric label above that marker, and label the band **Middle half
+  of experts**. The band denotes weighted same-phase expert-window Q25-Q75.
+  One short sentence describes the current clip's direction relative to typical
+  expert values. Stroke length wording explicitly refers to mean stroke length.
+- Critical Structure Violation uses concise text such as **Up to 0.21 mm deep**;
+  it does not repeat a Maximum measured intrusion label.
+- Summary displays only Stroke length, Tool speed and Removal rate under Drilling
+  motion. Frequency calculations, stored reference fields and API output are
+  retained; this is a display change and does not regenerate expert distributions.
+
+Validation: 595 Python tests and 22 Node tests passed, plus Ruff, JavaScript syntax
+and diff checks. Browser checks confirmed the video paused at the verified anchor
+and resumed with native Play, with no image overlay or Return button. All four
+rows had equal content/client height and visible overflow; the Motion chart had
+the new band legend/caption and no numeric marker label. Viewed/Next remained
+locked at 19 of 20 and enabled at 20. The live Summary displayed exactly three
+Motion rows. A new preview-only participant was used for Event checks, preserving
+the earlier preview's Summary progress and responses; no answers were fabricated.
+
+## Session-wide Event selection (2026-11-10)
+
+The author subsequently approved a smaller selection: **at most four moments per
+category across the session**, at most 20 overall. This supersedes the per-phase
+top-five count and speed eligibility rule documented in the earlier update below.
+
+- All phases is the default. Phase filters show the same fixed shortlist, with
+  no refill or rank changes. Rows show global rank, phase, time and Viewed on one
+  line. The page states that selection is not a complete assessment of any phase;
+  no selected moment in a phase does not imply that phase has no issues.
+- All three Motion metrics qualify strictly below same-phase expert Q25 or above
+  Q75, with numeric tie tolerance and existing coverage/clock/metric guards. There
+  is no additional relative-to-median 25% gate. The saved reference remains intact;
+  its old speed thresholds still describe the separate legacy coaching contract.
+- Consecutive, same-direction candidates within one phase interval form an
+  episode. Select its strongest actual five-second window, then rank across
+  phases by absolute median difference divided by matched-phase expert IQR.
+  README documents deterministic degenerate-scale fallbacks. The plot always uses
+  the representative window's own phase reference; a quiet line identifies its
+  longer episode where applicable. Safety retains existing qualification and
+  event grouping, ranked by intrusion or duration with four per category.
+- Category Viewed and Next use every selected moment, independent of the filter.
+  Feedback/video positions, context padding, Safety-only verified Key frame,
+  Summary calculations, surveys and existing responses are preserved.
+
+Validation: 595 Python tests, eight Node frontend contract tests, Python lint,
+JavaScript syntax and diff checks passed. Independent checks of 84 real-recording
+windows across all three Motion metrics matched eligibility, episode merging and
+global ranks. The selected set contains 20 moments (four per category): eight
+Safety, 12 Motion, including two high and ten low Motion values. Summary and
+legacy analysis outputs match the earlier service; database and both reference
+hashes are unchanged. Browser checks confirmed exact Safety frames, context
+playback, phase-specific plots, fixed filtered ranks and global Viewed state.
+Next stayed hidden at 19 of 20 even after changing filters and appeared after
+opening the twentieth. Checks used isolated preview state, without survey answers.
+
+## Earlier phase-filtered Event update (2026-11-10)
+
+The author approved the phase-filtered, ranked Event design. This section
+supersedes the older Event interaction notes below; questionnaire instruments,
+Summary calculations and saved participant responses are unchanged.
+
+- Keep feedback left and video right. Select Early drilling, Antrum or Incus.
+  Safety contains Critical Structure Violation and Poor Drill Visibility;
+  Drilling motion contains Tool speed, Stroke length and Removal rate.
+- Each phase/category shows at most five moments. For motion, use the existing
+  same-phase expert five-second reference with performer self-exclusion and
+  participant-balanced weights. Include both directions. Speed preserves the
+  active reference's 25% median-difference threshold with the 10th/90th percentiles;
+  Length and Removal rate select values outside Q25–Q75. Preserve coverage,
+  clock and stroke eligibility; suppress speed during >=20% microscope/clutch
+  activity. Rank by absolute median difference, not signed difference.
+- Adjacent qualifying windows in the same direction form an episode. Select its
+  most-deviant measured window before taking the top five. Safety keeps existing
+  qualification and ranks supported intrusion or detected duration. No matched
+  expert Safety distribution is currently available.
+- Click a one-line moment row to play five seconds before
+  through five seconds after the interval, clamped to the video. The small
+  Key frame button appears below the video on the right for Safety only and
+  uses a verified original source frame. Motion has no key-frame button.
+- The selected motion plot shows expert dots/distribution, a reference band and
+  the clip's actual value/unit. No percentage-below claim or duplicate numerical
+  comparison panel is added. Expert tail display clipping does not alter any
+  reference statistic, eligibility rule or rank; the selected marker remains
+  visible. Playback padding never enters the five-second measurement.
+- Viewed means explicitly opened, not watched in full. Mark a category after
+  all its selected moments are opened. Next requires all selected moments across
+  all phases, ignoring empty categories. These marks remain page-local and reset
+  on reload, matching the previous resident interface.
+- Follow-up clarification: removed the separate dot timeline and its renderer.
+  Expert comparison dots remain. Next retains the latest resident-study behavior:
+  hidden until all selected moments are opened, then shown below the right-hand
+  video card (at the bottom on narrow screens). It still leads to the questionnaire.
+- Fixed interaction logging for the ranked item IDs. Logging validates exact IDs
+  from the served payload without rebuilding analysis on each click; legacy IDs
+  and historical session inventory remain intact. Three focused regression tests
+  cover current/legacy IDs, rejected forged IDs and concurrent initialization.
+- The service adds `event_review` alongside the original coaching/feedback
+  payloads. Canonical events, models, source data, reference files and surveys are
+  preserved. The optional ten-second reference is not activated by this change.
+
+Validation: 578 Python tests, five Node frontend contract tests, Python lint and
+diff checks passed. A read-only real-recording audit independently reconstructed
+84 windows and verified all 51 selected moments (34 motion: 30 low/four high;
+17 Safety with verified source frames). The whole-phase response matched the
+pre-change service exactly and database/reference checksums were unchanged.
+Browser checks exercised context playback, source frames, minimal plots,
+phase/category Viewed state and the all-phase Next gate in isolated preview state.
+No real participant questionnaire answers were created or modified.
+
 ## Removed (can be brought back)
 
 | What | Where | How to restore |

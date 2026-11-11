@@ -1,18 +1,18 @@
 const state = {
   bootstrap: null, selectedId: null, stopAt: null,
-  mediaAction: 0, metadataHandler: null, keyframeIntent: false, keyframeSeek: null,
+  mediaAction: 0, metadataHandler: null, keyframeSeek: null,
 };
 
 const eventReview = EventReview.create({
   getItems: feedbackItems,
-  getPhases: () => state.bootstrap?.phases || [],
-  getDuration: () => state.bootstrap?.run?.duration_s || 0,
+  getReview: () => state.bootstrap?.event_review,
   hasMedia: () => Boolean(state.bootstrap?.media?.available),
   onSelect(item, source) {
     beginMediaAction();
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
+    document.getElementById("videoHeading").textContent = "Play context";
     document.getElementById("videoWindow").textContent = "Choose a review moment";
   },
   onOpen: openReviewMoment,
@@ -37,7 +37,7 @@ async function api(path) {
 }
 
 function feedbackItems() {
-  return state.bootstrap?.coaching_plan?.items || [];
+  return state.bootstrap?.event_review?.items || state.bootstrap?.coaching_plan?.items || [];
 }
 
 function renderRunSelector() {
@@ -61,25 +61,12 @@ function keyframeFor(clip) {
   return EventReview.keyframeFor(clip);
 }
 
-function clearKeyframe() {
-  state.keyframeIntent = false;
-  state.keyframeSeek = null;
-  const image = document.getElementById("keyframeImage");
-  image.onload = null;
-  image.onerror = null;
-  image.removeAttribute("src");
-  document.getElementById("keyframeOverlay").classList.add("hidden");
-  document.getElementById("keyframeStatus").classList.add("hidden");
-  document.getElementById("sessionVideo").removeAttribute("aria-hidden");
-  document.getElementById("sessionVideo").removeAttribute("tabindex");
-}
-
 function beginMediaAction() {
   state.mediaAction += 1;
   const video = document.getElementById("sessionVideo");
   if (state.metadataHandler) video.removeEventListener("loadedmetadata", state.metadataHandler);
   state.metadataHandler = null;
-  clearKeyframe();
+  state.keyframeSeek = null;
   return state.mediaAction;
 }
 
@@ -101,8 +88,7 @@ function markClip(index, action) {
   eventReview.mark(index, action);
 }
 
-function returnToVideo() {
-  if (!state.keyframeIntent) return;
+function clearKeyframeSelection() {
   beginMediaAction();
   markClip(-1, "context");
   const video = document.getElementById("sessionVideo");
@@ -111,19 +97,8 @@ function returnToVideo() {
 
 function openReviewMoment(item, clip, index, mode) {
   const title = eventReview.titleFor(item);
-  if (mode === "context") { playClip(clip, title, index); return; }
-  if (keyframeFor(clip)) { jumpToKeyframe(clip, title, index); return; }
-  if (!state.bootstrap.media?.available || clip.t_start_s == null || !Number.isFinite(Number(clip.t_start_s))) return;
-  const action = beginMediaAction();
-  const video = document.getElementById("sessionVideo");
-  video.pause();
-  state.stopAt = null;
-  const time = Math.max(0, Number(clip.t_start_s));
-  document.getElementById("videoWindow").textContent = `Interval start · ${fmtTime(time)}`;
-  markClip(index, "review");
-  afterMetadata(action, () => {
-    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
-  });
+  if (mode === "keyframe") jumpToKeyframe(clip, title, index);
+  else playClip(clip, title, index);
 }
 
 function playClip(clip, title, index) {
@@ -132,53 +107,32 @@ function playClip(clip, title, index) {
   const action = beginMediaAction();
   state.stopAt = null;
   video.pause();
-  const start = Math.max(0, Number(clip.t_start_s) - 5);
-  const stop = Math.min(Number(state.bootstrap.run.duration_s), Number(clip.t_end_s) + 5);
-  document.getElementById("videoHeading").textContent = "Session video";
-  document.getElementById("videoWindow").textContent = `${fmtTime(start)}–${fmtTime(stop)}`;
+  const bounds = EventReview.contextBounds(clip, state.bootstrap.run.duration_s);
+  if (!bounds) return;
+  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoWindow").textContent = `${fmtTime(bounds.start)}–${fmtTime(bounds.end)}`;
   markClip(index, "context");
   afterMetadata(action, () => {
-    video.currentTime = start;
-    state.stopAt = stop;
+    const duration = Number.isFinite(video.duration) ? Math.min(video.duration, bounds.end) : bounds.end;
+    video.currentTime = Math.min(bounds.start, duration);
+    state.stopAt = duration;
     video.play().catch(() => {});
   });
 }
 
 function jumpToKeyframe(clip, title, index) {
   const keyframe = keyframeFor(clip);
-  if (!keyframe) return;
+  if (!keyframe || !state.bootstrap.media?.available) return;
   const action = beginMediaAction();
   const video = document.getElementById("sessionVideo");
-  const image = document.getElementById("keyframeImage");
-  const status = document.getElementById("keyframeStatus");
   video.pause();
   state.stopAt = null;
-  state.keyframeIntent = true;
-  document.getElementById("videoHeading").textContent = "Session video";
-  document.getElementById("videoWindow").textContent = `Key frame · ${fmtTime(keyframe.time)}`;
-  document.getElementById("keyframeCaption").textContent = `Paused · ${fmtTime(keyframe.time)}`;
-  document.getElementById("returnToVideo").classList.toggle("hidden", !state.bootstrap.media?.available);
+  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoWindow").textContent = `Paused · ${fmtTime(keyframe.time)}`;
   markClip(index, "keyframe");
-  status.textContent = "Loading key frame…";
-  status.classList.remove("hidden");
-  image.alt = `${title} — key frame at ${fmtTime(keyframe.time)}`;
-  image.onload = () => {
-    if (action !== state.mediaAction) return;
-    document.getElementById("keyframeOverlay").classList.remove("hidden");
-    status.classList.add("hidden");
-    video.setAttribute("aria-hidden", "true");
-    video.setAttribute("tabindex", "-1");
-  };
-  image.onerror = () => {
-    if (action !== state.mediaAction) return;
-    status.textContent = state.bootstrap.media?.available
-      ? "This key frame could not be loaded. You can still play the surrounding video."
-      : "This key frame could not be loaded.";
-    document.getElementById("videoWindow").textContent = `Review moment · ${fmtTime(keyframe.time)}`;
-  };
-  image.src = keyframe.url;
-  if (state.bootstrap.media?.available) afterMetadata(action, () => {
+  afterMetadata(action, () => {
     const time = Number.isFinite(video.duration) ? Math.min(keyframe.time, video.duration) : keyframe.time;
+    video.pause();
     state.keyframeSeek = time;
     video.currentTime = time;
   });
@@ -189,17 +143,15 @@ async function init() {
     state.bootstrap = await api("/api/bootstrap");
     renderRunSelector();
     const video = document.getElementById("sessionVideo");
-    document.getElementById("returnToVideo").addEventListener("click", returnToVideo);
-    video.addEventListener("play", returnToVideo);
+    video.addEventListener("play", clearKeyframeSelection);
     video.addEventListener("seeking", () => {
       if (state.keyframeSeek != null && Math.abs(video.currentTime - state.keyframeSeek) < .001) return;
-      returnToVideo();
+      clearKeyframeSelection();
     });
     video.addEventListener("seeked", () => { state.keyframeSeek = null; });
     if (state.bootstrap.media?.available) {
       video.src = state.bootstrap.media.url;
       video.addEventListener("timeupdate", () => {
-        eventReview.setTime(video.currentTime);
         if (state.stopAt != null && video.currentTime >= state.stopAt) {
           video.pause(); state.stopAt = null;
         }

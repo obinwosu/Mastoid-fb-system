@@ -44,10 +44,11 @@ validated evidence contract, with two read-only recommendation views:
   video endpoint and event-view layout and adds no study data collection.
 
 The expert-study ID form selects the initial Event-based/Summary view. New sessions
-use `sequential_review_v2`: background once per Study ID, analysis, baseline
-self-assessment, first review, first post-feedback self-assessment and two-item
-questionnaire, second review, second post-feedback self-assessment and two-item
-questionnaire, then preference and completion. Preference follows the final
+use `sequential_review_v2`: background once per Study ID, analysis, first review
+and two-item questionnaire, second review and two-item questionnaire, then
+preference and completion. The current resident instrument is
+`mastoid_surveys_v3_resident`; `SELF_ASSESSMENTS = False` disables the three optional
+OSATS-like rounds without deleting their forms or earlier responses. Preference follows the final
 configured case; other cases continue after their second questionnaire. The same
 summary assets are embedded at their assigned step. There are no free-switching
 tabs and the entry selection is not randomized by the application.
@@ -86,19 +87,54 @@ identity for cohort exclusion; manifests must select the participant's own
 recording when collecting self-assessment.
 
 The Event-based study step reuses `/review-styles.css` and the recommendations
-workspace: video on the left, feedback on the right, with native key-frame and
-context playback controls. It does not render the legacy expert-moment capture
-form; historical saved contributions remain untouched. Study clip serialization
-retains verified key-frame bindings and per-clip phases from the same review plan.
+renderer, with feedback on the left and video on the right. It does not render the
+legacy expert-moment capture form; historical saved contributions remain untouched.
+Five session-wide categories contain Critical Structure Violation, Poor Drill
+Visibility, Tool speed, Stroke length and Removal rate. All phases is the default;
+phase filters narrow the existing selection without refilling or reranking it.
+
+`event_review.py` adds a `session_event_review_v2` selection to bootstrap and study
+analysis without replacing canonical events, `coaching_plan` or legacy `feedback`.
+Motion uses the existing source-bound observations and exact same-phase,
+participant-balanced expert-window references with performer self-exclusion.
+Select Motion values strictly outside weighted Q25/Q75, combine adjacent
+same-phase-interval, same-direction windows into episodes, keep the most-deviant
+window per episode and select four per metric across the session. Rank by
+absolute same-phase median difference divided by that phase's IQR (documented
+degenerate-scale fallbacks in the README). The reference's legacy speed gates do
+not apply to this new display policy. `items` contains five global categories;
+each clip binds its own phase reference and global rank. `phase_status` carries
+per-phase availability and counts; `phases` contains filter labels rather than
+duplicate selectable lists. Safety reuses qualified detections and true
+frame bindings; rank intrusion or duration, with no fabricated expert reference.
+No HDF5 rebuild, expert regeneration, model training or Summary aggregation change
+is required. See the README for the exact selection thresholds.
 
 `apps/recommendations/event-review.js`, served as `/event-review.js`, owns the
-shared Event card, moment-list and timeline rendering for both entry modes.
-Topic colors and ordering are display rules. Each existing clip remains present;
-marker positions use bound key-frame times when available and interval starts
-otherwise. Per-page media handling and study progression remain separate from
-this renderer. The player stays outside the independently scrolling moment list.
-Summary phase selection shares neutral phase colors; reference statistics and
-their current-recording markers are unchanged.
+shared phase/category, ranked moment-list and selected-clip distribution
+rendering for both entry modes. The separate dot timeline is removed.
+Clicking a row plays from five seconds
+before to five seconds after its measured interval, bounded by video duration.
+Only Safety offers the small Key frame button below the video on the right, when
+video and a verified event anchor are available. It seeks and pauses the existing
+video; no original-image overlay, image request or Return to video mode is used.
+Native Play resumes from the anchor. Pending metadata callbacks use the existing
+media-action guard so a stale request cannot override a later selection.
+A motion plot compares the selected measured window, excluding playback padding,
+with expert windows; it shows a marker, units, Middle half of experts legend and
+one directional sentence, without a numeric value above the marker. Summary
+still compares entire phases and displays only Stroke length, Tool speed and
+Removal rate; its frequency fields remain in the unchanged reference/API.
+Stable clip IDs and global list indices keep Viewed marks across phase/category changes. Explicit opening
+marks a moment; a category is complete only after all its selected moments are
+opened. The study Next gate includes the complete session-wide selection (at most
+20 moments), regardless of the active phase filter, ignores empty lists,
+and retains the existing page-local (not persisted) review-mark behavior. The
+Next card is hidden until completion, then appears below the right-hand video
+card (below the review on narrow screens), as in the resident-study baseline. Media
+handling and survey progression stay in each page integration. The player remains
+beside the moment list. Expanding a category shows all at-most-four rows with no
+internal scrolling.
 
 `GET /api/phase-summary` reads source-bound database observations, recomputes only
 the current recording's whole-phase metrics and loads the bundled reference.

@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 from uuid import uuid4
 
 from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
+from .event_review import build_event_review
 from .ray_v3_view import build_ray_v3_view
 from .retrieval import EvidenceRetriever
 from .study_storage import ParticipantStateFiles, normalize_participant_id
@@ -487,6 +488,8 @@ class FeedbackService:
         self._review_images: dict[str, bytes] = {}
         self._review_lock = threading.RLock()
         self._motion_cache: tuple | None = None
+        self._study_event_stimulus_ids: frozenset[str] | None = None
+        self._study_event_lock = threading.Lock()
         self.cohort_benchmark_path = cohort_benchmark_path
         self.phase_reference_path = phase_reference_path
         self.available_runs = [dict(row) for row in available_runs]
@@ -527,7 +530,9 @@ class FeedbackService:
         ray_v3, ray_source = self._current_visibility(summary["run"])
         benchmark = load_cohort_benchmark(self.cohort_benchmark_path)
         motion = None
+        motion_reference = None
         if benchmark and benchmark.get("schema") == "motion_expert_reference_v1":
+            motion_reference = benchmark
             motion = self._current_motion_comparison(summary["run"], benchmark)
             benchmark = None
         coaching_plan = build_session_coaching_plan(
@@ -537,7 +542,19 @@ class FeedbackService:
             benchmark,
             **({"motion_comparison": motion} if motion is not None else {}),
         )
-        self._enrich_review_keyframes(coaching_plan, summary["run"])
+        event_review = build_event_review(
+            events, phases, ray_v3, motion, motion_reference, duration_s=duration,
+            enrich_keyframes=lambda review: self._enrich_review_keyframes(
+                {"items": [*coaching_plan["items"], *review["items"]]}, summary["run"]
+            ),
+        )
+        # Interaction logging refers to the authoritative items served to the UI.
+        # Do not rebuild detectors for every click; media/evidence endpoints still
+        # perform their own source validation, independently of this ID snapshot.
+        self._study_event_stimulus_ids = frozenset(
+            str(item["feedback_id"])
+            for item in [*coaching_plan["items"], *event_review["items"]]
+        )
         return {
             "schema": "automatic_recommendations_v1",
             "run": {
@@ -552,6 +569,7 @@ class FeedbackService:
             "phases": phases,
             "events": events,
             "coaching_plan": coaching_plan,
+            "event_review": event_review,
             "motion_comparison": motion,
             "detection_status": {
                 "under_ledge": {**ray_v3["detection_status"], "source": ray_source},
@@ -1580,7 +1598,11 @@ class FeedbackService:
         session = store.start_session(
             participant_id=participant_id,
             run_id=self.run_id,
-            stimulus_ids=[str(row["feedback_id"]) for row in items],
+            stimulus_ids=list(dict.fromkeys([
+                *previous.get("stimulus_ids", []),
+                *(str(row["feedback_id"]) for row in items),
+                *sorted(self._study_event_stimulus_ids or ()),
+            ])),
             first_review_view=first_review_view,
             final_case=case["index"] >= case["total"],
         )
@@ -1645,7 +1667,7 @@ class FeedbackService:
         )
         bootstrap = self.bootstrap()
         feedback = []
-        for item in self._study_items():
+        for item in bootstrap["coaching_plan"]["items"]:
             feedback.append(
                 {
                     **{
@@ -1703,6 +1725,7 @@ class FeedbackService:
                 for row in bootstrap["phases"]
             ],
             "feedback": feedback,
+            "event_review": bootstrap["event_review"],
             "detection_status": bootstrap["detection_status"],
             "review_candidates": bootstrap["review_candidates"],
             "media": bootstrap["media"],
@@ -1891,10 +1914,13 @@ class FeedbackService:
         participant_id = normalize_participant_id(participant_id)
         if event_type in {"analysis_started", "analysis_completed"}:
             raise ValueError("Analysis status is recorded by the analysis service")
-        if stimulus_id and stimulus_id not in {
-            str(row["feedback_id"]) for row in self._study_items()
-        }:
-            raise KeyError(stimulus_id)
+        if stimulus_id:
+            if self._study_event_stimulus_ids is None:
+                with self._study_event_lock:
+                    if self._study_event_stimulus_ids is None:
+                        self.bootstrap()
+            if stimulus_id not in (self._study_event_stimulus_ids or frozenset()):
+                raise KeyError(stimulus_id)
         row = self._study().add_event(
             participant_id=participant_id,
             run_id=self.run_id,
