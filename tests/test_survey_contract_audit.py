@@ -30,6 +30,7 @@ def background():
         "role": "resident",
         "training_stage": {"status": "provided", "value": 3, "unit": "pgy"},
         "cortical_mastoidectomies": "1_5",
+        "vr_experience": "frequently",
     }
 
 
@@ -48,7 +49,8 @@ def payload_for(flow):
     if flow["stage"] == "self_assessment":
         return assessment(flow["assessment_round"])
     if flow["stage"] == "questionnaire":
-        return {"clarity": 0 if flow["index"] == 0 else 4, "actionability": 4}
+        return {"clarity": 0 if flow["index"] == 0 else 4, "actionability": 4,
+                "new_insight": 3, "overall_performance": 2 + flow["index"]}
     if flow["stage"] == "preference":
         return {"preferred_view": "no_preference"}
     return None
@@ -107,7 +109,7 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
     evidence_before = service.retriever.db_path.read_bytes()
     start = service.start_study(PARTICIPANT, first)
     instrument = deepcopy(start["surveys"])
-    assert instrument["version"] == "mastoid_surveys_v3_resident"
+    assert instrument["version"] == "mastoid_surveys_v5_1_clarity"
     for key in (
         "user_review_performed", "clinician_review_performed",
         "total_score_defined", "pass_threshold_defined",
@@ -264,9 +266,10 @@ def test_feedback_rating_bounds_are_not_osats_bounds(tmp_path, bad_rating):
         assert status == 200, result
         flow = result["review_flow"]
     before = service._study().participant_path(PARTICIPANT).read_bytes()
-    assert advance(service, flow, {"clarity": bad_rating, "actionability": 4})[0] == 400
+    answers = payload_for(flow)
+    assert advance(service, flow, {**answers, "clarity": bad_rating})[0] == 400
     assert service._study().participant_path(PARTICIPANT).read_bytes() == before
-    assert advance(service, flow, {"clarity": 0, "actionability": 4})[0] == 200
+    assert advance(service, flow, {**answers, "clarity": 0})[0] == 200
 
 
 def test_forged_step_id_and_another_participant_cannot_submit_current_answers(tmp_path):

@@ -25,6 +25,7 @@ def background():
         "role": "fellow",
         "training_stage": {"status": "provided", "value": 7, "unit": "pgy"},
         "cortical_mastoidectomies": "6_10",
+        "vr_experience": "occasionally",
     }
 
 
@@ -54,11 +55,11 @@ def test_intake_collects_background_then_reports_pending(tmp_path):
     assert "temporal_bone_lab_years" not in value["surveys"]["background"]["fields"]
     status, result = submit(service, value["review_flow"], background())
     assert status == 200, result
-    assert result["review_flow"]["stage"] == "review"
+    assert result["review_flow"]["stage"] == "baseline"
     status, pending = post(service, "/api/expert-study/analyze", {"participant_id": PARTICIPANT})
     assert status == 200 and pending["pending"]
-    # Nothing past the background can be submitted before the feedback exists.
-    status, result = submit(service, result["review_flow"], None)
+    # Baseline belongs to the real recording, never the temporary intake run.
+    status, result = submit(service, result["review_flow"], {"overall_performance": 4})
     assert status == 400 and "still being prepared" in result["error"]
 
 
@@ -76,8 +77,15 @@ def test_full_server_skips_the_background_answered_during_the_analysis(tmp_path,
         early._study().participant_path(PARTICIPANT)
     )
     value = start(full, view)
-    assert value["review_flow"]["stage"] == "review"
-    assert value["review_flow"]["current_view"] == view
+    assert value["review_flow"]["stage"] == "baseline"
+    assert value["review_flow"]["current_view"] is None
+    status, result = submit(full, value["review_flow"], {"overall_performance": 4})
+    assert status == 400 and "automatic analysis" in result["error"]
+    full.analyze_study(PARTICIPANT)
+    status, result = submit(full, value["review_flow"], {"overall_performance": 4})
+    assert status == 200, result
+    assert result["review_flow"]["stage"] == "review"
+    assert result["review_flow"]["current_view"] == view
     with full._study()._locked(PARTICIPANT):
         stored = full._study()._read_unlocked(PARTICIPANT)["expert_study"]
     record = stored["participants"][PARTICIPANT]["background"]
@@ -93,4 +101,4 @@ def test_reopening_the_intake_after_submitting_does_not_ask_again(tmp_path):
     service = intake(tmp_path)
     submit(service, start(service)["review_flow"], background())
     again = intake(tmp_path)
-    assert start(again)["review_flow"]["stage"] == "review"
+    assert start(again)["review_flow"]["stage"] == "baseline"

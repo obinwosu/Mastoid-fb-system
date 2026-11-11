@@ -44,18 +44,29 @@ validated evidence contract, with two read-only recommendation views:
   video endpoint and event-view layout and adds no study data collection.
 
 The expert-study ID form selects the initial Event-based/Summary view. New sessions
-use `sequential_review_v2`: background once per Study ID, analysis, first review
-and two-item questionnaire, second review and two-item questionnaire, then
+use `sequential_review_v2`: background once per Study ID, analysis, a one-item
+Overall performance baseline for each recording, first review
+and four-item questionnaire, second review and four-item questionnaire, then
 preference and completion. The current resident instrument is
-`mastoid_surveys_v3_resident`; `SELF_ASSESSMENTS = False` disables the three optional
+`mastoid_surveys_v5_1_clarity`; `SELF_ASSESSMENTS = False` disables the three optional
 OSATS-like rounds without deleting their forms or earlier responses. Preference follows the final
 configured case; other cases continue after their second questionnaire. The same
 summary assets are embedded at their assigned step. There are no free-switching
 tabs and the entry selection is not randomized by the application.
 
 `study_surveys.py` defines the versioned English instrument and validates answers.
-`apps/expert_study/surveys.js` renders the background, six-item OSATS-like forms,
-Clarity/Actionability and Preference with `surveys.css`. Self-assessment has its
+`apps/expert_study/surveys.js` renders the minimal background plus VR experience,
+one-item baseline, four-item post-feedback forms and Preference with `surveys.css`.
+Post-feedback items are Clarity and Actionability (0–4 agreement), New insight
+(0 Not at all to 4 A great deal, using its own item-specific scale), then Overall
+performance (required 1–5, based on the participant's own impression).
+Background VR uses Never / Occasionally / Frequently. The renderer reads options
+from the session definition; old v4 Yes/No VR and agreement-based New insight
+remain unchanged in saved sessions. No historical answers are reinterpreted.
+Baseline starts "Based on your own impression"; both post questions start
+"After reviewing this feedback, how would you now rate..." and refer to the same
+recorded procedure. The scales match; there is no Unable to judge option.
+The historical six-item self-assessment renderer remains available and has its
 own original-video player without coaching overlays. Current-step drafts use
 tab-local storage scoped by instrument, Study ID, recording and step; submitted
 answers are never used to prefill later rounds. A response records the exact
@@ -80,9 +91,12 @@ Public flow
 payloads omit saved answers. Next checks step ID, view, stage and payload before
 an atomic write; invalid and duplicate submissions cannot overwrite or skip
 steps. Background precedes analysis; other transitions require completed analysis.
-Existing v1 sessions retain their original placeholder sequence and records,
-including earlier reflection history. New Study IDs are required for an
-unexposed baseline under v2. Reviewer identity stays distinct from performer
+Existing sessions retain their frozen questionnaire definitions, sequence and records;
+validation uses that session's definition rather than the latest instrument.
+Old background records are reused without fabricating a VR answer. A new recording
+still collects its own baseline; an existing exposed session never gains a retroactive
+baseline. Intake's temporary `analysis-pending` run collects only background;
+the real recording owns the baseline after analysis is ready. Reviewer identity stays distinct from performer
 identity for cohort exclusion; manifests must select the participant's own
 recording when collecting self-assessment.
 

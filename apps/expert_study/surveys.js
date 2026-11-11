@@ -47,10 +47,9 @@ window.StudySurveys = (() => {
       return question(`survey-${name}`, label, help, control, { attrs: `data-measurement="${name}"` });
     }
 
-    function yesNo(name, label, help) {
-      const options = [["yes", "Yes"], ["no", "No"], ["not_sure", "Not sure"]]
-        .map(([value, text]) => `<label><input type="radio" name="${name}" value="${value}"><span>${text}</span></label>`).join("");
-      return `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">${label}</legend><p class="survey-help">${help}</p></div><div class="survey-q-control"><div class="survey-segmented">${options}</div></div></fieldset>`;
+    function choiceField(name, definition) {
+      const options = definition.options.map((value, index) => [value, definition.option_labels[index]]);
+      return `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">${escape(definition.label)}</legend></div><div class="survey-q-control">${pills(name, options)}</div></fieldset>`;
     }
 
     function section(n, id, title, body, note = "") {
@@ -59,14 +58,16 @@ window.StudySurveys = (() => {
 
     function pills(name, options) {
       return `<div class="survey-segmented">${options.map(([value, text]) =>
-        `<label><input type="radio" name="${name}" value="${value}"><span>${text}</span></label>`).join("")}</div>`;
+        `<label><input type="radio" name="${escape(name)}" value="${escape(value)}"><span>${escape(text)}</span></label>`).join("")}</div>`;
     }
 
-    function backgroundMarkup() {
+    function backgroundMarkup(definition) {
       const role = `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">Current role</legend></div><div class="survey-q-control">${pills("role", Object.entries(roles).map(([value, info]) => [value, info.label]))}</div></fieldset>`;
       const stage = `<div class="survey-q hidden" id="survey-stage-row"><div class="survey-q-text"><label id="survey-stage-label" class="survey-q-label" for="survey-stage">Current training year</label><p id="survey-stage-help" class="survey-help"></p></div><div class="survey-q-control">${Object.entries(roles).filter(([, info]) => info.pgy).map(([role, info]) => `<div id="survey-pgy-${role}" class="hidden">${pills(`pgy_${role}`, info.pgy.map(n => [String(n), `PGY-${n}`]))}</div>`).join("")}<div id="survey-stage-number" class="hidden">${numberInput("survey-stage", "training_stage", "years", "", { min: 0, unitId: "survey-stage-unit" })}</div></div></div>`;
       const count = `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">Number of prior cortical mastoidectomies performed</legend></div><div class="survey-q-control">${pills("cortical_mastoidectomies", MASTOIDECTOMY_COUNTS)}</div></fieldset>`;
-      return `<div class="survey-background">${section(null, "survey-training", "Training Level and Prior Experience", role + stage + count)}</div>`;
+      const vr = definition.fields.vr_experience
+        ? choiceField("vr_experience", definition.fields.vr_experience) : "";
+      return `<div class="survey-background">${section(null, "survey-training", "Training Level and Prior Experience", role + stage + count + vr)}</div>`;
     }
 
     function selfAssessmentMarkup(definition) {
@@ -78,7 +79,11 @@ window.StudySurveys = (() => {
     }
 
     function feedbackMarkup(definition) {
-      return `<div class="survey-feedback">${definition.items.map((item, i) => `<fieldset class="survey-feedback-question"><legend><span>Q${i + 1} · ${escape(item.label)}</span>${escape(item.text)}</legend><div class="survey-agreement-scale">${definition.scale.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${option.value}"><strong>${option.value}</strong><span>${escape(option.label)}</span></label>`).join("")}</div></fieldset>`).join("")}</div>`;
+      return `<div class="survey-feedback">${definition.items.map((item, i) => {
+        const scale = item.scale || definition.scale;
+        const missing = item.missing_options || definition.missing_options || [];
+        return `<fieldset class="survey-feedback-question"><legend><span>${definition.items.length > 1 ? `Q${i + 1} · ` : ""}${escape(item.label)}</span>${escape(item.text)}</legend><div class="survey-agreement-scale">${scale.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}"><strong>${escape(option.value)}</strong><span>${escape(option.label)}</span></label>`).join("")}</div>${missing.length ? `<div class="survey-missing-options">${missing.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}">${escape(option.label)}</label>`).join("")}</div>` : ""}</fieldset>`;
+      }).join("")}</div>`;
     }
 
     // The question is the page title, so the options stand alone (2026-11-07).
@@ -137,6 +142,10 @@ window.StudySurveys = (() => {
         cortical_mastoidectomies: chosen("cortical_mastoidectomies"),
       };
       if (!role || !stage || !answers.cortical_mastoidectomies) return null;
+      if (context.definitions.background.fields.vr_experience) {
+        answers.vr_experience = chosen("vr_experience");
+        if (!context.definitions.background.fields.vr_experience.options.includes(answers.vr_experience)) return null;
+      }
       return answers;
     }
 
@@ -152,12 +161,16 @@ window.StudySurveys = (() => {
         }
         return result;
       }
-      if (context.flow.stage === "questionnaire") {
+      if (["questionnaire", "baseline"].includes(context.flow.stage)) {
+        const definition = context.definitions[context.flow.stage === "baseline" ? "baseline" : "feedback"];
         const result = {};
-        for (const item of context.definitions.feedback.items) {
+        for (const item of definition.items) {
           const value = chosen(item.id);
-          if (value === "") return null;
-          result[item.id] = Number(value);
+          const options = [...(item.scale || definition.scale || []),
+            ...(item.missing_options || definition.missing_options || [])];
+          const selected = options.find(option => String(option.value) === value);
+          if (!selected) return null;
+          result[item.id] = selected.value;
         }
         return result;
       }
@@ -169,6 +182,7 @@ window.StudySurveys = (() => {
     function backgroundProgress() {
       const items = [Boolean(chosen("role")), Boolean(backgroundStage()),
         Boolean(chosen("cortical_mastoidectomies"))];
+      if (context.definitions.background.fields.vr_experience) items.push(Boolean(chosen("vr_experience")));
       return [items.filter(Boolean).length, items.length];
     }
 
@@ -251,7 +265,11 @@ window.StudySurveys = (() => {
       if (stage === "background") {
         title = "Background Questionnaire"; eyebrow = "";
         subtitle = "A few questions about your training and experience before today's session.";
-        markup = backgroundMarkup();
+        markup = backgroundMarkup(value.definitions.background);
+      } else if (stage === "baseline") {
+        title = value.definitions.baseline.title; eyebrow = "";
+        subtitle = value.definitions.baseline.instructions;
+        markup = feedbackMarkup(value.definitions.baseline);
       } else if (stage === "self_assessment") {
         title = value.definitions.self_assessment.title; eyebrow = `${["Before feedback", "After first feedback", "After second feedback"][value.flow.assessment_round]} · Assessment ${value.flow.assessment_round + 1} of 3`;
         subtitle = value.definitions.self_assessment.instructions;

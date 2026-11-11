@@ -137,27 +137,62 @@ is needed. Restart an already running server after updating the application.
 In the **Study ID** entry (`expert-study` mode), **Show first** selects
 **Event-based** or **Summary**. New Study IDs follow this sequence:
 
-**Background questionnaire → Analysis ready → First view → First-view questionnaire
+**Background questionnaire → Analysis ready → Overall performance (before feedback)
+→ First view → First-view questionnaire
 → Second view → Second-view questionnaire → Preference → Complete.**
 
 The background questionnaire is collected once per Study ID in that participant's
 file. The current resident protocol disables the three self-assessments
 (`SELF_ASSESSMENTS = False`); their versioned forms remain available in code.
-The two view questionnaires each ask Clarity and
-Actionability. Preference is collected after the final configured recording;
+The two view questionnaires each ask Clarity, Actionability, New insight and
+Overall performance. Preference is collected after the final configured recording;
 earlier recordings continue to the next case after their second-view questionnaire.
 There are no free-switching tabs during the study. The selected view order is
 preserved across refresh and cases; it is selected at entry, not randomized by
 the application. Study teams can assign balanced orders outside the application.
 
-All questions are in English. The current `mastoid_surveys_v3_resident` background
+All questions are in English. The current `mastoid_surveys_v5_1_clarity` background
 form asks role (Resident, Fellow or Attending), training year (resident PGY 1–5,
 fellow PGY 6–7, or whole years in independent practice), and prior cortical
-mastoidectomies (0, 1–5, 6–10, 11–20, or >20). These answers are required.
-Earlier instruments and submitted answers are preserved. This Event-view update
-does not change the questionnaires.
+mastoidectomies (0, 1–5, 6–10, 11–20, or >20), and one VR question:
+"Before today’s session, how often had you used a VR headset?"
+(Never / Occasionally / Frequently). This records subjective prior-use frequency,
+not proficiency. Older Yes/No answers are not converted to a frequency.
+These answers are required. Background is collected once per Study ID; an existing
+background record is preserved without inventing a missing VR response.
 
-The proposed OSATS-like self-assessment contains six items: protection of critical
+Before the first feedback view of **each new recording**, ask:
+"Based on your own impression, how would you rate your overall performance in the recorded procedure?"
+Use 1 Very poor, 2 Poor, 3 Fair, 4 Good or 5 Very good.
+A rating is required; there is no Unable to judge option.
+After each feedback format, explicitly ask for the participant's current rating
+after reviewing that feedback (wording below), using the same choices without
+prefilling the previous rating. This baseline is separate from the participant's shared
+background and does not restore the six-item OSATS-like questionnaire.
+
+Each post-feedback questionnaire contains:
+
+| Item | Wording | Responses |
+| --- | --- | --- |
+| Clarity | The feedback was easy to understand. | 0 Strongly disagree to 4 Strongly agree |
+| Actionability | The feedback helped me identify specific actions I could take to improve my performance. | 0–4 agreement |
+| New insight | To what extent did this feedback help you recognize aspects of your performance that you had not noticed before? | 0 Not at all, 1 A little, 2 Somewhat, 3 Quite a bit, 4 A great deal |
+| Overall performance | After reviewing this feedback, how would you now rate your overall performance in the recorded procedure? | Required 1–5 rating based on your own impression |
+
+New insight measures perceived new recognition. Zero means no new insight; it
+does not imply poor feedback or poor performance. Clarity and Actionability retain
+their agreement scales. Overall retains all five short verbal labels and requires
+an integer from 1 to 5 at all three time points. The rating cards and question
+spacing are compact; all labels remain visible, including on narrow screens. These
+are exploratory participant reports; no combined score is calculated. A change
+in self-rating does not establish improved skill or more accurate self-assessment.
+Existing sessions continue with their saved instrument and sequence; upgrading
+the application does not insert questions into an ongoing or completed session.
+Use a new preview Study ID to see the new instrument without changing old answers.
+During simulator processing, intake collects background only; the per-recording
+baseline appears after analysis is ready and before either feedback view.
+
+The disabled, historical OSATS-like self-assessment contains six items: protection of critical
 structures, visibility during drilling, drill control, purposeful bone removal,
 anatomical orientation, and procedure flow and planning. Each uses 1–5 with
 item-specific descriptions at 1, 3 and 5, plus separate Cannot assess and Not
@@ -565,7 +600,12 @@ The local receipt is `.local/validation/pipeline_timing_20261104/timing_receipt.
 that local benchmark directory is not included in Git. The measurement above is
 recorded here for migration and planning.
 
-### Planned overlap with questionnaires — not implemented
+### Full questionnaire/processing overlap — proposed
+
+The simulator intake currently collects shared background while processing and
+waits for the full server. In v4, the single Overall performance baseline is asked
+after analysis is ready. The more extensive overlap and independent readiness
+conditions below remain a proposal; they are not the current baseline behavior.
 
 **Target behavior:** participants can fill in the initial questionnaires while
 processing continues in the background. Entering the first feedback view requires

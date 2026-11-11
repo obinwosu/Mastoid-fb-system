@@ -78,7 +78,7 @@
 #surveyPanel #surveyError { margin: 10px 4px 0; }
 #surveyPanel .survey-draft-notice { color: var(--sv-muted); font-size: 13px; margin: 10px 4px 0; }
 /* Feedback-format questionnaire and preference keep a single card until they are redesigned. */
-#surveyPanel.survey-questionnaire form, #surveyPanel.survey-preference form { background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; padding: 0 26px 18px; }
+#surveyPanel.survey-questionnaire form, #surveyPanel.survey-baseline form, #surveyPanel.survey-preference form { background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; padding: 0 26px 18px; }
 #surveyPanel .survey-self-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 20px; align-items: start; }
 #surveyPanel .survey-video-column { min-width: 0; position: sticky; top: 18px; }
 #surveyPanel .survey-video-card { padding: 12px; background: #edf3f7; border: 1px solid var(--line); border-radius: 12px; }
@@ -120,13 +120,13 @@
 #surveyPanel.survey-self_assessment .survey-submit-row { width: calc((100% - 20px) * .425); margin: 14px 0 0 auto; }
 #surveyPanel.survey-self_assessment #surveyError, #surveyPanel.survey-self_assessment #surveyDraftNotice { margin-left: 57.5%; }
 #surveyPanel .survey-research-note { color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 13px; margin: 18px 0 0; }
-#surveyPanel.survey-questionnaire, #surveyPanel.survey-preference { max-width: 820px; }
-#surveyPanel .survey-feedback { padding: 25px 0; }
-#surveyPanel .survey-feedback-question + .survey-feedback-question { padding-top: 24px; margin-top: 26px; }
-#surveyPanel .survey-feedback-question legend { font-size: 15px; line-height: 1.5; margin-bottom: 15px; }
-#surveyPanel .survey-feedback-question legend > span { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-bottom: 7px; }
+#surveyPanel.survey-questionnaire, #surveyPanel.survey-baseline, #surveyPanel.survey-preference { max-width: 820px; }
+#surveyPanel .survey-feedback { padding: 18px 0; }
+#surveyPanel .survey-feedback-question + .survey-feedback-question { padding-top: 12px; margin-top: 18px; }
+#surveyPanel .survey-feedback-question legend { font-size: 15px; line-height: 1.5; margin-bottom: 10px; }
+#surveyPanel .survey-feedback-question legend > span { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-bottom: 4px; }
 #surveyPanel .survey-agreement-scale { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-#surveyPanel .survey-agreement-scale label { min-height: 115px; padding: 12px 7px; display: flex; align-items: center; flex-direction: column; gap: 7px; text-align: center; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
+#surveyPanel .survey-agreement-scale label { min-height: 84px; padding: 8px 7px; display: flex; align-items: center; flex-direction: column; gap: 5px; text-align: center; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
 #surveyPanel .survey-agreement-scale label:has(input:checked) { background: #e8f2fc; border-color: var(--blue); }
 #surveyPanel .survey-agreement-scale strong { font-size: 18px; font-weight: 600; }
 #surveyPanel .survey-agreement-scale label > span { font-size: 12px; color: var(--muted); line-height: 1.4; }

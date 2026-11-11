@@ -53,7 +53,7 @@ function reviewViewLabel(value) {
 
 function setReviewFlow(flow) {
   const modern = flow?.schema === "sequential_review_v2";
-  const stages = modern ? ["background", "self_assessment", "review", "questionnaire", "preference", "complete"]
+  const stages = modern ? ["background", "baseline", "self_assessment", "review", "questionnaire", "preference", "complete"]
     : ["review", "questionnaire", "complete"];
   if ((!modern && flow?.schema !== "sequential_review_v1") || !Array.isArray(flow.order)
       || !stages.includes(flow.stage) || (modern && !flow.step_id)) {
@@ -638,10 +638,11 @@ function renderReviewFlow() {
   document.getElementById("reviewTitle").textContent = about.title || label;
   document.getElementById("reviewDescription").textContent = about.text || "";
   document.getElementById("reviewInstruction").textContent = flow.stage === "review" ? about.instruction || "" : "";
-  if (modern && ["background", "self_assessment", "questionnaire", "preference"].includes(flow.stage)) {
+  if (modern && ["background", "baseline", "self_assessment", "questionnaire", "preference"].includes(flow.stage)) {
     document.getElementById("reviewProgress").classList.add("hidden");
     const status = flow.stage === "background" ? "Background Questionnaire"
-      : flow.stage === "self_assessment" ? `Self-assessment ${flow.assessment_round + 1} of 3`
+      : flow.stage === "baseline" ? "Before feedback"
+        : flow.stage === "self_assessment" ? `Self-assessment ${flow.assessment_round + 1} of 3`
         : flow.stage === "preference" ? "Feedback preference" : `Questionnaire ${step} · ${label}`;
     setHeaderStatus(status);
     document.getElementById("reviewProgressLabel").textContent = flow.stage === "self_assessment"

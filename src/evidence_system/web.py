@@ -198,7 +198,7 @@ class ExpertStudyStore(ParticipantStateFiles):
             if modern:
                 if stage == "complete":
                     raise ValueError("This review is already complete")
-                validated = validate_answers(stage, answers)
+                validated = validate_answers(stage, answers, flow["survey_definition"])
                 if validated is not None:
                     if step_id in flow["responses"]:
                         raise ValueError("This questionnaire has already been submitted")

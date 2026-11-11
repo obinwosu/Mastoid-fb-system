@@ -13,7 +13,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-SURVEY_VERSION = "mastoid_surveys_v3_resident"
+SURVEY_VERSION = "mastoid_surveys_v5_1_clarity"
 FLOW_SCHEMA = "sequential_review_v2"
 ROLE_UNITS = {
     "resident": "pgy",
@@ -22,10 +22,24 @@ ROLE_UNITS = {
 }
 # PGY bubbles by role: residents PGY 1-5, fellows PGY 6-7. Attendings type years in practice.
 ROLE_PGY = {"resident": [1, 2, 3, 4, 5], "fellow": [6, 7]}
-# The resident study leaves out the three self-assessments for now (2026-11-07).
-# Set True to bring them back; nothing else needs to change.
+# Retain the six-item flow for historical coverage; the current protocol uses one
+# overall-performance baseline. Reintroducing the six-item rounds needs a new instrument.
 SELF_ASSESSMENTS = False
 MASTOIDECTOMY_COUNTS = ["0", "1_5", "6_10", "11_20", "over_20"]
+OVERALL_PERFORMANCE_ITEM = {
+    "id": "overall_performance",
+    "label": "Overall performance",
+    "text": (
+        "After reviewing this feedback, how would you now rate your overall performance "
+        "in the recorded procedure?"
+    ),
+    "scale": [
+        {"value": value, "label": label}
+        for value, label in enumerate(
+            ["Very poor", "Poor", "Fair", "Good", "Very good"], start=1,
+        )
+    ],
+}
 
 SELF_ASSESSMENT_ITEMS = [
     {
@@ -129,7 +143,7 @@ SURVEY_DEFINITION: dict[str, Any] = {
     "version": SURVEY_VERSION,
     "protocol": {
         "schema": FLOW_SCHEMA,
-        "scope": "Self-assessment of the same recorded procedure at all three time points",
+        "scope": "Overall performance self-rating of the same procedure before and after feedback",
         "order_assignment": "Study entry selection; not automatic randomized assignment",
         "self_assessment_status": "Proposed OSATS-like research questionnaire; not validated",
         "user_review_performed": False,
@@ -138,6 +152,10 @@ SURVEY_DEFINITION: dict[str, Any] = {
         "pass_threshold_defined": False,
         "second_exposure": "Interpret as additional exposure after the first feedback format",
         "self_assessments_included": SELF_ASSESSMENTS,
+        "overall_performance_status": (
+            "Required 1-5 rating based on the participant's own impression; not a validated score"
+        ),
+        "overall_performance_timepoints": ["before_feedback", "after_first", "after_second"],
     },
     "background": {
         "title": "Background Questionnaire",
@@ -159,7 +177,23 @@ SURVEY_DEFINITION: dict[str, Any] = {
                 "options": MASTOIDECTOMY_COUNTS,
                 "option_labels": ["0", "1-5", "6-10", "11-20", ">20"],
             },
+            "vr_experience": {
+                "label": "Before today’s session, how often had you used a VR headset?",
+                "options": ["never", "occasionally", "frequently"],
+                "option_labels": ["Never", "Occasionally", "Frequently"],
+            },
         },
+    },
+    "baseline": {
+        "title": "Before feedback",
+        "instructions": "Please rate your performance before viewing feedback.",
+        "items": [{
+            **copy.deepcopy(OVERALL_PERFORMANCE_ITEM),
+            "text": (
+                "Based on your own impression, how would you rate your overall performance "
+                "in the recorded procedure?"
+            ),
+        }],
     },
     "self_assessment": {
         "title": "Mastoidectomy self-assessment",
@@ -182,11 +216,21 @@ SURVEY_DEFINITION: dict[str, Any] = {
         "title": "Feedback questionnaire",
         "instructions": "Please rate the feedback format you just reviewed.",
         "items": [
-            {"id": "clarity", "label": "Clarity", "text": "The feedback was clear to me."},
+            {"id": "clarity", "label": "Clarity", "text": "The feedback was easy to understand."},
             {"id": "actionability", "label": "Actionability", "text": (
                 "The feedback helped me identify specific actions I could take "
                 "to improve my performance."
             )},
+            {"id": "new_insight", "label": "New insight", "text": (
+                "To what extent did this feedback help you recognize aspects of your "
+                "performance that you had not noticed before?"
+            ), "scale": [
+                {"value": value, "label": label}
+                for value, label in enumerate([
+                    "Not at all", "A little", "Somewhat", "Quite a bit", "A great deal",
+                ])
+            ]},
+            copy.deepcopy(OVERALL_PERFORMANCE_ITEM),
         ],
         "scale": [
             {"value": value, "label": label}
@@ -263,50 +307,73 @@ def _measurement(
     return copy.deepcopy(item)
 
 
-def validate_background(answers: Any) -> dict[str, Any]:
-    row = _fields(answers, set(SURVEY_DEFINITION["background"]["fields"]), "Background answers")
+def validate_background(
+    answers: Any, definition: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    definition = SURVEY_DEFINITION if definition is None else definition
+    fields = definition["background"]["fields"]
+    row = _fields(answers, set(fields), "Background answers")
     role = row["role"]
-    if not isinstance(role, str) or role not in ROLE_UNITS:
+    role_units = fields["training_stage"]["role_units"]
+    role_pgy = fields["training_stage"].get("role_pgy", {})
+    if not isinstance(role, str) or role not in fields["role"]["options"]:
         raise ValueError("Choose a valid current role")
     stage = _fields(row["training_stage"], {"status", "value", "unit"}, "Training stage")
-    if stage["unit"] != ROLE_UNITS[role]:
+    if stage["unit"] != role_units[role]:
         raise ValueError("Training-stage unit does not match the selected role")
     if stage["status"] != "provided":
         raise ValueError("Give your training year or years in practice")
     _number(stage["value"], "Training stage", minimum=0, integer=True)
-    if role in ROLE_PGY and stage["value"] not in ROLE_PGY[role]:
-        years = ROLE_PGY[role]
+    if role in role_pgy and stage["value"] not in role_pgy[role]:
+        years = role_pgy[role]
         raise ValueError(f"{role.capitalize()}s choose PGY {years[0]}-{years[-1]}")
     count = row["cortical_mastoidectomies"]
-    if not isinstance(count, str) or count not in MASTOIDECTOMY_COUNTS:
+    if not isinstance(count, str) or count not in fields["cortical_mastoidectomies"]["options"]:
         raise ValueError("Choose the number of prior cortical mastoidectomies")
+    if "vr_experience" in fields:
+        value = row["vr_experience"]
+        if not isinstance(value, str) or value not in fields["vr_experience"]["options"]:
+            raise ValueError("Choose one of the available VR experience responses")
     return copy.deepcopy(row)
 
 
-def validate_answers(stage: str, answers: Any) -> dict[str, Any] | None:
+def validate_answers(
+    stage: str, answers: Any, definition: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    definition = SURVEY_DEFINITION if definition is None else definition
     if stage == "background":
-        return validate_background(answers)
+        return validate_background(answers, definition)
     if stage == "self_assessment":
-        row = _fields(answers, {item["id"] for item in SELF_ASSESSMENT_ITEMS}, "Self-assessment")
+        section = definition["self_assessment"]
+        row = _fields(answers, {item["id"] for item in section["items"]}, "Self-assessment")
         for key, value in row.items():
-            if type(value) is int and 1 <= value <= 5:
+            if type(value) is int and section["minimum"] <= value <= section["maximum"]:
                 continue
-            if isinstance(value, str) and value in {"cannot_assess", "not_applicable"}:
+            if isinstance(value, str) and value in {
+                option["value"] for option in section["missing_options"]
+            }:
                 continue
             raise ValueError(f"{key} must be 1–5, cannot_assess, or not_applicable")
         return copy.deepcopy(row)
-    if stage == "questionnaire":
-        row = _fields(answers, {"clarity", "actionability"}, "Feedback questionnaire")
-        for key, value in row.items():
-            if type(value) is not int or value not in range(5):
-                raise ValueError(f"{key} must be an integer from 0 to 4")
+    if stage in {"baseline", "questionnaire"}:
+        section = definition["feedback" if stage == "questionnaire" else "baseline"]
+        row = _fields(answers, {item["id"] for item in section["items"]}, section["title"])
+        for item in section["items"]:
+            key, value = item["id"], row[item["id"]]
+            choices = item.get("scale", section.get("scale", []))
+            missing = {option["value"] for option in item.get("missing_options", [])}
+            if type(value) is int and value in {option["value"] for option in choices}:
+                continue
+            if isinstance(value, str) and value in missing:
+                continue
+            raise ValueError(f"Choose a valid response for {key}")
         return copy.deepcopy(row)
     if stage == "preference":
         row = _fields(answers, {"preferred_view"}, "Preference questionnaire")
         if not isinstance(row["preferred_view"], str) or row["preferred_view"] not in {
-            "event-based", "summary", "combination", "no_preference",
+            option["value"] for option in definition["preference"]["options"]
         }:
-            raise ValueError("Choose event-based, summary, combination, or no_preference")
+            raise ValueError("Choose one of the available feedback preferences")
         return copy.deepcopy(row)
     if stage == "review":
         if answers is not None:
@@ -328,6 +395,8 @@ def protocol_steps(order: list[str], *, background: bool, final_case: bool) -> l
     steps = [step("background", "background", 0)] if background else []
     if SELF_ASSESSMENTS:
         steps.append(step("assessment_0", "self_assessment", 0, assessment_round=0))
+    else:
+        steps.append(step("baseline", "baseline", 0))
     for index, view in enumerate(order):
         steps.append(step(f"review_{index}", "review", index, view))
         if SELF_ASSESSMENTS:

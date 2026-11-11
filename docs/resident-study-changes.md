@@ -4,6 +4,96 @@ Running list for the FIVRS resident study (branch `resident-study`). It records 
 was removed or changed from the original design, and open questions to discuss with
 the feedback system's author. Started 2026-11-07.
 
+## Frequency, direct insight ratings and compact cards (2026-11-11)
+
+After discussing the response scales, the author approved
+`mastoid_surveys_v5_insight` for new sessions:
+
+- VR asks "Before today’s session, how often had you used a VR headset?"
+  with Never, Occasionally and Frequently. This is subjective use frequency,
+  not a proficiency assessment. Old Yes/No/Not sure answers are not converted.
+- New insight asks "To what extent did this feedback help you recognize aspects
+  of your performance that you had not noticed before?" Its own scale is
+  0 Not at all, 1 A little, 2 Somewhat, 3 Quite a bit, 4 A great deal.
+  Zero denotes no new recognition, not poor feedback or poor performance.
+- Clarity and Actionability retain their 0–4 agreement scales. Overall retains
+  all five verbal labels (Very poor, Poor, Fair, Good, Very good), the required
+  1–5 response and the previously approved baseline/post wording.
+- Rating-card minimum height is reduced from 115 to 84 px. Question spacing,
+  legend margins and inner padding are tighter without reducing label font size.
+  The narrow-screen layout retains horizontal options with a 46 px minimum height.
+- Stored v3/v4 instruments, answers and progress remain unchanged. VR controls
+  are rendered from the saved definition, including historical choices. Drafts
+  remain version/participant/recording/step specific.
+
+This supersedes the current-question choices described in the v4 implementation
+record below. Existing sessions continue their original instrument; use a new
+preview Study ID to see the revised choices.
+
+Validation: 656 Python tests and 29 Node checks passed, plus scoped Ruff,
+JavaScript syntax and diff checks. A synthetic HTTP run on saved P15T4 completed
+all five response records, including New insight zero and separate Overall
+ratings, with exact v5 snapshots. Existing USERSTUDYTEST content hash was unchanged.
+The isolated preview server was restarted on port 8818 using the same participant
+directory. SURVEY-V5-POST-PREVIEW is a display-only fixture starting at the first
+post questionnaire with no submitted answers; it is explicitly marked preview-only.
+Receipt: `.local/previews/surveys_v4_20261111/http_validation_v5.json`.
+The browser connection again returned `transport closed`, so these checks do
+not constitute visual browser validation. No evidence/model/reference changes.
+
+The author subsequently approved the Clarity wording "The feedback was easy
+to understand." New sessions use `mastoid_surveys_v5_1_clarity` to distinguish
+this wording from saved v5 instruments. Both post questionnaires use the new
+sentence; the five agreement choices and compact layout are unchanged.
+Existing response snapshots and participant progress keep their original wording.
+For this copy edit, 159 relevant Python tests and 29 Node checks passed. The
+restarted local service returned the new sentence for SURVEY-CLARITY-PREVIEW,
+a separate display-only fixture with no submitted answers.
+
+## Questionnaire extension implemented (2026-11-11; v4 record)
+
+The author requested the additions from the November 9 discussion draft.
+At this implementation step, new sessions used `mastoid_surveys_v4_reflection`:
+
+- Keep the minimal role, training-stage and prior cortical mastoidectomy questions;
+  add one question: "Have you used a virtual reality (VR) headset before today?"
+  Choices are Yes, No and Not sure.
+- After analysis is ready and before either feedback view, collect one Overall
+  performance rating for the current recording. Background remains once per
+  participant; this baseline belongs to each recording.
+- After each format, retain Clarity and Actionability, then add New insight and
+  Overall performance. The first three use 0–4 agreement; Overall requires
+  1 Very poor through 5 Very good. The author's clarification removes the draft's
+  Unable to judge option: this is the participant's own impression.
+  Baseline wording: "Based on your own impression, how would you rate your overall
+  performance in the recorded procedure?" Both post questionnaires use:
+  "After reviewing this feedback, how would you now rate your overall performance
+  in the recorded procedure?" All three share the same five anchors.
+- Do not prefill prior ratings or create a combined score. The six-item OSATS-like rounds remain
+  disabled. Entry-selected format order and existing preference are unchanged.
+- Preserve saved session instruments, progress and answers. Existing v3 sessions
+  still show and validate their original three background fields and two post
+  questions. Existing shared background is not rewritten to invent a VR answer.
+  A new case receives its own baseline even when background was already saved.
+- Intake collects only shared background while processing. Its temporary run
+  does not collect the recording-specific rating; the full server shows that
+  baseline after analysis is ready.
+
+Local HTTP validation completed the new flow on the saved P15T4 result, including
+the baseline readiness gate, both four-item post forms, required numeric ratings,
+five separate response snapshots and completion/resume. Synthetic answers live
+only in `.local/previews/surveys_v4_20261111/`, explicitly marked preview-only.
+Existing preview participant files and evidence/model/reference artifacts were
+not changed. Browser visual inspection could not run because the browser
+connection returned `transport closed`; automated UI logic and API checks are
+distinct from a visual check. Validation: 650 Python tests passed; after the final
+timing-specific wording change, all 59 reflection/intake tests passed again.
+All 28 Node checks, scoped Ruff and diff checks passed. The final numeric-only
+HTTP receipt is `.local/previews/surveys_v4_20261111/http_validation_required.json`;
+the earlier draft-option QA receipt is retained separately and is not current.
+This is questionnaire engineering, not evidence of
+clinical validity or improved self-assessment.
+
 ## Current Event detail and Summary refinement (2026-11-10)
 
 The author approved the interactive design, then clarified that Key frame should

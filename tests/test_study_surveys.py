@@ -39,6 +39,7 @@ def background(role="resident"):
             "status": "provided", "value": STAGE_FOR_ROLE[role], "unit": ROLE_UNITS[role],
         },
         "cortical_mastoidectomies": "0",
+        "vr_experience": "never",
     }
 
 
@@ -132,11 +133,10 @@ def test_self_assessment_missingness_is_distinct_and_never_imputed():
 
 @pytest.mark.parametrize("value", [True, False, -1, 5, 0.0, None, "0"])
 def test_feedback_requires_integer_zero_through_four(value):
+    answers = {"clarity": 0, "actionability": 4, "new_insight": 3, "overall_performance": 5}
     with pytest.raises(ValueError):
-        validate_answers("questionnaire", {"clarity": value, "actionability": 4})
-    assert validate_answers("questionnaire", {"clarity": 0, "actionability": 4}) == {
-        "clarity": 0, "actionability": 4,
-    }
+        validate_answers("questionnaire", {**answers, "clarity": value})
+    assert validate_answers("questionnaire", answers) == answers
 
 
 def test_instrument_is_frozen_for_a_session_and_response_snapshot():
@@ -215,8 +215,10 @@ def test_default_resident_study_flow_has_no_self_assessments(monkeypatch):
     monkeypatch.setattr(study_surveys, "SELF_ASSESSMENTS", False)
     flow = new_review_flow("summary", "start-time", background=True, final_case=True)
     stages = [step["stage"] for step in flow["steps"]]
-    assert stages == ["background", "review", "questionnaire", "review", "questionnaire",
-                      "preference", "complete"]
+    assert stages == [
+        "background", "baseline", "review", "questionnaire", "review", "questionnaire",
+        "preference", "complete",
+    ]
 
 
 @pytest.mark.parametrize("choice", ["event-based", "summary", "combination", "no_preference"])
