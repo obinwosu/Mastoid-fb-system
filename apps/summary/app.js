@@ -14,6 +14,7 @@ window.addEventListener("message", event => {
     document.documentElement.style.setProperty("--review-viewport-height", `${event.data.viewport_height}px`);
   }
   if (!summaryState.active) document.querySelectorAll("video, audio").forEach(media => media.pause());
+  else if (summaryState.data) reportCoverage();
 });
 const metricDefinitions = [
   { key: "stroke_length_mm", label: "Stroke length", unit: "mm" },
@@ -260,6 +261,14 @@ function groupOpened(event) {
     event.currentTarget.classList.add("seen");
     if (group === "motion") drawPlots();
     reportProgress();
+    reportCoverage(group);
+  }
+}
+
+function reportCoverage(group = null) {
+  if (embeddedSummary && window.parent !== window && summaryState.active) {
+    window.parent.postMessage({ type: "summary-review-coverage",
+      phase: selectedPhase().phase_name, group }, window.location.origin);
   }
 }
 
@@ -290,6 +299,7 @@ function renderPhase() {
 function selectPhase(index) {
   summaryState.phaseIndex = index;
   renderPhase();
+  reportCoverage();
   const first = validIntervals(selectedPhase())[0];
   if (first) goToTime(first.t_start_s);
 }
@@ -386,6 +396,10 @@ async function initializeSummary() {
     document.getElementById("summaryWorkspace").classList.remove("hidden");
     renderPhase();
     new ResizeObserver(drawPlots).observe(document.getElementById("motionMetrics"));
+    if (embeddedSummary && window.parent !== window) {
+      window.parent.postMessage({ type: "summary-review-ready" }, window.location.origin);
+      reportCoverage();
+    }
   } catch (error) {
     status.classList.add("error");
     status.textContent = error instanceof Error ? error.message : "The session summary could not be loaded.";

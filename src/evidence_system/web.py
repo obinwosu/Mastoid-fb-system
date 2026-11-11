@@ -24,6 +24,7 @@ from .coaching_plan import build_session_coaching_plan, load_cohort_benchmark
 from .event_review import build_event_review
 from .ray_v3_view import build_ray_v3_view
 from .retrieval import EvidenceRetriever
+from .review_timing import record_snapshot, refresh_summaries
 from .study_storage import ParticipantStateFiles, normalize_participant_id
 from .study_surveys import (
     FLOW_SCHEMA,
@@ -246,8 +247,25 @@ class ExpertStudyStore(ParticipantStateFiles):
                     **({"from_step_id": step_id, "to_step_id": flow["step_id"]} if modern else {}),
                 }
             )
+            refresh_summaries(session)
             self._write_unlocked(payload)
         return flow
+
+    def save_review_timing(
+        self, *, participant_id: str, run_id: str, snapshot: Any,
+    ) -> dict[str, Any]:
+        participant_id = normalize_participant_id(participant_id)
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
+            session = payload["expert_study"]["sessions"].get(
+                self._session_key(participant_id, run_id)
+            )
+            if not session:
+                raise ValueError("Start the expert-study experience before recording timing")
+            result = record_snapshot(session, snapshot, datetime.now(UTC).isoformat())
+            if result["accepted"]:
+                self._write_unlocked(payload)
+        return result
 
     def add_event(
         self,
@@ -1764,6 +1782,11 @@ class FeedbackService:
             ),
         }
 
+    def save_review_timing(self, participant_id: str, snapshot: Any) -> dict[str, Any]:
+        return self._study().save_review_timing(
+            participant_id=participant_id, run_id=self.run_id, snapshot=snapshot,
+        )
+
     def _public_moment(self, participant_id: str, row: Mapping[str, Any]) -> dict[str, Any]:
         public = {
             key: row.get(key)
@@ -1960,6 +1983,7 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
     if service.mode == "expert-study":
         assets.update({
             "/surveys.js": (ui_dir / "surveys.js", "text/javascript; charset=utf-8"),
+            "/review-timing.js": (ui_dir / "review-timing.js", "text/javascript; charset=utf-8"),
             "/surveys.css": (ui_dir / "surveys.css", "text/css; charset=utf-8"),
         })
     review_ui = _official_ui_directory("recommendations")
@@ -2152,6 +2176,7 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                 body = self._body(
                     12 * 1024 * 1024
                     if parsed.path == "/api/expert-study/coaching-moment"
+                    else 2 * 1024 * 1024 if parsed.path == "/api/expert-study/review-timing"
                     else 65536
                 )
                 participant_id = str(body.get("participant_id") or "")
@@ -2173,6 +2198,12 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                             participant_id, body.get("view"), body.get("stage"),
                             body.get("step_id"), body.get("answers"),
                         ),
+                    )
+                    return
+                if parsed.path == "/api/expert-study/review-timing":
+                    self._json(
+                        HTTPStatus.OK,
+                        service.save_review_timing(participant_id, body.get("snapshot")),
                     )
                     return
                 if parsed.path == "/api/expert-study/complete-experience":
@@ -2256,7 +2287,7 @@ class IntakeService:
         raise ValueError("Your feedback is still being prepared")
 
     bootstrap = phase_summary = original_review_frame = _pending
-    add_moment = delete_moment = complete_study = _pending
+    add_moment = delete_moment = complete_study = save_review_timing = _pending
 
     def start_study(
         self, participant_id: str, first_review_view: str = "event-based",

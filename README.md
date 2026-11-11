@@ -230,6 +230,52 @@ Current-step drafts are retained in the browser tab for refresh recovery and
 removed after a successful submission. Drafts are isolated by instrument version,
 Study ID, recording and step; they are not server submissions.
 
+### Feedback review time
+
+Both study formats are self-paced: there is no countdown, minimum viewing time
+or time limit. Background timing starts when the assigned feedback is rendered
+and its first video frame is usable, or video is explicitly unavailable. It stops
+at Next; a failed submission resumes timing. Initial analysis/loading and all
+questionnaires are excluded. These measurements do not change the existing
+Viewed/Next rules, which record opened content rather than verified understanding.
+
+Open the participant's JSON and find
+`expert_study.sessions[Study ID::run ID].review_timing.steps`.
+`review_0` and `review_1` identify presentation order; each includes `view`
+(`event-based` or `summary`) and these fields, in seconds:
+
+| Field | Meaning |
+| --- | --- |
+| `elapsed_s` | First ready display to the last observed review boundary. Includes interruptions and gaps between refreshed/reopened visits; stops at Next, before its submission wait. |
+| `foreground_s` | Observed time with the review visible and the containing browser document focused. Pausing the video still allows reading time. |
+| `video_playing_s` | Wall-clock playback time within foreground review. Excludes pause, seeking and buffering; playback speed does not multiply this time. It is part of `foreground_s`, not an additional duration to add. |
+| `unobserved_s` | Gaps without reliable observations, including disconnected/reopened visits and long suspended callbacks. Never treated as attentive viewing. |
+| `overlapping_observation_s` | Overlap between visits, useful for detecting multiple open tabs. Aggregate durations use interval unions to avoid double counting. |
+
+`coverage` records opened Event categories/moments and shown phases/filters, or
+Summary phases and opened Safety/Motion sections. It is descriptive coverage,
+not proof that every item was read. `coverage_may_include_post_exit` flags late
+coverage from a stale tab; its time contributions are still capped at review exit.
+`visit_count` and `review_exit_at_ms` help
+distinguish resumed and completed reviews. Raw cumulative visit snapshots are
+in the adjacent `review_timing.visits` object, with browser timestamps and server
+receipt times. Missing timing in historical sessions means **not measured**, not zero.
+
+The browser saves every five seconds and retries pending snapshots after refresh
+using a participant/recording-scoped local outbox. Next waits for a successful
+timing save before advancing. Retries are idempotent. Callback gaps longer than
+15 seconds, or detected clock discontinuities, receive no foreground/playback
+credit; this is a measurement safeguard, not a mouse-inactivity cutoff. Laptop
+sleep or an abrupt browser/device failure can leave unobserved time. Browser
+tab closure is a best-effort final save: if it never returns, an unacknowledged
+tail may be missing. An unfinished review has no `review_exit_at_ms`; do not
+interpret its last heartbeat as a completed review or its full intended duration.
+Browser
+storage disabled/full removes durable offline recovery, although in-memory retry
+and server saves remain available. Foreground time is an exposure proxy, not eye
+tracking or a measure of attention. No break button or questionnaire-duration
+measurement is added. Back up the participant files with the survey responses.
+
 To migrate an older shared JSON, first stop servers writing to it, then run:
 
 ```text

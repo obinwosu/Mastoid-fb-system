@@ -100,6 +100,31 @@ the real recording owns the baseline after analysis is ready. Reviewer identity 
 identity for cohort exclusion; manifests must select the participant's own
 recording when collecting self-assessment.
 
+Review timing uses `apps/expert_study/review-timing.js` for both Event and embedded
+Summary. The parent waits for rendered feedback plus first-frame readiness (or
+explicit media unavailability); Summary emits a ready message after its API fetch
+and render, rather than relying on iframe load. Actual browser visibility/focus
+and media events drive interval flags. Next suspends at the click boundary and
+requires an acknowledged snapshot before the flow transition; failed transitions
+resume. The final closed snapshot may retry independently after successful Next.
+The layout, survey instrument and opened-content gates remain unchanged.
+
+`POST /api/expert-study/review-timing` accepts participant ID and a versioned,
+cumulative visit snapshot. `review_timing.py` validates the reached review step,
+immutable visit identity, ordered intervals and increasing sequence; `web.py`
+stores it inside the existing participant transaction. The session's
+`review_timing.visits` retains raw snapshots and server receipt times; `.steps`
+contains per-order interval-union summaries. Previously reached steps accept late
+retries; future steps and intake reject timing. Server-recorded review exit caps
+stale-tab contributions. Historical sessions acquire no fabricated zero values.
+
+Five-second heartbeats and a participant/recording-scoped local outbox support
+refresh/retry. Foreground and video durations use observed monotonic intervals;
+delays over 15 seconds or wall/monotonic clock discontinuities remain unknown.
+First-ready-to-last-observed elapsed spans interruptions between visits. Video
+wall time is a subset of foreground time; neither implies attention. Raw intervals
+and overlap diagnostics are retained rather than adding concurrent tab counters.
+
 The Event-based study step reuses `/review-styles.css` and the recommendations
 renderer, with feedback on the left and video on the right. It does not render the
 legacy expert-moment capture form; historical saved contributions remain untouched.

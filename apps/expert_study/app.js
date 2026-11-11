@@ -15,6 +15,10 @@ const state = {
   summaryPendingTime: null,
   reviewFlow: null,
   reviewNextPending: false,
+  reviewTimer: null,
+  timingStep: null,
+  summaryReady: false,
+  timingCoverage: new Set(),
 };
 
 const eventReview = EventReview.create({
@@ -31,6 +35,7 @@ const eventReview = EventReview.create({
     state.currentClipIndex = null;
     if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
       logEvent("feedback_item_opened", { source, title: eventReview.titleFor(item) }, item.feedback_id);
+      if (source === "feedback_list") recordReviewCoverage(`category:${item.metric_key || item.feedback_id}`);
     }
   },
   onOpen: openReviewMoment,
@@ -117,6 +122,73 @@ function logEvent(eventType, details = {}, feedbackId = state.selectedId) {
     details,
   }).catch(() => {});
 }
+
+function recordReviewCoverage(key) {
+  if (state.reviewFlow?.stage !== "review" || state.reviewNextPending) return;
+  state.timingCoverage.add(key);
+  state.reviewTimer?.cover(key);
+}
+
+function initializeReviewTiming() {
+  state.reviewTimer?.destroy();
+  state.timingStep = null;
+  state.timingCoverage.clear();
+  const participantId = state.participantId;
+  state.reviewTimer = ReviewTiming.create({
+    participantId,
+    runId: state.start.run_id,
+    async send(snapshot, options = {}) {
+      const response = await fetch("/api/expert-study/review-timing", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ participant_id: participantId, snapshot }),
+        keepalive: options.keepalive === true,
+        signal: AbortSignal.timeout(10000),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Review time could not be saved. Please try Next again.");
+      return result;
+    },
+  });
+}
+
+// Both formats start after rendered feedback and a usable first video frame (or
+// explicit media unavailability). Summary's iframe load precedes its data fetch.
+function startReviewTiming() {
+  const flow = state.reviewFlow;
+  if (!state.reviewTimer || flow?.stage !== "review" || state.reviewNextPending
+      || document.getElementById("experiencePanel").classList.contains("hidden")) return;
+  const stepId = flow.step_id || `review_${flow.index}`;
+  if (state.timingStep === stepId) return;
+  const summary = flow.current_view === "summary";
+  if (summary && !state.summaryReady) return;
+  const doc = summary ? document.getElementById("summaryReviewFrame").contentDocument : document;
+  const video = doc?.getElementById("sessionVideo");
+  const unavailable = !video || video.classList.contains("hidden") || Boolean(video.error);
+  if (!unavailable && video.readyState < 2) {
+    if (!video.dataset.timingReadyBound) {
+      video.dataset.timingReadyBound = "true";
+      ["loadeddata", "canplay", "error"].forEach(type => video.addEventListener(type, startReviewTiming));
+    }
+    return;
+  }
+  state.reviewTimer.start({ stepId, view: flow.current_view, reviewIndex: flow.index, video });
+  state.timingStep = stepId;
+  state.timingCoverage.forEach(key => state.reviewTimer.cover(key));
+}
+
+window.addEventListener("message", event => {
+  const frame = document.getElementById("summaryReviewFrame");
+  if (event.origin !== window.location.origin || event.source !== frame?.contentWindow) return;
+  if (event.data?.type === "summary-review-ready") {
+    state.summaryReady = true;
+    window.requestAnimationFrame(startReviewTiming);
+  } else if (event.data?.type === "summary-review-coverage" && state.reviewView === "summary") {
+    const { phase, group } = event.data;
+    if (typeof phase !== "string" || phase.length > 100) return;
+    if (group == null) recordReviewCoverage(`phase:${phase}`);
+    else if (["safety", "motion"].includes(group)) recordReviewCoverage(`section:${phase}:${group}`);
+  }
+});
 
 const REVIEW_DESCRIPTIONS = {
   summary: {
@@ -218,6 +290,7 @@ async function enterStudy(participantId, firstReviewView) {
   state.start = value;
   state.firstReviewView = reviewViewName(value.first_review_view);
   setReviewFlow(value.review_flow);
+  initializeReviewTiming();
   state.reviewView = state.reviewFlow.current_view || state.firstReviewView;
   document.getElementById("interfaceVersion").textContent = String(
     value.interface_version || "pilot-ui-v1.4.1"
@@ -460,6 +533,7 @@ function selectReviewView(value, log = true) {
   } else syncReviewVideo(document.getElementById("sessionVideo"), currentTime);
   window.requestAnimationFrame(placeNextCard);
   if (log) logEvent("review_view_opened", { view, review_index: state.reviewFlow.index }, null);
+  window.requestAnimationFrame(startReviewTiming);
 }
 
 function keyframeFor(clip) {
@@ -503,6 +577,15 @@ function clearKeyframeSelection() {
 function openReviewMoment(item, clip, index, mode) {
   if (!state.experience.media?.available || (mode === "keyframe" && !keyframeFor(clip))) return;
   state.reviewedMoments.add(EventReview.reviewKey(item, index));
+  const coverage = [`moment:${EventReview.reviewKey(item, index)}`,
+    `category:${item.metric_key || item.feedback_id}`,
+    `phase:${clip.phase || clip.phase_name || item.phase || "unknown"}`];
+  coverage.forEach(key => {
+    if (state.reviewFlow?.stage === "review" && !state.reviewNextPending) {
+      state.timingCoverage?.add(key);
+      state.reviewTimer?.cover(key);
+    }
+  });
   eventReview.refreshViewed();
   updateReviewGate();
   const title = eventReview.titleFor(item);
@@ -684,7 +767,11 @@ async function advanceReviewFlow(answers = null) {
   if (surveyStep) studySurveys.setPending(true);
   buttons.forEach(button => { button.disabled = true; });
   error.classList.add("hidden");
+  const leavingReview = previous.stage === "review";
+  if (leavingReview) state.reviewTimer?.suspend();
   try {
+    if (leavingReview && !state.timingStep) throw new Error("Feedback is still loading. Please try Next again when it is ready.");
+    if (leavingReview) await state.reviewTimer?.flush();
     const payload = {
       participant_id: state.participantId,
       view: previous.current_view,
@@ -695,6 +782,13 @@ async function advanceReviewFlow(answers = null) {
       if (surveyStep) payload.answers = answers;
     }
     const result = await api("/api/expert-study/review-next", payload);
+    if (leavingReview) {
+      // The transition is already saved. A failed final acknowledgement stays in
+      // the timing outbox; it must not leave the displayed questionnaire behind.
+      await state.reviewTimer?.finish("next").catch(() => {});
+      state.timingStep = null;
+      state.timingCoverage.clear();
+    }
     if (surveyStep) studySurveys.clearDraft();
     setReviewFlow(result.review_flow);
     state.start.case_completed = result.case_completed;
@@ -703,6 +797,7 @@ async function advanceReviewFlow(answers = null) {
     renderReviewFlow();
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (err) {
+    if (leavingReview) state.reviewTimer?.resume();
     if (surveyStep) studySurveys.showError(err.message);
     else {
       error.textContent = err.message;
@@ -713,6 +808,7 @@ async function advanceReviewFlow(answers = null) {
     if (surveyStep) studySurveys.setPending(false);
     buttons.forEach(button => { button.disabled = false; });
     updateReviewGate();
+    if (leavingReview) window.requestAnimationFrame(startReviewTiming);
   }
 }
 
@@ -797,7 +893,15 @@ window.addEventListener("resize", () => {
   if (frame.hasAttribute("src")) frame.contentWindow?.postMessage({ type: "study-review-visibility", active, viewport_height: window.innerHeight }, window.location.origin);
 });
 document.getElementById("supportDetails").addEventListener("toggle", event => {
-  if (event.currentTarget.open) logEvent("support_details_opened");
+  if (event.currentTarget.open) {
+    logEvent("support_details_opened");
+    recordReviewCoverage("support_details");
+  }
+});
+
+document.getElementById("eventPhaseTabs").addEventListener("click", event => {
+  const phase = event.target.closest("button[data-phase]")?.dataset.phase;
+  if (phase && state.reviewView === "event-based") recordReviewCoverage(`phase_filter:${phase}`);
 });
 
 const participantFromUrl = new URL(window.location.href).searchParams.get("participant_id");

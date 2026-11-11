@@ -4,6 +4,38 @@ Running list for the FIVRS resident study (branch `resident-study`). It records 
 was removed or changed from the original design, and open questions to discuss with
 the feedback system's author. Started 2026-11-07.
 
+## Self-paced review timing (2026-11-11)
+
+Added the same background timing contract to Event-based and Summary-based study
+steps. No countdown, time limit, new controls, survey version or layout changes.
+Both wait for rendered feedback and usable first video frame (or explicitly
+unavailable media), suspend at Next and resume on failure. Initial loading and
+questionnaires are excluded. Existing Viewed gates still mean opened content.
+
+Each participant's case session now stores `review_timing`: cumulative raw visits
+and per-order summaries for elapsed, foreground, video wall time, unknown gaps,
+coverage and overlapping visits. Foreground is a visibility/focus proxy, not
+attention. Video is a subset of foreground. Five-second saves, scoped browser
+retry storage, interval unions and server-exit caps support refresh and stale
+tabs. Missing historical values are not converted to zero; late coverage is
+flagged separately. See README's Feedback review time section for field meanings.
+
+Validation: 689 Python checks, 57 final Node checks, 33 final targeted timing checks
+and Ruff/diff passed. Live browser QA used two separate display-only
+TIMING-EVENT-QA-20261111 / TIMING-SUMMARY-QA-20261111 IDs with no questionnaire
+answers. Verified actual context playback, keyframe pause, Summary playback and
+all phase-section openings, frozen totals during the post questionnaire, and
+refresh creating a second visit with an unknown loading gap. Focus, clock/sleep,
+duplicate and failure scenarios were covered by controlled tests. Receipt:
+`.local/previews/surveys_v4_20261111/timing-browser-validation.json`.
+Existing USERSTUDYTEST bytes were unchanged. Port 8818 serves the updated code;
+already-loaded old pages need reopening and cannot acquire retrospective timing.
+No source data, model or expert reference was changed. No commit or push.
+The final browser teardown did not acknowledge the second Event visit's close;
+its last heartbeat remains an open, incomplete review. Summary's Next exit and
+the earlier Event reload close were acknowledged. Final-close delivery is best
+effort, so an unfinished last heartbeat must not be treated as a completed duration.
+
 ## Frequency, direct insight ratings and compact cards (2026-11-11)
 
 After discussing the response scales, the author approved
