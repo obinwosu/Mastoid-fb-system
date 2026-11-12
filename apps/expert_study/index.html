@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FIVRS session feedback</title>
+  <title>User Perceptions on Performance Feedback in Simulation</title>
   <meta name="description" content="End-to-end surgeon experience of automated simulator feedback" />
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/review-styles.css" />
@@ -13,7 +13,7 @@
 <body>
   <header class="topbar">
     <div class="brand">
-      <div><h1>Session Feedback</h1></div>
+      <div><h1>User Perceptions on Performance Feedback in Simulation</h1></div>
     </div>
     <span id="interfaceVersion" class="version-badge">Pilot UI v1.4.1</span>
     <div id="headerStatus" class="header-status hidden" aria-live="polite">
@@ -24,6 +24,7 @@
   </header>
 
   <main>
+    <div id="backBar" class="back-bar hidden"><button id="backButton" type="button" class="back-button">← Back</button><p id="backError" class="form-error hidden" role="alert"></p></div>
     <section id="accessPanel" class="panel access-panel">
       <p class="eyebrow">Study access</p>
       <h2>Enter your assigned Study ID</h2>
@@ -43,7 +44,7 @@
           <input id="studyReady" type="checkbox" required />
           <span>I confirm that the study team has completed the applicable consent process and assigned this code.</span>
         </label>
-        <button class="primary-button" type="submit">Enter study</button>
+        <button class="primary-button" type="submit">Begin</button>
         <p id="accessError" class="form-error hidden" role="alert"></p>
       </form>
     </section>
@@ -84,14 +85,15 @@
     <section id="reviewProgress" class="review-progress hidden" aria-label="Review order" aria-live="polite">
       <ol id="reviewOrder"></ol>
       <p id="reviewProgressLabel"></p>
-      <h2 id="reviewTitle"></h2>
-      <p id="reviewDescription"></p>
+      <div class="review-heading-row">
+        <h2 id="reviewTitle"></h2>
+        <p id="reviewDescription"></p>
+      </div>
       <p id="reviewInstruction"></p>
     </section>
 
     <section id="experiencePanel" class="hidden">
       <div id="eventBasedReview" aria-label="Event-based review">
-      <div class="event-selection-note"><p>Up to 4 moments per category, selected across all phases.</p><p>These selected moments do not provide a complete assessment of each phase.</p></div>
       <nav id="eventPhaseTabs" class="event-phase-tabs" aria-label="Filter selected moments by phase" hidden></nav>
 
     <section class="review-workspace event-workspace" aria-label="Video and coaching review">

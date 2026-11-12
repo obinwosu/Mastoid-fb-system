@@ -169,9 +169,13 @@ video { display: block; width: 100%; max-height: 54vh; min-height: 180px; border
 .event-category-meta { display: flex; gap: 10px; align-items: center; color: #596975; font-size: 12px; white-space: nowrap; }
 .event-ranked-moments { padding: 6px; }
 .event-ranked-moments[hidden] { display: none; }
-.event-moment { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto 54px; gap: 5px; align-items: center; width: 100%; min-height: 41px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: #18242f; font-size: 13px; font-weight: 400; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.event-moment, .event-moment-header { display: grid; grid-template-columns: 58px 112px minmax(0, 1fr) 58px; gap: 5px; align-items: center; width: 100%; min-height: 41px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: #18242f; font-size: 13px; font-weight: 400; text-align: left; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .event-moment-phase { overflow: hidden; text-overflow: ellipsis; }
-.event-moment-viewed { text-align: right; }
+.event-moment-viewed { text-align: center; }
+.event-moment-header { gap: 5px; min-height: 0; padding: 2px 8px 4px; color: #596975; font-size: 11px; font-weight: 700; border-bottom: 1px solid #e3e9ee; margin-bottom: 4px; }
+.event-moment-header span:last-child { text-align: center; }
+.event-moment-rank { padding-left: 4px; }
+.event-comparison-title { margin: 0 0 4px; color: #18242f; font-size: 13px; font-weight: 700; }
 .event-moment + .event-moment { margin-top: 4px; }
 .event-moment:hover:not(:disabled), .event-moment[aria-current="true"] { background: #e3f2ed; }
 .event-moment[aria-current="true"] { box-shadow: inset 3px 0 #0e7c6b; }
@@ -209,4 +213,22 @@ video { display: block; width: 100%; max-height: 54vh; min-height: 180px; border
 }
 @media (pointer: coarse) {
   .event-moment, .event-media-actions button { min-height: 44px; }
+}
+
+/* Study guide: a soft pulsing blue outline on the one thing to click next (2026-11-11).
+   Drawn just inside the element (an outline paints above its contents) so scrolling
+   panels and the summary frame never clip it. */
+@keyframes guide-pulse {
+  0%, 100% { outline-color: rgba(37, 99, 235, .95); background-color: rgba(37, 99, 235, .10); }
+  50% { outline-color: rgba(37, 99, 235, .25); background-color: rgba(37, 99, 235, 0); }
+}
+@keyframes guide-pulse-out {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(37, 99, 235, .95), 0 0 0 5px rgba(37, 99, 235, .3); }
+  50% { box-shadow: 0 0 0 2px rgba(37, 99, 235, .95), 0 0 0 10px rgba(37, 99, 235, 0); }
+}
+.guide-pulse { outline: 3px solid rgba(37, 99, 235, .95); outline-offset: -3px; animation: guide-pulse 1.4s ease-in-out infinite; }
+.primary-button.guide-pulse { outline: none; animation-name: guide-pulse-out; }
+@media (prefers-reduced-motion: reduce) {
+  .guide-pulse { animation: none; }
+  .primary-button.guide-pulse { box-shadow: 0 0 0 2px rgba(37, 99, 235, .95), 0 0 0 5px rgba(37, 99, 235, .25); }
 }

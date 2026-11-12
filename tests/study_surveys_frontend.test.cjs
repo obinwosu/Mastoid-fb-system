@@ -63,7 +63,7 @@ const baselineOverall = { ...overall,
 const postOverall = { ...overall,
   text: "After reviewing this feedback, how would you now rate your overall performance in the recorded procedure?" };
 const definitions = {
-  version: "mastoid_surveys_v5_1_clarity",
+  version: "mastoid_surveys_v5_3_experience_items_closing",
   background: { fields: { role: {}, training_stage: {}, cortical_mastoidectomies: {},
     vr_experience: { label: "Before today’s session, how often had you used a VR headset?",
       options: ["never", "occasionally", "frequently"], option_labels: ["Never", "Occasionally", "Frequently"] } } },

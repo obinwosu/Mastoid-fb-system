@@ -35,7 +35,8 @@ def ready(store, *, first="event-based"):
                          stage="background", step_id="background", answers={
                              "role": "resident", "training_stage": {
                                  "status": "provided", "value": 2, "unit": "pgy",
-                             }, "cortical_mastoidectomies": "0", "vr_experience": "never",
+                             }, "cortical_mastoidectomies": "0", "vr_experience": "none",
+                             "vr_simulation_experience": "none", "drilling_simulator_experience": "none",
                          })
     store.add_event(participant_id=PARTICIPANT, run_id="case", event_type="analysis_completed")
     store.advance_review(participant_id=PARTICIPANT, run_id="case", view=None,

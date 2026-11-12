@@ -30,7 +30,9 @@ def background():
         "role": "resident",
         "training_stage": {"status": "provided", "value": 3, "unit": "pgy"},
         "cortical_mastoidectomies": "1_5",
-        "vr_experience": "frequently",
+        "vr_experience": "extensive",
+        "vr_simulation_experience": "none",
+        "drilling_simulator_experience": "none",
     }
 
 
@@ -53,6 +55,8 @@ def payload_for(flow):
                 "new_insight": 3, "overall_performance": 2 + flow["index"]}
     if flow["stage"] == "preference":
         return {"preferred_view": "no_preference"}
+    if flow["stage"] == "closing":
+        return {"practice_interest": "neutral", "comments": "  Liked the drill feel.  "}
     return None
 
 
@@ -109,7 +113,7 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
     evidence_before = service.retriever.db_path.read_bytes()
     start = service.start_study(PARTICIPANT, first)
     instrument = deepcopy(start["surveys"])
-    assert instrument["version"] == "mastoid_surveys_v5_1_clarity"
+    assert instrument["version"] == "mastoid_surveys_v5_3_experience_items_closing"
     for key in (
         "user_review_performed", "clinician_review_performed",
         "total_score_defined", "pass_threshold_defined",
@@ -132,6 +136,7 @@ def test_all_surveys_persist_exact_instrument_and_independent_rounds(tmp_path, f
         ("self_assessment", order[1], 2),
         ("questionnaire", order[1], None),
         ("preference", None, None),
+        ("closing", None, None),
     ]
     submitted = {}
     for stage, view, round_number in expected:
@@ -386,7 +391,7 @@ def test_two_case_services_share_background_but_only_last_case_asks_preference(t
     assert start["review_flow"]["assessment_round"] == 0
     second.analyze_study(PARTICIPANT)
     _, seen_second = finish(second, start["review_flow"])
-    assert seen_second[-1] == "preference"
+    assert seen_second[-2:] == ["preference", "closing"]
     end = saved(second)
     assert end["participants"][PARTICIPANT]["background"] == background_before
     assert end["sessions"][PARTICIPANT + "::case"] == first_case_before

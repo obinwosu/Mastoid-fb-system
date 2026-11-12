@@ -29,6 +29,7 @@ from .study_storage import ParticipantStateFiles, normalize_participant_id
 from .study_surveys import (
     FLOW_SCHEMA,
     SURVEY_DEFINITION,
+    back_target,
     new_review_flow,
     public_review_flow,
     response_record,
@@ -62,6 +63,7 @@ EXPERT_STUDY_EVENT_TYPES = {
     "analysis_completed",
     "review_view_opened",
     "review_step_advanced",
+    "review_step_back",
     "feedback_item_opened",
     "feedback_clip_played",
     "feedback_signal_frame_opened",
@@ -209,7 +211,7 @@ class ExpertStudyStore(ParticipantStateFiles):
                     profile = payload["expert_study"]["participants"].setdefault(
                         participant_id, {"participant_id": participant_id}
                     )
-                    if stage in {"background", "preference"}:
+                    if stage in {"background", "preference", "closing"}:
                         if stage in profile:
                             raise ValueError(
                                 f"The {stage} questionnaire has already been submitted"
@@ -247,6 +249,54 @@ class ExpertStudyStore(ParticipantStateFiles):
                     **({"from_step_id": step_id, "to_step_id": flow["step_id"]} if modern else {}),
                 }
             )
+            refresh_summaries(session)
+            self._write_unlocked(payload)
+        return flow
+
+    def go_back_review(
+        self, *, participant_id: str, run_id: str, step_id: str | None,
+    ) -> dict[str, Any]:
+        """Return to the previous step when the protocol allows it (see BACK_TARGET_STAGE).
+
+        A saved answer on the step returned to is withdrawn, not deleted: it moves to
+        ``withdrawn_responses`` and is offered again as the form's starting answers.
+        """
+        participant_id = normalize_participant_id(participant_id)
+        with self._locked(participant_id):
+            payload = self._read_unlocked(participant_id)
+            session = payload["expert_study"]["sessions"].get(
+                self._session_key(participant_id, run_id)
+            )
+            if not session:
+                raise ValueError("Start the expert-study experience before continuing")
+            flow = session.get("review_flow")
+            if not flow or not isinstance(step_id, str) or flow.get("step_id") != step_id:
+                raise ValueError("The review step has changed; reload to resume the current step")
+            target = back_target(flow)
+            if target is None:
+                raise ValueError("Going back is not available on this page")
+            now = datetime.now(UTC).isoformat()
+            record = flow["responses"].pop(target["step_id"], None)
+            if record is not None:
+                flow.setdefault("withdrawn_responses", []).append(
+                    {**record, "withdrawn_at": now, "withdrawn_reason": "participant_back"}
+                )
+                profile = payload["expert_study"]["participants"].get(participant_id) or {}
+                shared = profile.get(target["stage"])
+                if (
+                    target["stage"] in {"background", "preference", "closing"} and shared
+                    and shared.get("run_id") == run_id
+                    and shared.get("step_id") == target["step_id"]
+                ):
+                    profile.pop(target["stage"])
+            from_stage, view = flow["stage"], flow.get("current_view")
+            flow["cursor"] -= 1
+            flow.update(target)
+            flow["transitions"].append({
+                "view": view, "from_stage": from_stage, "to_stage": flow["stage"],
+                "from_step_id": step_id, "to_step_id": flow["step_id"],
+                "reason": "participant_back", "at": now,
+            })
             refresh_summaries(session)
             self._write_unlocked(payload)
         return flow
@@ -691,7 +741,7 @@ class FeedbackService:
             }
         summary = self.retriever.get_run_summary(self.run_id)
         run = summary["run"]
-        labels = {"early_surface": "Early drilling", "antrum": "Antrum", "incus": "Incus"}
+        labels = {"early_surface": "Early Drilling", "antrum": "Antrum", "incus": "Incus"}
         aliases = {"speed_mm_s": "tool_speed_mm_s", "mean_stroke_length_mm": "stroke_length_mm"}
         phases = []
         for name, label in labels.items():
@@ -1782,6 +1832,20 @@ class FeedbackService:
             ),
         }
 
+    def go_back_review(self, participant_id: str, step_id: str | None) -> dict[str, Any]:
+        participant_id = normalize_participant_id(participant_id)
+        store = self._study()
+        flow = store.go_back_review(
+            participant_id=participant_id, run_id=self.run_id, step_id=step_id,
+        )
+        store.add_event(
+            participant_id=participant_id, run_id=self.run_id,
+            event_type="review_step_back",
+            details={"from_step_id": step_id, "to_step_id": flow["step_id"]},
+        )
+        return {"review_flow": public_review_flow(flow), "case_completed": False,
+                "next_case_url": None, "completion_code": None}
+
     def save_review_timing(self, participant_id: str, snapshot: Any) -> dict[str, Any]:
         return self._study().save_review_timing(
             participant_id=participant_id, run_id=self.run_id, snapshot=snapshot,
@@ -2198,6 +2262,12 @@ def _handler(service: FeedbackService, ui_dir: Path) -> type[BaseHTTPRequestHand
                             participant_id, body.get("view"), body.get("stage"),
                             body.get("step_id"), body.get("answers"),
                         ),
+                    )
+                    return
+                if parsed.path == "/api/expert-study/review-back":
+                    self._json(
+                        HTTPStatus.OK,
+                        service.go_back_review(participant_id, body.get("step_id")),
                     )
                     return
                 if parsed.path == "/api/expert-study/review-timing":

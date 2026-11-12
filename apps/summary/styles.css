@@ -188,3 +188,4 @@ body { color: var(--sv-ink); background: #f3f5f7; }
 .expand-hint::after { content: "(click to expand)"; }
 .summary-group[open] .expand-hint::after { content: "(click to collapse)"; }
 .summary-group:not(.seen) .group-state::after, .summary-group[open] .group-state::after { content: ""; }
+.metric-value-label { color: var(--sv-muted); font-size: 12px; font-weight: 500; }

@@ -84,7 +84,7 @@ test("each selected window plots its own matched-phase expert reference", () => 
   const html = review.comparisonHtml(item, clip);
   assert.match(html, /central half 10 to 30 mm\/s/);
   assert.doesNotMatch(html, /central half 100 to 300/);
-  assert.match(html, /In this clip, tool speed was lower than typical expert values for this phase\./);
+  assert.match(html, /In this clip, your tool speed was slower than most experts' tool speed during this phase\./);
   assert.match(html, /Middle half of experts/);
   assert.match(html, /25th–75th percentiles of same-phase expert five-second window values/);
   assert.match(html, /class="event-axis-unit">mm\/s/);
@@ -96,12 +96,12 @@ test("each selected window plots its own matched-phase expert reference", () => 
 test("comparison sentences describe the selected window's direction for each motion metric", () => {
   const reference = { q25: 10, median: 20, q75: 30 };
   const cases = [
-    ["speed_mm_s", 5, "In this clip, tool speed was lower than typical expert values for this phase."],
-    ["speed_mm_s", 35, "In this clip, tool speed was higher than typical expert values for this phase."],
-    ["mean_stroke_length_mm", 5, "Mean stroke length in this clip was shorter than typical expert values for this phase."],
-    ["mean_stroke_length_mm", 35, "Mean stroke length in this clip was longer than typical expert values for this phase."],
-    ["removal_rate_mm3_s", 5, "In this clip, bone removal rate was lower than typical expert values for this phase."],
-    ["removal_rate_mm3_s", 35, "In this clip, bone removal rate was higher than typical expert values for this phase."],
+    ["speed_mm_s", 5, "In this clip, your tool speed was slower than most experts' tool speed during this phase."],
+    ["speed_mm_s", 35, "Faster isn’t always better. In this clip, your tool speed was higher than most experts' tool speed during this phase."],
+    ["mean_stroke_length_mm", 5, "In this clip, your mean stroke length was shorter than most experts' mean stroke length during this phase."],
+    ["mean_stroke_length_mm", 35, "In this clip, your mean stroke length was longer than most experts' mean stroke length during this phase."],
+    ["removal_rate_mm3_s", 5, "In this clip, your bone removal rate was lower than most experts' bone removal rate during this phase."],
+    ["removal_rate_mm3_s", 35, "In this clip, your bone removal rate was higher than most experts' bone removal rate during this phase."],
   ];
   for (const [metric_key, observed, expected] of cases) {
     assert.equal(review.comparisonSentence({ metric_key }, { observed }, reference), expected);

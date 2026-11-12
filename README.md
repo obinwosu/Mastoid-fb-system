@@ -306,7 +306,7 @@ see [Processing time and planned background processing](#processing-time-and-pla
 
 The Event-based study step keeps feedback on the left and video on the right.
 The default **All phases** view shows the session-wide selection. Filters for
-**Early drilling**, **Antrum**, and **Incus** show only selected moments from that
+**Early Drilling**, **Antrum**, and **Incus** show only selected moments from that
 phase; they never refill the list or change ranks. Expand a category:
 **Safety** contains Critical Structure Violation and Poor Drill Visibility;
 **Drilling motion** contains Tool speed, Stroke length, and Removal rate.
@@ -399,7 +399,7 @@ At least three eligible reference participants are required for a comparison.
 ## Whole-phase Summary page
 
 `/summary/` places the existing video player beside **Safety / Exposure** and
-compact **Motion** rows. Select Early drilling, Antrum or Incus. **Go to start**
+compact **Motion** rows. Select Early Drilling, Antrum or Incus. **Go to start**
 pauses the video at that phase interval; repeated intervals remain separate in
 the video controls and are combined only for the phase's measurements.
 

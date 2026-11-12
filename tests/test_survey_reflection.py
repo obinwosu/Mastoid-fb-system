@@ -23,7 +23,9 @@ def background():
         "role": "resident",
         "training_stage": {"status": "provided", "value": 2, "unit": "pgy"},
         "cortical_mastoidectomies": "1_5",
-        "vr_experience": "never",
+        "vr_experience": "none",
+        "vr_simulation_experience": "none",
+        "drilling_simulator_experience": "none",
     }
 
 
@@ -50,7 +52,7 @@ def ready(store, run_id="case"):
                     event_type="analysis_completed")
 
 
-@pytest.mark.parametrize("choice", ["never", "occasionally", "frequently"])
+@pytest.mark.parametrize("choice", ["none", "minimal", "moderate", "extensive"])
 def test_vr_has_one_explicit_required_answer(choice):
     answers = {**background(), "vr_experience": choice}
     assert validate_background(answers) == answers
@@ -73,12 +75,13 @@ def test_overall_scale_matches_before_and_after_feedback(rating):
     assert baseline["id"] == post["id"] == "overall_performance"
     assert baseline["scale"] == post["scale"]
     assert baseline["text"] == (
-        "Based on your own impression, how would you rate your overall performance "
-        "in the recorded procedure?"
+        "Based on your own impression, how would you rate your overall performance?"
     )
+    assert SURVEY_DEFINITION["baseline"]["title"] == "Initial Self-Assessment"
     assert post["text"] == (
         "After reviewing this feedback, how would you now rate your overall performance "
-        "in the recorded procedure?"
+        "on the task: safely performing a cortical mastoidectomy with identification "
+        "of the incus pointer?"
     )
     assert not baseline.get("missing_options")
     assert not post.get("missing_options")
@@ -154,12 +157,14 @@ def test_three_ratings_persist_separately_and_do_not_leak_previous_answers(tmp_p
         assert flow["step_id"] not in flow["responses"]
         flow = advance(store, "case", flow, feedback(rating))
     flow = advance(store, "case", flow, {"preferred_view": "combination"})
+    assert flow["stage"] == "closing"
+    flow = advance(store, "case", flow, {"practice_interest": "yes", "comments": ""})
     assert flow["stage"] == "complete"
     records = flow["responses"]
     assert [records[key]["answers"]["overall_performance"] for key in
             ["baseline", "questionnaire_0", "questionnaire_1"]] == [5, 3, 2]
     for key in ["baseline", "questionnaire_0", "questionnaire_1"]:
-        assert records[key]["instrument_version"] == "mastoid_surveys_v5_1_clarity"
+        assert records[key]["instrument_version"] == "mastoid_surveys_v5_3_experience_items_closing"
         assert records[key]["run_id"] == "case"
 
 
@@ -284,9 +289,35 @@ def test_saved_v4_semantics_progress_and_answers_survive_v5(tmp_path, vr_answer)
         assert old_section["scale"][3]["label"] == "Agree"
         assert "scale" not in old_section["items"][2]
     fresh_case = start(store, "second-recording")
-    assert fresh_case["survey_version"] == "mastoid_surveys_v5_1_clarity"
+    assert fresh_case["survey_version"] == "mastoid_surveys_v5_3_experience_items_closing"
     assert fresh_case["stage"] == "baseline"
     payload = json.loads(store.participant_path("REFLECTION-TEST").read_text(encoding="utf-8"))
     background_record = payload["expert_study"]["participants"]["REFLECTION-TEST"]["background"]
     assert background_record["instrument_version"] == "mastoid_surveys_v4_reflection"
     assert background_record["answers"] == old_background
+
+
+@pytest.mark.parametrize("key", ["vr_simulation_experience", "drilling_simulator_experience"])
+def test_v5_3_experience_items_are_required_single_choices(key):
+    answers = background()
+    for choice in ["none", "minimal", "moderate", "extensive"]:
+        assert validate_background({**answers, key: choice})[key] == choice
+    with pytest.raises(ValueError):
+        validate_background({**answers, key: "sometimes"})
+    with pytest.raises(ValueError):
+        validate_background({k: v for k, v in answers.items() if k != key})
+
+
+def test_closing_page_needs_interest_and_keeps_optional_comments():
+    from evidence_system.study_surveys import validate_answers
+    for choice in ["yes", "neutral", "no"]:
+        assert validate_answers("closing", {"practice_interest": choice, "comments": ""}) == {
+            "practice_interest": choice, "comments": ""}
+    note = {"practice_interest": "no", "comments": "Hard to see the drill tip."}
+    assert validate_answers("closing", note) == note
+    for bad in [{"practice_interest": "maybe", "comments": ""},
+                {"practice_interest": "yes"},
+                {"practice_interest": "yes", "comments": None},
+                {"practice_interest": "yes", "comments": "x" * 5001}]:
+        with pytest.raises(ValueError):
+            validate_answers("closing", bad)
