@@ -230,6 +230,159 @@ Current-step drafts are retained in the browser tab for refresh recovery and
 removed after a successful submission. Drafts are isolated by instrument version,
 Study ID, recording and step; they are not server submissions.
 
+### Study logs: location, contents and interpretation
+
+There are three different records: submitted questionnaires, review timing, and
+interaction events. All are stored in the participant JSON, **not in the HDF5
+file, video, or `evidence.sqlite3` analysis database**. The directory comes from
+the server's `--study-state` argument or the selected study-manifest case's
+`study_state` setting. `study_data/participants` above is a recommended location,
+not a hardcoded destination. Normal filenames are `<Study ID>.json`; reserved or
+case-conflicting IDs can use hashed filenames, with the original ID inside.
+
+The local P15T4 timing preview launched on 2026-11-11 uses
+`.local/previews/surveys_v4_20261111/participants/` instead. That is test/preview
+storage, not a default for a new deployment. Explicitly marked preview-only QA
+records must be excluded from study analysis.
+
+In the paths below, `ID` is the participant's Study ID and `RUN` is the recording
+ID. A single participant file can contain several `ID::RUN` sessions.
+
+| Record | Location inside the participant JSON |
+| --- | --- |
+| Background questionnaire | `expert_study.participants[ID].background` |
+| Final feedback preference | `expert_study.participants[ID].preference` |
+| Post Sim Reflection, when defined by the saved instrument | `expert_study.participants[ID].closing` |
+| Case-specific submitted answers | `expert_study.sessions[ID::RUN].review_flow.responses` |
+| Frozen questionnaire definition and version | The same `review_flow.survey_definition` and `review_flow.survey_version` |
+| Presentation order and current step | The same `review_flow.order`, `step_id`, `stage` and `cursor` |
+| Forward/Back navigation history | The same `review_flow.transitions` |
+| Answers withdrawn through Back | The same `review_flow.withdrawn_responses`, when present |
+| Latest cumulative snapshot of each review visit | `expert_study.sessions[ID::RUN].review_timing.visits` |
+| Aggregated time for each feedback order position | The same `review_timing.steps` |
+| Interaction event list, including `run_id` on every row | `expert_study.events` |
+
+Read questionnaire results from `responses`, rather than inferring answers from
+click logs. Response keys identify the step, such as `baseline`, `questionnaire_0`
+and `questionnaire_1`. Each response contains `answers`, `view`, `order`,
+`submitted_at`, `instrument_version`, the exact `instrument` snapshot and its
+`instrument_sha256`. The participant-level background/preference/closing records
+are also represented in the originating session's responses; do not count the
+profile copy as another submission. Earlier instruments can have fewer questions
+or different response options. Missing fields are not zero or negative answers.
+
+`review_0` / `questionnaire_0` mean the first feedback format, not necessarily
+Event-based. Use the saved `view` and `order` to identify the format. The current
+entry page selects the first format manually; it does not randomize the order.
+Back keeps a withdrawn answer with `withdrawn_at` and `withdrawn_reason`, removes
+it from active responses, and offers it for revision. Use active responses for
+the accepted answer and withdrawn responses only as revision history.
+
+#### What the interaction events mean
+
+Every event includes `event_id`, `participant_id`, `run_id`, optional
+`stimulus_id`, `event_type`, `interface_version`, `details` and `recorded_at`.
+`stimulus_id` normally identifies a feedback item; it is not a participant ID.
+The following are the principal events in the current sequential study:
+
+| Event | Meaning and limitation |
+| --- | --- |
+| `study_started`, `study_resumed` | A case session was started or reopened. |
+| `analysis_started`, `analysis_completed` | Study-service analysis/load requests and readiness; these alone are not the duration of the complete HDF5 processing pipeline. |
+| `review_view_opened` | A feedback view was selected. Summary content can still be loading, so this is not the timing start boundary. |
+| `review_step_advanced`, `review_step_back` | A server-accepted flow change. The authoritative step history is `review_flow.transitions`. |
+| `feedback_item_opened` | An Event feedback category was selected; inspect `details.source` to distinguish automatic selection from a user click. |
+| `feedback_clip_played` | A context-play request was made, with clip identity and requested video bounds. It does not prove playback succeeded or the clip was watched to the end. |
+| `feedback_signal_frame_opened` | A Safety key-frame seek/pause was requested. The current presentation uses the video player, not a separately displayed source image. |
+| `video_play`, `video_pause`, `video_seek` | Event-player media events with video position; optional self-assessment playback uses `details.context`. These are not a symmetric click stream for both formats. |
+| `support_details_opened`, `next_case_opened` | Supporting details or the next recording were requested, when available in that interface. |
+
+Summary phase/section coverage is stored as deduplicated keys in review timing,
+not as a timestamped event for every click. Do not compare Event's `video_play`
+event count against Summary as if both emit the same event list. For both formats,
+use `review_timing` for playing time and coverage. Viewed means content was opened
+or automatically selected; it does not establish attentive viewing or understanding.
+
+#### Timestamps, saves and recovery
+
+- `submitted_at`, transition `at`, withdrawn `withdrawn_at`, event `recorded_at`
+  and timing `received_at` are server UTC timestamps. In particular, `recorded_at`
+  is the time the server received an event, not the exact time of the browser action.
+- Timing `started_at_ms` and `observed_until_ms` use browser epoch milliseconds;
+  interval offsets come from the browser's monotonic clock, with discontinuity
+  handling. Each interval is `[start_offset_ms, end_offset_ms, foreground, video_playing]`,
+  with offsets relative to that visit's start. Aggregate duration fields ending
+  in `_s` are seconds. An interval
+  `[0, 5000, true, false]` represents five observed seconds in the foreground
+  without video playback; it is an illustrative format example, not study data.
+- `details.current_time_s` and requested clip bounds refer to the recording's
+  video timeline. They are different from time spent reviewing the website.
+- Questionnaire answers and flow changes are saved together under a file lock
+  using atomic file replacement. The page normally advances only after success.
+  Ordinary interaction events are sent separately; an event-delivery failure
+  does not undo an already accepted questionnaire or transition.
+- Timing saves every five seconds and at relevant boundaries. The browser keeps
+  unacknowledged snapshots in a participant/recording-scoped `localStorage` outbox
+  and retries them. Next waits for a timing acknowledgement before advancing.
+  Each visit UUID has an increasing `sequence`; duplicate/out-of-order saves do
+  not add counters. `visits` holds the latest complete snapshot for each visit,
+  **not one record per heartbeat**. Closing a tab remains a best-effort final save.
+- Ordinary browser interaction logging uses a best-effort request with no retry
+  outbox and no visible delivery error. It may be incomplete after network errors
+  or tab closure. It is not an exhaustive audit trail and must not replace timing.
+- Unsubmitted questionnaire drafts stay in tab-scoped `sessionStorage`, separately
+  from the timing outbox. Drafts are not accepted answers and are removed after a
+  successful submission. Browser storage is not a substitute for server backups.
+
+#### Known logging limitations in the pulled version
+
+Code review on **2026-11-12**, at commit `27df921`, confirmed these unresolved
+issues. Documenting them does not change the implementation:
+
+1. **Back revisits are missing from aggregated review time.** The current timing
+   summary caps at the first review exit, even after an allowed Back. A controlled
+   test of 10 seconds initially plus 30 seconds after Back still reports 10 seconds
+   foreground time. The later intervals remain in `visits`; `steps` must not be
+   used as the complete review duration for those sessions until this is fixed.
+   A repair must also exclude the intervening questionnaire time.
+2. **Initial Event selection can be logged before Event is visible.** Rendering
+   the Event component during baseline or Summary-first can mark its first moment
+   Viewed and emit a play request without actual playback. It can also put Event
+   keys into Summary coverage. Coverage and event counts therefore need this
+   issue fixed before being interpreted as actual review behavior.
+
+The ordinary forward-only timing definition is described below. Do not overwrite
+raw logs to make affected sessions appear complete. An incomplete review, unknown
+gap, uncollected metric or missing historical timing is not a zero-duration review.
+
+#### Inspecting and backing up logs
+
+Open the participant JSON in a text editor, or pretty-print it without modifying it:
+
+```text
+python -m json.tool study_data/participants/S001.json
+```
+
+Replace the path with the actual `--study-state` directory and participant file.
+Start with `review_flow.order`, then `responses`, `transitions` and
+`review_timing.steps`; inspect `visits` and `events` when checking a discrepancy.
+For cross-case analysis, filter by both participant and recording, and retain
+instrument/interface versions. Back up the configured participant directory;
+Git does not include `study_data/` or `.local/` participant records.
+
+Server console output or redirected `.stdout.log` / `.stderr.log` files are
+operational diagnostics, not the questionnaire/timing dataset. The timing preview
+uses `server-timing.stdout.log` and `server-timing.stderr.log` alongside its
+`participants/` directory. These filenames are launcher choices, not universal
+application log paths. Processing runtime logs are likewise separate from study
+review time.
+
+After pulling application changes, restart the Python study server and reload
+the page before testing the new version. Pulling alone does not reload the running
+Python code, and can leave newly served JavaScript talking to an older backend.
+`/api/health` reports the configured interface label, but that label is not a
+verified Git commit hash. Preserve the same `--study-state` path when restarting.
+
 ### Feedback review time
 
 Both study formats are self-paced: there is no countdown, minimum viewing time
@@ -238,6 +391,8 @@ and its first video frame is usable, or video is explicitly unavailable. It stop
 at Next; a failed submission resumes timing. Initial analysis/loading and all
 questionnaires are excluded. These measurements do not change the existing
 Viewed/Next rules, which record opened content rather than verified understanding.
+The Back-revisit and automatic Event-selection limitations documented above apply
+to the current pulled version.
 
 Open the participant's JSON and find
 `expert_study.sessions[Study ID::run ID].review_timing.steps`.
@@ -270,8 +425,7 @@ sleep or an abrupt browser/device failure can leave unobserved time. Browser
 tab closure is a best-effort final save: if it never returns, an unacknowledged
 tail may be missing. An unfinished review has no `review_exit_at_ms`; do not
 interpret its last heartbeat as a completed review or its full intended duration.
-Browser
-storage disabled/full removes durable offline recovery, although in-memory retry
+Browser storage disabled/full removes durable offline recovery, although in-memory retry
 and server saves remain available. Foreground time is an exposure proxy, not eye
 tracking or a measure of attention. No break button or questionnaire-duration
 measurement is added. Back up the participant files with the survey responses.
