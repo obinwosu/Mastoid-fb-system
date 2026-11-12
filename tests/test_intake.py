@@ -25,7 +25,9 @@ def background():
         "role": "fellow",
         "training_stage": {"status": "provided", "value": 7, "unit": "pgy"},
         "cortical_mastoidectomies": "6_10",
-        "vr_experience": "occasionally",
+        "vr_experience": "moderate",
+        "vr_simulation_experience": "none",
+        "drilling_simulator_experience": "none",
     }
 
 

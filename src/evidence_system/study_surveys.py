@@ -13,7 +13,7 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
-SURVEY_VERSION = "mastoid_surveys_v5_1_clarity"
+SURVEY_VERSION = "mastoid_surveys_v5_3_experience_items_closing"
 FLOW_SCHEMA = "sequential_review_v2"
 ROLE_UNITS = {
     "resident": "pgy",
@@ -26,12 +26,23 @@ ROLE_PGY = {"resident": [1, 2, 3, 4, 5], "fellow": [6, 7]}
 # overall-performance baseline. Reintroducing the six-item rounds needs a new instrument.
 SELF_ASSESSMENTS = False
 MASTOIDECTOMY_COUNTS = ["0", "1_5", "6_10", "11_20", "over_20"]
+# Optional single-choice experience questions on the background page, in display
+# order. Each is required when the instrument version defines it.
+EXPERIENCE_FIELDS = {
+    "vr_experience": "VR experience",
+    "vr_simulation_experience": "VR surgical simulation experience",
+    "drilling_simulator_experience": "drilling simulator experience",
+}
+EXPERIENCE_OPTIONS = ["none", "minimal", "moderate", "extensive"]
+CLOSING_COMMENT_MAX = 5000
+EXPERIENCE_LABELS = ["None", "Minimal", "Moderate", "Extensive"]
 OVERALL_PERFORMANCE_ITEM = {
     "id": "overall_performance",
     "label": "Overall performance",
     "text": (
         "After reviewing this feedback, how would you now rate your overall performance "
-        "in the recorded procedure?"
+        "on the task: safely performing a cortical mastoidectomy with identification "
+        "of the incus pointer?"
     ),
     "scale": [
         {"value": value, "label": label}
@@ -177,22 +188,35 @@ SURVEY_DEFINITION: dict[str, Any] = {
                 "options": MASTOIDECTOMY_COUNTS,
                 "option_labels": ["0", "1-5", "6-10", "11-20", ">20"],
             },
+            # v5_3: VR headset item reworded; two more experience items added.
             "vr_experience": {
-                "label": "Before today’s session, how often had you used a VR headset?",
-                "options": ["never", "occasionally", "frequently"],
-                "option_labels": ["Never", "Occasionally", "Frequently"],
+                "label": "Describe your experience with VR headsets prior to today's session.",
+                "options": EXPERIENCE_OPTIONS,
+                "option_labels": EXPERIENCE_LABELS,
+            },
+            "vr_simulation_experience": {
+                "label": "Describe your experience with VR surgical simulation prior to "
+                         "today's session.",
+                "options": EXPERIENCE_OPTIONS,
+                "option_labels": EXPERIENCE_LABELS,
+            },
+            "drilling_simulator_experience": {
+                "label": "Describe your experience with this drilling simulator prior to "
+                         "today's session.",
+                "options": EXPERIENCE_OPTIONS,
+                "option_labels": EXPERIENCE_LABELS,
             },
         },
     },
     "baseline": {
-        "title": "Before feedback",
-        "instructions": "Please rate your performance before viewing feedback.",
+        "title": "Initial Self-Assessment",
+        "instructions": (
+            "Please rate your performance on the assigned task: safely drilling a cortical "
+            "mastoidectomy with identification of the incus pointer."
+        ),
         "items": [{
             **copy.deepcopy(OVERALL_PERFORMANCE_ITEM),
-            "text": (
-                "Based on your own impression, how would you rate your overall performance "
-                "in the recorded procedure?"
-            ),
+            "text": "Based on your own impression, how would you rate your overall performance?",
         }],
     },
     "self_assessment": {
@@ -260,6 +284,26 @@ SURVEY_DEFINITION: dict[str, Any] = {
             {"value": "combination", "label": "A combination of both"},
             {"value": "no_preference", "label": "No preference"},
         ],
+    },
+    # v5_3: last page of the final case, after the format preference.
+    "closing": {
+        "title": "Post Sim Reflection",
+        "instructions": "",
+        "practice_interest": {
+            "id": "practice_interest",
+            "text": "I would like to use this simulator to practice temporal bone drilling.",
+            "options": ["yes", "neutral", "no"],
+            "option_labels": ["Yes", "Neutral", "No"],
+        },
+        "comments": {
+            "id": "comments",
+            "text": (
+                "Do you have any other comments, positive or negative, on your experience "
+                "in the drilling simulator?"
+            ),
+            "optional": True,
+            "max_length": CLOSING_COMMENT_MAX,
+        },
     },
 }
 
@@ -330,10 +374,11 @@ def validate_background(
     count = row["cortical_mastoidectomies"]
     if not isinstance(count, str) or count not in fields["cortical_mastoidectomies"]["options"]:
         raise ValueError("Choose the number of prior cortical mastoidectomies")
-    if "vr_experience" in fields:
-        value = row["vr_experience"]
-        if not isinstance(value, str) or value not in fields["vr_experience"]["options"]:
-            raise ValueError("Choose one of the available VR experience responses")
+    for key, name in EXPERIENCE_FIELDS.items():
+        if key in fields:
+            value = row[key]
+            if not isinstance(value, str) or value not in fields[key]["options"]:
+                raise ValueError(f"Choose one of the available {name} responses")
     return copy.deepcopy(row)
 
 
@@ -375,6 +420,19 @@ def validate_answers(
         }:
             raise ValueError("Choose one of the available feedback preferences")
         return copy.deepcopy(row)
+    if stage == "closing":
+        section = definition["closing"]
+        row = _fields(answers, {"practice_interest", "comments"}, "Post Sim Reflection")
+        if row["practice_interest"] not in section["practice_interest"]["options"]:
+            raise ValueError("Choose Yes, Neutral or No")
+        comments = row["comments"]
+        if not isinstance(comments, str):
+            raise ValueError("Comments must be text")
+        if len(comments) > section["comments"]["max_length"]:
+            raise ValueError(
+                f"Comments must be {section['comments']['max_length']} characters or fewer"
+            )
+        return {"practice_interest": row["practice_interest"], "comments": comments}
     if stage == "review":
         if answers is not None:
             raise ValueError("A review continuation does not accept questionnaire answers")
@@ -404,6 +462,7 @@ def protocol_steps(order: list[str], *, background: bool, final_case: bool) -> l
         steps.append(step(f"questionnaire_{index}", "questionnaire", index, view))
     if final_case:
         steps.append(step("preference", "preference", 2))
+        steps.append(step("closing", "closing", 2))
     steps.append(step("complete", "complete", 2))
     return steps
 
@@ -422,6 +481,24 @@ def new_review_flow(
     }
 
 
+# Back is allowed only within one step of the study, never back past feedback:
+# self-assessment -> background, questionnaire -> the feedback it rates,
+# preference -> the last questionnaire, closing -> preference. Maps current stage to the stage Back reaches.
+BACK_TARGET_STAGE = {"baseline": "background", "questionnaire": "review",
+                     "preference": "questionnaire", "closing": "preference"}
+
+
+def back_target(flow: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The step Back returns to from the current step, or None when Back is not allowed."""
+    if flow.get("schema") != FLOW_SCHEMA:
+        return None
+    steps, cursor = flow.get("steps") or [], flow.get("cursor", 0)
+    if cursor < 1 or cursor >= len(steps):
+        return None
+    target = steps[cursor - 1]
+    return target if BACK_TARGET_STAGE.get(flow.get("stage")) == target["stage"] else None
+
+
 def public_review_flow(flow: Mapping[str, Any]) -> dict[str, Any]:
     if flow.get("schema") != FLOW_SCHEMA:
         return copy.deepcopy(dict(flow))
@@ -435,6 +512,16 @@ def public_review_flow(flow: Mapping[str, Any]) -> dict[str, Any]:
     steps, cursor = flow.get("steps") or [], flow.get("cursor", 0)
     # Lets the page name the next step ("Continue to questionnaire").
     public["next_stage"] = steps[cursor + 1]["stage"] if cursor + 1 < len(steps) else None
+    public["can_go_back"] = back_target(flow) is not None
+    step_id = flow.get("step_id")
+    # A step left once (forward or back) is a revisit: its feedback was already reviewed.
+    public["revisit"] = any(
+        row.get("from_step_id") == step_id for row in flow.get("transitions") or []
+    )
+    withdrawn = [row for row in flow.get("withdrawn_responses") or []
+                 if row.get("step_id") == step_id]
+    # Answers given before the participant came back, to fill the form again.
+    public["previous_answers"] = copy.deepcopy(withdrawn[-1]["answers"]) if withdrawn else None
     return public
 
 

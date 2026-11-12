@@ -47,6 +47,12 @@ window.StudySurveys = (() => {
       return question(`survey-${name}`, label, help, control, { attrs: `data-measurement="${name}"` });
     }
 
+    // Single-choice experience questions this instrument version defines, in display order.
+    const EXPERIENCE_FIELDS = ["vr_experience", "vr_simulation_experience", "drilling_simulator_experience"];
+    function experienceFields(definition) {
+      return EXPERIENCE_FIELDS.filter(name => definition.fields[name]);
+    }
+
     function choiceField(name, definition) {
       const options = definition.options.map((value, index) => [value, definition.option_labels[index]]);
       return `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">${escape(definition.label)}</legend></div><div class="survey-q-control">${pills(name, options)}</div></fieldset>`;
@@ -65,9 +71,9 @@ window.StudySurveys = (() => {
       const role = `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">Current role</legend></div><div class="survey-q-control">${pills("role", Object.entries(roles).map(([value, info]) => [value, info.label]))}</div></fieldset>`;
       const stage = `<div class="survey-q hidden" id="survey-stage-row"><div class="survey-q-text"><label id="survey-stage-label" class="survey-q-label" for="survey-stage">Current training year</label><p id="survey-stage-help" class="survey-help"></p></div><div class="survey-q-control">${Object.entries(roles).filter(([, info]) => info.pgy).map(([role, info]) => `<div id="survey-pgy-${role}" class="hidden">${pills(`pgy_${role}`, info.pgy.map(n => [String(n), `PGY-${n}`]))}</div>`).join("")}<div id="survey-stage-number" class="hidden">${numberInput("survey-stage", "training_stage", "years", "", { min: 0, unitId: "survey-stage-unit" })}</div></div></div>`;
       const count = `<fieldset class="survey-q"><div class="survey-q-text"><legend class="survey-q-label">Number of prior cortical mastoidectomies performed</legend></div><div class="survey-q-control">${pills("cortical_mastoidectomies", MASTOIDECTOMY_COUNTS)}</div></fieldset>`;
-      const vr = definition.fields.vr_experience
-        ? choiceField("vr_experience", definition.fields.vr_experience) : "";
-      return `<div class="survey-background">${section(null, "survey-training", "Training Level and Prior Experience", role + stage + count + vr)}</div>`;
+      const experience = experienceFields(definition)
+        .map(name => choiceField(name, definition.fields[name])).join("");
+      return `<div class="survey-background">${section(null, "survey-training", "Training Level and Prior Experience", role + stage + count + experience)}</div>`;
     }
 
     function selfAssessmentMarkup(definition) {
@@ -82,13 +88,20 @@ window.StudySurveys = (() => {
       return `<div class="survey-feedback">${definition.items.map((item, i) => {
         const scale = item.scale || definition.scale;
         const missing = item.missing_options || definition.missing_options || [];
-        return `<fieldset class="survey-feedback-question"><legend><span>${definition.items.length > 1 ? `Q${i + 1} · ` : ""}${escape(item.label)}</span>${escape(item.text)}</legend><div class="survey-agreement-scale">${scale.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}"><strong>${escape(option.value)}</strong><span>${escape(option.label)}</span></label>`).join("")}</div>${missing.length ? `<div class="survey-missing-options">${missing.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}">${escape(option.label)}</label>`).join("")}</div>` : ""}</fieldset>`;
+        return `<fieldset class="survey-feedback-question"><legend>${definition.items.length > 1 ? `<span>Q${i + 1} · ${escape(item.label)}</span>` : ""}${escape(item.text)}</legend><div class="survey-agreement-scale">${scale.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}"><strong>${escape(option.value)}</strong><span>${escape(option.label)}</span></label>`).join("")}</div>${missing.length ? `<div class="survey-missing-options">${missing.map(option => `<label><input type="radio" name="${escape(item.id)}" value="${escape(option.value)}">${escape(option.label)}</label>`).join("")}</div>` : ""}</fieldset>`;
       }).join("")}</div>`;
     }
 
     // The question is the page title, so the options stand alone (2026-11-07).
     function preferenceMarkup(definition) {
       return `<fieldset class="survey-preference"><legend class="sr-only">${escape(definition.question)}</legend><div>${definition.options.map(option => `<label><input type="radio" name="preferred_view" value="${escape(option.value)}"><span class="preference-option"><strong>${escape(option.label)}</strong>${option.description ? `<small>${escape(option.description)}</small>` : ""}</span></label>`).join("")}</div></fieldset>`;
+    }
+
+    function closingMarkup(definition) {
+      const interest = definition.practice_interest, comments = definition.comments;
+      const options = interest.options.map((value, i) => [value, interest.option_labels[i]]);
+      return `<fieldset class="survey-q survey-closing-q"><div class="survey-q-text"><legend class="survey-q-label">${escape(interest.text)}</legend></div><div class="survey-q-control">${pills("practice_interest", options)}</div></fieldset>`
+        + `<div class="survey-q survey-closing-q survey-comments-q"><div class="survey-q-text"><label class="survey-q-label" for="survey-comments">${escape(comments.text)} <span class="survey-optional">(optional)</span></label></div><textarea id="survey-comments" name="comments" rows="6" maxlength="${Number(comments.max_length)}"></textarea><p class="survey-help survey-comment-count" id="survey-comment-count" aria-live="polite"></p></div>`;
     }
 
     function cacheStage() {
@@ -110,7 +123,7 @@ window.StudySurveys = (() => {
         root.querySelector(`#survey-pgy-${name}`).classList.toggle("hidden", role !== name));
       root.querySelector("#survey-stage-number").classList.toggle("hidden", role !== "attending");
       root.querySelector("#survey-stage-label").textContent = roleInfo?.stage || "Current training year";
-      root.querySelector("#survey-stage-help").textContent = role === "attending" ? "Whole years." : "";
+      root.querySelector("#survey-stage-help").textContent = "";
       measurementNames.forEach(name => { field(name).disabled = checked(`${name}_unknown`) || checked(`${name}_na`); });
     }
 
@@ -142,9 +155,10 @@ window.StudySurveys = (() => {
         cortical_mastoidectomies: chosen("cortical_mastoidectomies"),
       };
       if (!role || !stage || !answers.cortical_mastoidectomies) return null;
-      if (context.definitions.background.fields.vr_experience) {
-        answers.vr_experience = chosen("vr_experience");
-        if (!context.definitions.background.fields.vr_experience.options.includes(answers.vr_experience)) return null;
+      const fields = context.definitions.background.fields;
+      for (const name of experienceFields(context.definitions.background)) {
+        answers[name] = chosen(name);
+        if (!fields[name].options.includes(answers[name])) return null;
       }
       return answers;
     }
@@ -174,6 +188,11 @@ window.StudySurveys = (() => {
         }
         return result;
       }
+      if (context.flow.stage === "closing") {
+        const interest = chosen("practice_interest");
+        if (!context.definitions.closing.practice_interest.options.includes(interest)) return null;
+        return { practice_interest: interest, comments: (val("comments") || "").trim() };
+      }
       const preferred = chosen("preferred_view");
       return preferred ? { preferred_view: preferred } : null;
     }
@@ -182,7 +201,7 @@ window.StudySurveys = (() => {
     function backgroundProgress() {
       const items = [Boolean(chosen("role")), Boolean(backgroundStage()),
         Boolean(chosen("cortical_mastoidectomies"))];
-      if (context.definitions.background.fields.vr_experience) items.push(Boolean(chosen("vr_experience")));
+      for (const name of experienceFields(context.definitions.background)) items.push(Boolean(chosen(name)));
       return [items.filter(Boolean).length, items.length];
     }
 
@@ -200,6 +219,11 @@ window.StudySurveys = (() => {
         const count = context.definitions.self_assessment.items.filter(item => chosen(item.id)).length;
         root.querySelector("#survey-answer-count").textContent = `${count} of 6 answered`;
         progress.textContent = valid ? "All items answered." : "Please answer all six items.";
+      } else if (context.flow.stage === "closing") {
+        const box = root.querySelector("#survey-comments");
+        const left = Number(box.maxLength) - box.value.length;
+        root.querySelector("#survey-comment-count").textContent = left < 500 ? `${left} characters left` : "";
+        progress.textContent = valid ? "Ready to finish." : "Please answer the first question to continue.";
       } else if (context.flow.stage !== "background") progress.textContent = valid ? "Ready to continue." : "Please complete the questions to continue.";
       root.querySelector("#surveyDraftNotice").classList.toggle("hidden", !draftUnavailable);
     }
@@ -208,7 +232,7 @@ window.StudySurveys = (() => {
       if (!draftKey) return;
       cacheStage();
       const fields = {};
-      root.querySelectorAll("input[name], select[name]").forEach(input => {
+      root.querySelectorAll("input[name], select[name], textarea[name]").forEach(input => {
         if (input.type === "radio") { if (input.checked) fields[input.name] = input.value; }
         else fields[input.name] = input.type === "checkbox" ? input.checked : input.value;
       });
@@ -220,14 +244,32 @@ window.StudySurveys = (() => {
       let saved;
       try { saved = JSON.parse(window.sessionStorage.getItem(draftKey) || "null"); }
       catch { draftUnavailable = true; return; }
-      if (!saved || typeof saved.fields !== "object") return;
+      if (!saved || typeof saved.fields !== "object") { restorePrevious(); return; }
       stageCache = saved.stageCache || {};
-      root.querySelectorAll("input[name], select[name]").forEach(input => {
+      root.querySelectorAll("input[name], select[name], textarea[name]").forEach(input => {
         if (!Object.hasOwn(saved.fields, input.name)) return;
         const value = saved.fields[input.name];
         if (input.type === "radio") input.checked = input.value === value;
         else if (input.type === "checkbox") input.checked = value === true;
         else input.value = String(value ?? "");
+      });
+    }
+
+    // After Back, the answers given before are filled in again (server keeps them).
+    function restorePrevious() {
+      const previous = context?.flow?.previous_answers;
+      if (!previous || typeof previous !== "object") return;
+      const flat = {};
+      for (const [key, answer] of Object.entries(previous)) {
+        if (answer && typeof answer === "object" && "value" in answer) flat[key] = answer.value;
+        else flat[key] = answer;
+      }
+      // Background: a PGY answer is stored as training_stage but shown as pgy_<role> pills.
+      if (previous.role && roles[previous.role]?.pgy) flat[`pgy_${previous.role}`] = flat.training_stage;
+      root.querySelectorAll("input[name], textarea[name]").forEach(input => {
+        if (!Object.hasOwn(flat, input.name) || flat[input.name] == null) return;
+        if (input.type === "radio") input.checked = input.value === String(flat[input.name]);
+        else if (input.type !== "checkbox") input.value = String(flat[input.name]);
       });
     }
 
@@ -264,7 +306,7 @@ window.StudySurveys = (() => {
       let title, subtitle, eyebrow, markup;
       if (stage === "background") {
         title = "Background Questionnaire"; eyebrow = "";
-        subtitle = "A few questions about your training and experience before today's session.";
+        subtitle = "Answer each question, then select Continue.";
         markup = backgroundMarkup(value.definitions.background);
       } else if (stage === "baseline") {
         title = value.definitions.baseline.title; eyebrow = "";
@@ -276,16 +318,20 @@ window.StudySurveys = (() => {
         markup = selfAssessmentMarkup(value.definitions.self_assessment);
       } else if (stage === "questionnaire") {
         const format = value.flow.current_view === "summary" ? "summary-based" : "event-based";
-        title = "Feedback questionnaire"; eyebrow = value.flow.current_view === "summary" ? "Summary-based Feedback" : "Event-based Feedback";
-        subtitle = `Please evaluate the quality of the ${format} feedback you just reviewed.`;
+        title = value.flow.current_view === "summary" ? "Summary-Based Feedback Questionnaire" : "Event-Based Feedback Questionnaire"; eyebrow = "";
+        subtitle = `Answer all four questions about the ${format} feedback you just reviewed, then select Next.`;
         markup = feedbackMarkup(value.definitions.feedback);
+      } else if (stage === "closing") {
+        title = value.definitions.closing.title; eyebrow = "";
+        subtitle = value.definitions.closing.instructions;
+        markup = closingMarkup(value.definitions.closing);
       } else {
         title = value.definitions.preference.question || "Which feedback format did you prefer?"; eyebrow = "";
-        subtitle = "";
+        subtitle = value.definitions.closing ? "Choose one option, then select Next." : "Choose one option, then select Finish.";
         markup = preferenceMarkup(value.definitions.preference);
       }
       root.className = `study-survey survey-${stage}`;
-      root.innerHTML = `<div class="survey-page-title">${eyebrow ? `<p class="eyebrow">${escape(eyebrow)}</p>` : ""}<h2 id="surveyTitle">${escape(title)}</h2>${subtitle ? `<p>${escape(subtitle)}</p>` : ""}</div><form id="studySurveyForm" aria-labelledby="surveyTitle" novalidate>${markup}<div class="survey-submit-row"><div class="survey-progress">${stage === "background" ? '<div class="survey-progress-track" aria-hidden="true"><div id="surveyProgressBar"></div></div>' : ""}<p id="surveyProgress" aria-live="polite"></p></div><button id="surveySubmit" type="submit" class="primary-button" disabled>${stage === "background" ? "Continue" : stage === "preference" ? "Finish" : "Next"}</button></div><p id="surveyError" class="form-error hidden" role="alert"></p><p id="surveyDraftNotice" class="survey-draft-notice hidden">This browser could not save a draft. Keep this page open until you submit.</p></form>${stage === "self_assessment" ? '<p class="survey-research-note">Proposed OSATS-like research questionnaire.</p>' : ""}`;
+      root.innerHTML = `<div class="survey-page-title">${eyebrow ? `<p class="eyebrow">${escape(eyebrow)}</p>` : ""}<h2 id="surveyTitle">${escape(title)}</h2>${subtitle ? `<p class="page-instruction instruction-box">${escape(subtitle)}</p>` : ""}</div><form id="studySurveyForm" aria-labelledby="surveyTitle" novalidate>${markup}<div class="survey-submit-row"><div class="survey-progress">${stage === "background" ? '<div class="survey-progress-track" aria-hidden="true"><div id="surveyProgressBar"></div></div>' : ""}<p id="surveyProgress" aria-live="polite"></p></div><button id="surveySubmit" type="submit" class="primary-button" disabled>${stage === "background" ? "Continue" : stage === "closing" || (stage === "preference" && !value.definitions.closing) ? "Finish" : "Next"}</button></div><p id="surveyError" class="form-error hidden" role="alert"></p><p id="surveyDraftNotice" class="survey-draft-notice hidden">This browser could not save a draft. Keep this page open until you submit.</p></form>${stage === "self_assessment" ? '<p class="survey-research-note">Proposed OSATS-like research questionnaire.</p>' : ""}`;
       restoreDraft();
       if (stage === "background") updateBackground();
       if (stage === "self_assessment") {
@@ -304,7 +350,7 @@ window.StudySurveys = (() => {
     }
 
     root.addEventListener("input", event => {
-      if (!event.target.matches("input,select")) return;
+      if (!event.target.matches("input,select,textarea")) return;
       if (event.target.type === "checkbox" || event.target.type === "radio" || event.target.tagName === "SELECT") return;
       saveDraft(); updateValidity();
     });

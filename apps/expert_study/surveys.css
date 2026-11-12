@@ -10,6 +10,9 @@
 #surveyPanel .survey-page-title .eyebrow { color: var(--sv-accent); letter-spacing: .1em; }
 #surveyPanel .survey-page-title h2 { color: var(--sv-ink); font-size: 30px; letter-spacing: -.02em; }
 #surveyPanel .survey-page-title > p:last-child { color: var(--sv-muted); font-size: 16px; line-height: 1.6; margin: 10px 0 0; max-width: 640px; }
+#surveyPanel .survey-page-title > p.page-instruction { color: #0e7c6b; font-weight: 700; }
+/* Same light green box as the review pages' instructions (2026-11-11). */
+#surveyPanel .survey-page-title > p.page-instruction.instruction-box { max-width: 980px; padding: 6px 12px; border-left: 3px solid #0e7c6b; border-radius: 4px; background: #e5f3ef; font-size: 16px; line-height: 1.5; }
 #surveyPanel form { margin: 0; }
 #surveyPanel p { line-height: 1.5; }
 #surveyPanel h3 { margin: 0; color: var(--sv-ink); font-size: 18px; font-weight: 700; }
@@ -78,7 +81,7 @@
 #surveyPanel #surveyError { margin: 10px 4px 0; }
 #surveyPanel .survey-draft-notice { color: var(--sv-muted); font-size: 13px; margin: 10px 4px 0; }
 /* Feedback-format questionnaire and preference keep a single card until they are redesigned. */
-#surveyPanel.survey-questionnaire form, #surveyPanel.survey-baseline form, #surveyPanel.survey-preference form { background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; padding: 0 26px 18px; }
+#surveyPanel.survey-questionnaire form, #surveyPanel.survey-baseline form, #surveyPanel.survey-preference form, #surveyPanel.survey-closing form { background: #fff; border: 1px solid var(--sv-line); border-radius: 14px; padding: 0 26px 18px; }
 #surveyPanel .survey-self-layout { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, .85fr); gap: 20px; align-items: start; }
 #surveyPanel .survey-video-column { min-width: 0; position: sticky; top: 18px; }
 #surveyPanel .survey-video-card { padding: 12px; background: #edf3f7; border: 1px solid var(--line); border-radius: 12px; }
@@ -120,7 +123,7 @@
 #surveyPanel.survey-self_assessment .survey-submit-row { width: calc((100% - 20px) * .425); margin: 14px 0 0 auto; }
 #surveyPanel.survey-self_assessment #surveyError, #surveyPanel.survey-self_assessment #surveyDraftNotice { margin-left: 57.5%; }
 #surveyPanel .survey-research-note { color: var(--muted); font-size: 11px; border-top: 1px solid var(--line); padding-top: 13px; margin: 18px 0 0; }
-#surveyPanel.survey-questionnaire, #surveyPanel.survey-baseline, #surveyPanel.survey-preference { max-width: 820px; }
+#surveyPanel.survey-questionnaire, #surveyPanel.survey-baseline, #surveyPanel.survey-preference, #surveyPanel.survey-closing { max-width: 820px; }
 #surveyPanel .survey-feedback { padding: 18px 0; }
 #surveyPanel .survey-feedback-question + .survey-feedback-question { padding-top: 12px; margin-top: 18px; }
 #surveyPanel .survey-feedback-question legend { font-size: 15px; line-height: 1.5; margin-bottom: 10px; }
@@ -131,7 +134,7 @@
 #surveyPanel .survey-agreement-scale strong { font-size: 18px; font-weight: 600; }
 #surveyPanel .survey-agreement-scale label > span { font-size: 12px; color: var(--muted); line-height: 1.4; }
 #surveyPanel .survey-preference { padding: 25px 0; }
-#surveyPanel .survey-preference legend { float: left; width: 100%; font-size: 16px; margin: 0 0 16px; }
+#surveyPanel .survey-preference legend:not(.sr-only) { float: left; width: 100%; font-size: 16px; margin: 0 0 16px; }
 #surveyPanel .survey-preference > div { clear: both; display: grid; gap: 10px; }
 #surveyPanel .survey-preference label { display: flex; align-items: center; gap: 10px; min-height: 51px; padding: 12px 15px; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; }
 #surveyPanel .survey-preference label:has(input:checked) { background: #e8f2fc; border-color: var(--blue); }
@@ -169,3 +172,10 @@
 #surveyPanel .preference-option { display: grid; gap: 3px; }
 #surveyPanel .preference-option strong { color: var(--sv-ink); font-size: 16px; font-weight: 600; }
 #surveyPanel .preference-option small { color: var(--sv-muted); font-size: 14px; line-height: 1.45; }
+/* Post Sim Reflection page (v5_3). */
+#surveyPanel .survey-closing-q { padding-top: 22px; }
+#surveyPanel .survey-closing-q textarea { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 12px; border: 1.5px solid #c9d3da; border-radius: 10px; font: inherit; font-size: 15px; line-height: 1.5; resize: vertical; }
+#surveyPanel .survey-closing-q textarea:focus { outline: 2px solid var(--sv-accent); outline-offset: 1px; border-color: var(--sv-accent); }
+#surveyPanel .survey-optional { color: var(--sv-muted); font-weight: 400; }
+#surveyPanel .survey-comments-q { display: block; }
+#surveyPanel .survey-comments-q .survey-q-label { max-width: none; }

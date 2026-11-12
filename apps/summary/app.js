@@ -58,7 +58,7 @@ function selectedPhase() {
 }
 
 function phaseLabel(phase) {
-  const labels = { early_surface: "Early drilling", early_phase: "Early drilling", antrum: "Antrum", incus: "Incus" };
+  const labels = { early_surface: "Early Drilling", early_phase: "Early Drilling", antrum: "Antrum", incus: "Incus" };
   return phase.label || labels[phase.phase_name] || "Phase";
 }
 
@@ -152,8 +152,12 @@ function renderMotion(phase) {
       const svg = svgElement("svg", { class: "metric-plot", role: "img", "aria-label": `Expert ${definition.label.toLowerCase()} distribution`, "data-metric": definition.key });
       chart.append(svg);
     } else chart.append(element("p", "plot-unavailable", "Expert reference unavailable"));
-    const value = element("div", `metric-value${finiteNumber(current) ? "" : " unavailable"}`, displayValue(current));
-    if (finiteNumber(current)) value.append(element("span", "metric-value-unit", ` ${definition.unit}`));
+    const value = element("div", `metric-value${finiteNumber(current) ? "" : " unavailable"}`);
+    // The value is the resident's mean over this phase, so say so (2026-11-11).
+    if (finiteNumber(current)) {
+      value.append(element("span", "metric-value-label", "Your average: "), displayValue(current),
+        element("span", "metric-value-unit", ` ${definition.unit}`));
+    } else value.append(displayValue(current));
     if (reference && finiteNumber(current) && (current < reference.lower || current > reference.upper)) {
       value.append(element("span", "offscale-label", current < reference.lower ? "below scale" : "above scale"));
     }
@@ -239,12 +243,28 @@ function reviewProgress() {
     remaining: phases.filter(phase => !phase.done).map(phase => phase.label) };
 }
 
+// In the study, pulse the one thing to open next (see .guide-pulse).
+function updateGuide() {
+  document.querySelectorAll(".guide-pulse").forEach(node => node.classList.remove("guide-pulse"));
+  if (!embeddedSummary) return;
+  const opened = summaryState.opened[summaryState.phaseIndex];
+  const group = REVIEW_GROUPS.find(name => !opened?.has(name));
+  let target = group ? document.querySelector(`.summary-group[data-group="${group}"] > summary`) : null;
+  if (!target) {
+    const next = [...document.querySelectorAll("[data-phase-index]")]
+      .find(button => !REVIEW_GROUPS.every(name => summaryState.opened[Number(button.dataset.phaseIndex)]?.has(name)));
+    target = next || null;
+  }
+  target?.classList.add("guide-pulse");
+}
+
 function reportProgress() {
   const progress = reviewProgress();
   document.querySelectorAll("[data-phase-index]").forEach(button => {
     const index = Number(button.dataset.phaseIndex);
     button.classList.toggle("reviewed", REVIEW_GROUPS.every(group => summaryState.opened[index]?.has(group)));
   });
+  updateGuide();
   if (embeddedSummary && window.parent !== window) {
     window.parent.postMessage({ type: "summary-review-progress", ...progress }, window.location.origin);
   }

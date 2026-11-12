@@ -39,7 +39,9 @@ def background(role="resident"):
             "status": "provided", "value": STAGE_FOR_ROLE[role], "unit": ROLE_UNITS[role],
         },
         "cortical_mastoidectomies": "0",
-        "vr_experience": "never",
+        "vr_experience": "none",
+        "vr_simulation_experience": "none",
+        "drilling_simulator_experience": "none",
     }
 
 
@@ -217,7 +219,7 @@ def test_default_resident_study_flow_has_no_self_assessments(monkeypatch):
     stages = [step["stage"] for step in flow["steps"]]
     assert stages == [
         "background", "baseline", "review", "questionnaire", "review", "questionnaire",
-        "preference", "complete",
+        "preference", "closing", "complete",
     ]
 
 

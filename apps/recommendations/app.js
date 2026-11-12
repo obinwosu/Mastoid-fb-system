@@ -12,7 +12,7 @@ const eventReview = EventReview.create({
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
-    document.getElementById("videoHeading").textContent = "Play context";
+    document.getElementById("videoHeading").textContent = "Event Video Clip";
     document.getElementById("videoWindow").textContent = "Choose a review moment";
   },
   onOpen: openReviewMoment,
@@ -109,7 +109,7 @@ function playClip(clip, title, index) {
   video.pause();
   const bounds = EventReview.contextBounds(clip, state.bootstrap.run.duration_s);
   if (!bounds) return;
-  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoHeading").textContent = "Event Video Clip";
   document.getElementById("videoWindow").textContent = `${fmtTime(bounds.start)}–${fmtTime(bounds.end)}`;
   markClip(index, "context");
   afterMetadata(action, () => {
@@ -127,7 +127,7 @@ function jumpToKeyframe(clip, title, index) {
   const video = document.getElementById("sessionVideo");
   video.pause();
   state.stopAt = null;
-  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoHeading").textContent = "Event Video Clip";
   document.getElementById("videoWindow").textContent = `Paused · ${fmtTime(keyframe.time)}`;
   markClip(index, "keyframe");
   afterMetadata(action, () => {

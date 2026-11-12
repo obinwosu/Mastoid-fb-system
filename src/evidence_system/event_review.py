@@ -14,7 +14,7 @@ from typing import Any
 
 from .motion_comparison import USER_CONTROL_MAX_FRACTION, _distribution, artifact_sha256
 
-PHASES = (("early_surface", "Early drilling"), ("antrum", "Antrum"), ("incus", "Incus"))
+PHASES = (("early_surface", "Early Drilling"), ("antrum", "Antrum"), ("incus", "Incus"))
 METRICS = (
     ("critical_structure_violation", "Critical Structure Violation", "safety", "mm"),
     ("poor_drill_visibility", "Poor Drill Visibility", "exposure", "s"),

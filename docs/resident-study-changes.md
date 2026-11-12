@@ -4,6 +4,66 @@ Running list for the FIVRS resident study (branch `resident-study`). It records 
 was removed or changed from the original design, and open questions to discuss with
 the feedback system's author. Started 2026-11-07.
 
+## Page-by-page usability pass (2026-11-11, Obi)
+
+- Preference page no longer scrolls sideways. `#surveyPanel .survey-preference legend`
+  (surveys.css) gave the screen-reader-only question legend full width and margins,
+  so it spilled ~130 px past the window. The rule now skips `legend.sr-only`.
+- Study ID entry page: button text "Enter study" -> "Begin".
+- Background, Attending: removed the "Whole years." hint under "Years in practice".
+- Baseline page (survey version `mastoid_surveys_v5_2_task_wording`; saved v5/v5_1
+  sessions keep their own wording): title "Before feedback" -> "Pre-Feedback
+  Self-Assessment" (also in the header); instruction line removed; the single item no
+  longer shows its "Overall performance" label (post questionnaires still show
+  "Q4 · Overall performance"); question now reads "Based on your own impression, how
+  would you rate your overall performance on the task: safely performing a cortical
+  mastoidectomy with identification of the incus pointer?" The post-feedback Overall
+  question (both formats) names the same task: "After reviewing this feedback, how
+  would you now rate your overall performance on the task: safely performing a
+  cortical mastoidectomy with identification of the incus pointer?"
+- Back button (top left, "← Back"), one step at a time and never back past feedback:
+  Pre-Feedback Self-Assessment -> Background, each questionnaire -> the feedback page
+  it rates, Preference -> last questionnaire. No Back on Background, either feedback
+  page or the end page, so the pre-feedback rating and the first format's ratings
+  cannot be changed after later feedback. Server: `ExpertStudyStore.go_back_review`,
+  `POST /api/expert-study/review-back`, `study_surveys.BACK_TARGET_STAGE` /
+  `back_target`. An answer on the page returned to is withdrawn, not deleted: it
+  moves to `review_flow.withdrawn_responses` (with `withdrawn_at`), is removed from
+  the participant profile for background/preference, and is filled into the form
+  again (`previous_answers` in the public flow). Transitions record
+  `reason: participant_back`; event `review_step_back`. A feedback page reached by
+  Back is not re-gated (`revisit`), Next says "Select Next to return to the
+  questionnaire." Tests: tests/test_back_navigation.py.
+- Page instructions are bold study green. Background: "Answer each question, then
+  select Continue." Pre-Feedback Self-Assessment: "Choose one rating, then select
+  Next." (survey definition, still v5_2). Questionnaires: "Answer all four questions
+  about the <format> feedback you just reviewed, then select Next." Preference:
+  "Choose one option, then select Finish." Summary (Obi's wording): "Click each phase button (Early Drilling, Antrum, Incus) and review your Safety and Drilling Motion Metrics. Once you have reviewed metrics across all phases, select Next." Event-based (Obi's wording): "Click each metric below to open its list of events. Once you have reviewed all events, select Next." On both review pages the box shows an underlined "How to Review this Page" heading, then each sentence on its own line, at 16 px (was 14 px). The review page title is larger (30 px, was 22 px), with its short grey description on the same line (it wraps underneath on narrow windows). The phase label is "Early Drilling" everywhere (was "Early drilling"). Topic headings on the Summary and Event pages read "Safety Metrics" and "Drilling Motion Metrics". Questionnaire pages: the small green "SUMMARY-BASED / EVENT-BASED FEEDBACK" label is gone; the title reads "Summary-Based Feedback Questionnaire" or "Event-Based Feedback Questionnaire" (front end only, survey items unchanged), and the instruction sits in the same light green box as on the review pages. The Background, Pre-Feedback Self-Assessment and Preference pages use the same box. Instrument **v5_3** (`mastoid_surveys_v5_3_experience_items_closing`): the VR item now reads "Describe your experience with VR headsets prior to today's session." (same key `vr_experience`; its options are now None / Minimal / Moderate / Extensive, stored as `none` / `minimal` / `moderate` / `extensive`), and two required items follow it with the same options: `vr_simulation_experience` ("Describe your experience with VR surgical simulation prior to today's session.") and `drilling_simulator_experience` ("Describe your experience with this drilling simulator prior to today's session."). Responses saved under earlier versions keep their own wording and fields. Also in v5_3, the baseline page is titled "Initial Self-Assessment"; its instruction box reads "Please rate your performance on the assigned task: safely drilling a cortical mastoidectomy with identification of the incus pointer." and its question is shortened to "Based on your own impression, how would you rate your overall performance?" (same 1-5 scale, same `overall_performance` key). The study page header and browser tab title read "User Perceptions on Performance Feedback in Simulation" (was "Session Feedback" / "FIVRS session feedback"). **Guide pulse** (`.guide-pulse` in `apps/recommendations/styles.css`): a soft pulsing blue outline marks the one thing to click next. Summary page: the unopened Safety / Drilling Motion section in the current phase, then the next phase not yet finished (study frame only, `embedded=1`). Event page: the next event without a check mark in the open metric, then the next metric with events still to view (only when `EventReview.create` gets `guide: true`, as the study page does; metrics with no events are skipped, as the Next gate does). When the page is fully reviewed, it moves to Next. It follows the same viewed state that unlocks Next, and holds still when the computer asks for reduced motion. Summary page Drilling Motion Metrics: each value now reads "Your average: 9.56 mm" (small grey label before the number), since it is the resident's mean over the phase. The same version adds a **Post Sim Reflection** page (no instruction box) (stage `closing`, step `closing`) after the preference question on the final case: "I would like to use this simulator to practice temporal bone drilling." (required; Yes / Neutral / No, stored as `yes` / `neutral` / `no`) and an optional free-text box ("Do you have any other comments, positive or negative, on your experience in the drilling simulator?"; up to 5000 characters, stored as typed). It is saved on the participant profile as `closing`, like `background` and `preference`. The preference page's button is now Next, and Finish moves to this page; Back from it returns to the preference question.
+- Event-based page (shared `apps/recommendations/event-review.js` + `styles.css`, so the
+  standalone recommendations page changes too, except the note below):
+  - Study page only: removed "Up to 4 moments per category, selected across all
+    phases." (describes the method, not something the resident needs) and "These
+    selected moments do not provide a complete assessment of each phase."
+  - Moment rows have column headers Event # / Duration / Phase / Viewed?; columns
+    reordered to rank, time range, phase, viewed; the viewed cell shows a check mark.
+  - Chart under the video has a title: "Expert Distribution of <Metric>" (e.g. "Expert
+    Distribution of Tool Speed").
+  - The open category always shows its first listed moment: on page load, on opening
+    a category and on changing the phase filter. That moment counts as viewed. Video card heading "Play context" -> "Event Video Clip".
+  - Removed the "Representative window from m:ss–m:ss" line under the chart (shown
+    when a moment's episode spanned several five-second windows).
+  - Expert dots removed from that chart (and "Experts" from its legend); band, median
+    and this-clip marker kept.
+  - Tool speed sentence now depends on direction. Fast: "Faster isn’t always better. In
+    this clip, your tool speed was higher than most experts' tool speed during this
+    phase." Slow: "In this clip, your tool speed was slower than most experts' tool speed
+    during this phase." Stroke length and removal rate use the same pattern: "In this
+    clip, your mean stroke length was shorter/longer than most experts' mean stroke
+    length during this phase." / "...your bone removal rate was lower/higher than most
+    experts' bone removal rate during this phase."
+  - tests/event_review_frontend.test.cjs updated for the speed wording (not run here:
+    no Node on this machine).
+
 ## Self-paced review timing (2026-11-11)
 
 Added the same background timing contract to Event-based and Summary-based study
@@ -199,7 +259,7 @@ The author approved the phase-filtered, ranked Event design. This section
 supersedes the older Event interaction notes below; questionnaire instruments,
 Summary calculations and saved participant responses are unchanged.
 
-- Keep feedback left and video right. Select Early drilling, Antrum or Incus.
+- Keep feedback left and video right. Select Early Drilling, Antrum or Incus.
   Safety contains Critical Structure Violation and Poor Drill Visibility;
   Drilling motion contains Tool speed, Stroke length and Removal rate.
 - Each phase/category shows at most five moments. For motion, use the existing

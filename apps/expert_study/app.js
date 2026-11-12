@@ -30,7 +30,7 @@ const eventReview = EventReview.create({
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
-    document.getElementById("videoHeading").textContent = "Play context";
+    document.getElementById("videoHeading").textContent = "Event Video Clip";
     document.getElementById("videoWindow").textContent = "";
     state.currentClipIndex = null;
     if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
@@ -40,6 +40,7 @@ const eventReview = EventReview.create({
   },
   onOpen: openReviewMoment,
   isReviewed: (item, index) => state.reviewedMoments?.has(EventReview.reviewKey(item, index)) || false,
+  guide: true,
 });
 
 const studySurveys = StudySurveys.create({
@@ -58,7 +59,7 @@ function reviewViewLabel(value) {
 
 function setReviewFlow(flow) {
   const modern = flow?.schema === "sequential_review_v2";
-  const stages = modern ? ["background", "baseline", "self_assessment", "review", "questionnaire", "preference", "complete"]
+  const stages = modern ? ["background", "baseline", "self_assessment", "review", "questionnaire", "preference", "closing", "complete"]
     : ["review", "questionnaire", "complete"];
   if ((!modern && flow?.schema !== "sequential_review_v1") || !Array.isArray(flow.order)
       || !stages.includes(flow.stage) || (modern && !flow.step_id)) {
@@ -194,12 +195,18 @@ const REVIEW_DESCRIPTIONS = {
   summary: {
     title: "Summary-based feedback",
     text: "An overview of your performance in each phase of the procedure compared with expert surgeons.",
-    instruction: "Select each phase below, then review the Safety and Drilling motion performance metrics for that phase. Once you have reviewed the Safety and Drilling motion metrics in every phase, you may advance: please click Next below.",
+    instruction: [
+      "Click each phase button (Early Drilling, Antrum, Incus) and review your Safety and Drilling Motion Metrics.",
+      "Once you have reviewed metrics across all phases, select Next.",
+    ],
   },
   "event-based": {
     title: "Event-based feedback",
     text: "Selected moments from your session, with matching expert comparisons for motion.",
-    instruction: "Expand a category and select a moment to play its context. Use the phase filters to explore the selection. After opening every selected moment, select Next below.",
+    instruction: [
+      "Click each metric below to open its list of events.",
+      "Once you have reviewed all events, select Next.",
+    ],
   },
 };
 
@@ -241,8 +248,16 @@ function eventProgress() {
 
 function updateReviewGate() {
   window.requestAnimationFrame(placeNextCard);
+  window.requestAnimationFrame(updateNextGuide);
   const button = document.getElementById("finishExperienceButton");
   const hint = document.getElementById("reviewNextHint");
+  if (state.reviewFlow?.stage === "review" && state.reviewFlow.revisit) {
+    // Back from the questionnaire: this feedback was already fully reviewed.
+    hint.textContent = "Select Next to return to the questionnaire.";
+    if (!state.reviewNextPending) button.disabled = false;
+    document.getElementById("nextCard").classList.remove("locked");
+    return;
+  }
   if (state.reviewFlow?.stage === "review" && state.reviewView === "event-based" && state.experience) {
     const progress = eventProgress();
     const open = progress.done >= progress.total;
@@ -266,6 +281,13 @@ function updateReviewGate() {
     : "Review every phase to continue.";
   if (!state.reviewNextPending) button.disabled = !summaryGateOpen();
   document.getElementById("nextCard").classList.toggle("locked", !summaryGateOpen());
+}
+
+// Once a feedback page is fully reviewed, the guide pulse moves to Next.
+function updateNextGuide() {
+  const button = document.getElementById("finishExperienceButton");
+  const review = state.reviewFlow?.stage === "review";
+  button.classList.toggle("guide-pulse", review && !button.disabled);
 }
 
 function setHeaderStatus(text) {
@@ -602,7 +624,7 @@ function playClip(clip, title, index) {
   video.pause();
   const bounds = EventReview.contextBounds(clip, state.experience.session.duration_s);
   if (!bounds) return;
-  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoHeading").textContent = "Event Video Clip";
   document.getElementById("videoWindow").textContent = `${fmtTime(bounds.start)}–${fmtTime(bounds.end)}`;
   markClip(index, "context");
   afterMetadata(action, () => {
@@ -622,7 +644,7 @@ function jumpToKeyframe(clip, title, index) {
   video.pause();
   state.currentClipIndex = index;
   state.stopAt = null;
-  document.getElementById("videoHeading").textContent = "Play context";
+  document.getElementById("videoHeading").textContent = "Event Video Clip";
   document.getElementById("videoWindow").textContent = `Paused · ${fmtTime(keyframe.time)}`;
   markClip(index, "keyframe");
   afterMetadata(action, () => {
@@ -693,6 +715,8 @@ function renderExperience() {
 function renderReviewFlow() {
   const flow = state.reviewFlow;
   const modern = flow.schema === "sequential_review_v2";
+  document.getElementById("backBar").classList.toggle("hidden", !(modern && flow.can_go_back));
+  document.getElementById("backError").classList.add("hidden");
   pauseReviewMedia();
   studySurveys.hide();
   document.getElementById("experiencePanel").classList.add("hidden");
@@ -720,13 +744,28 @@ function renderReviewFlow() {
   const about = REVIEW_DESCRIPTIONS[flow.current_view] || {};
   document.getElementById("reviewTitle").textContent = about.title || label;
   document.getElementById("reviewDescription").textContent = about.text || "";
-  document.getElementById("reviewInstruction").textContent = flow.stage === "review" ? about.instruction || "" : "";
-  if (modern && ["background", "baseline", "self_assessment", "questionnaire", "preference"].includes(flow.stage)) {
+  // A "How to Review this Page" heading, then one line per instruction sentence.
+  const instruction = document.getElementById("reviewInstruction");
+  instruction.replaceChildren();
+  if (flow.stage === "review" && about.instruction) {
+    const heading = document.createElement("span");
+    heading.className = "review-instruction-heading";
+    heading.textContent = "How to Review this Page";
+    instruction.append(heading);
+    for (const line of about.instruction) {
+      const row = document.createElement("span");
+      row.className = "review-instruction-line";
+      row.textContent = line;
+      instruction.append(row);
+    }
+  }
+  if (modern && ["background", "baseline", "self_assessment", "questionnaire", "preference", "closing"].includes(flow.stage)) {
     document.getElementById("reviewProgress").classList.add("hidden");
     const status = flow.stage === "background" ? "Background Questionnaire"
-      : flow.stage === "baseline" ? "Before feedback"
+      : flow.stage === "baseline" ? "Initial Self-Assessment"
         : flow.stage === "self_assessment" ? `Self-assessment ${flow.assessment_round + 1} of 3`
-        : flow.stage === "preference" ? "Feedback preference" : `Questionnaire ${step} · ${label}`;
+        : flow.stage === "preference" ? "Feedback preference"
+        : flow.stage === "closing" ? "Post Sim Reflection" : `Questionnaire ${step} · ${label}`;
     setHeaderStatus(status);
     document.getElementById("reviewProgressLabel").textContent = flow.stage === "self_assessment"
       ? `Self-assessment · After ${label.toLowerCase()} feedback` : status;
@@ -812,6 +851,32 @@ async function advanceReviewFlow(answers = null) {
   }
 }
 
+// Back: one step, only where the protocol allows it (server decides; see can_go_back).
+async function goBackReviewFlow() {
+  if (state.reviewNextPending || !state.reviewFlow?.can_go_back) return;
+  const button = document.getElementById("backButton");
+  const error = document.getElementById("backError");
+  state.reviewNextPending = true;
+  button.disabled = true;
+  error.classList.add("hidden");
+  try {
+    const result = await api("/api/expert-study/review-back", {
+      participant_id: state.participantId, step_id: state.reviewFlow.step_id,
+    });
+    setReviewFlow(result.review_flow);
+    renderReviewFlow();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  } catch (err) {
+    error.textContent = err.message;
+    error.classList.remove("hidden");
+  } finally {
+    state.reviewNextPending = false;
+    button.disabled = false;
+    updateReviewGate();
+    if (state.reviewFlow?.stage === "review") window.requestAnimationFrame(startReviewTiming);
+  }
+}
+
 // End of the study: a check mark, a thank-you and a way back to the launcher.
 function showCompletion() {
   pauseReviewMedia();
@@ -872,6 +937,7 @@ document.getElementById("finishExperienceButton").addEventListener("click", () =
   advanceReviewFlow();
 });
 document.getElementById("questionnaireNextButton").addEventListener("click", () => advanceReviewFlow());
+document.getElementById("backButton").addEventListener("click", goBackReviewFlow);
 document.getElementById("nextCaseButton").addEventListener("click", goToNextCase);
 document.getElementById("returnToSimulatorButton").addEventListener("click", returnToSimulator);
 document.getElementById("summaryReviewFrame").addEventListener("load", event => {
