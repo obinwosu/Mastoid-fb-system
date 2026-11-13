@@ -104,3 +104,24 @@ def test_reopening_the_intake_after_submitting_does_not_ask_again(tmp_path):
     submit(service, start(service)["review_flow"], background())
     again = intake(tmp_path)
     assert start(again)["review_flow"]["stage"] == "baseline"
+
+
+@pytest.mark.parametrize("view", ["event-based", "summary"])
+def test_background_submitted_after_the_full_server_replaced_the_intake(tmp_path, view):
+    # The analysis can finish while the resident is still filling in the background
+    # form, so the page opened on the intake server sends Next to the full server.
+    early = intake(tmp_path)
+    flow = start(early, view)["review_flow"]
+    assert flow["stage"] == "background"
+    full = make_service(tmp_path, mode="expert-study")
+    status, result = submit(full, flow, background())
+    assert status == 200, result
+    assert result["review_flow"]["stage"] == "baseline"
+    assert result["review_flow"]["order"][0] == view
+    full.analyze_study(PARTICIPANT)
+    status, result = submit(full, result["review_flow"], {"overall_performance": 4})
+    assert status == 200, result
+    assert result["review_flow"]["current_view"] == view
+    with full._study()._locked(PARTICIPANT):
+        stored = full._study()._read_unlocked(PARTICIPANT)["expert_study"]
+    assert stored["participants"][PARTICIPANT]["background"]["answers"] == background()

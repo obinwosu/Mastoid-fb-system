@@ -1806,6 +1806,15 @@ class FeedbackService:
     ) -> dict[str, Any]:
         participant_id = normalize_participant_id(participant_id)
         store = self._study()
+        if not store.progress(participant_id, self.run_id):
+            # The page opened on the intake server and this server replaced it before
+            # the background form was submitted, so the page never started a session
+            # here. Start it now with the format order chosen at intake.
+            intake = store.progress(participant_id, INTAKE_RUN_ID)
+            if intake:
+                self.start_study(
+                    participant_id, intake.get("first_review_view") or "event-based"
+                )
         flow = store.advance_review(
             participant_id=participant_id, run_id=self.run_id, view=view, stage=stage,
             step_id=step_id, answers=answers,
