@@ -54,7 +54,7 @@ function reviewViewName(value) {
 }
 
 function reviewViewLabel(value) {
-  return value === "summary" ? "Summary" : "Event-based";
+  return value === "summary" ? "Metric-Based Feedback" : "Video-Based Feedback";
 }
 
 function setReviewFlow(flow) {
@@ -193,7 +193,7 @@ window.addEventListener("message", event => {
 
 const REVIEW_DESCRIPTIONS = {
   summary: {
-    title: "Summary-based feedback",
+    title: "Metric-Based Feedback",
     text: "An overview of your performance in each phase of the procedure compared with expert surgeons.",
     instruction: [
       "Click each phase button (Early Drilling, Antrum, Incus) and review your Safety and Drilling Motion Metrics.",
@@ -201,7 +201,7 @@ const REVIEW_DESCRIPTIONS = {
     ],
   },
   "event-based": {
-    title: "Event-based feedback",
+    title: "Video-Based Feedback",
     text: "Selected moments from your session, with matching expert comparisons for motion.",
     instruction: [
       "Click each metric below to open its list of events.",
@@ -210,7 +210,7 @@ const REVIEW_DESCRIPTIONS = {
   },
 };
 
-// Summary-based feedback: Next stays locked until the summary page reports that
+// Metric-Based Feedback: Next stays locked until the summary page reports that
 // Safety and Drilling motion were opened in every phase.
 state.summaryProgress = null;
 window.addEventListener("message", event => {
@@ -226,7 +226,7 @@ function summaryGateOpen() {
   return Boolean(progress && progress.total > 0 && progress.done >= progress.total);
 }
 
-// Event-based feedback: Next stays locked until every moment of every topic was opened
+// Video-Based Feedback: Next stays locked until every moment of every topic was opened
 // (key frame, go to moment, or play context).
 state.reviewedMoments = new Set();
 

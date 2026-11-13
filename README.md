@@ -130,12 +130,12 @@ To reopen completed feedback without rebuilding:
 python run.py serve-batch --manifest <batch-directory>/recommendations_manifest.json
 ```
 
-Select **Summary** on the feedback page, or append `/summary/` to the same server
+Select **Metric-Based Feedback** on the feedback page, or append `/summary/` to the same server
 address. Both views use the same recording and video; no new processing command
 is needed. Restart an already running server after updating the application.
 
 In the **Study ID** entry (`expert-study` mode), **Show first** selects
-**Event-based** or **Summary**. New Study IDs follow this sequence:
+**Video-Based Feedback** or **Metric-Based Feedback**. New Study IDs follow this sequence:
 
 **Background questionnaire → Analysis ready → Overall performance (before feedback)
 → First view → First-view questionnaire
@@ -201,7 +201,7 @@ competence threshold or automatic OSATS score is calculated. The same questions
 are repeated with blank responses for each round; earlier submitted ratings are
 not shown. Self-assessment uses the original recording without coaching overlays.
 Clarity and Actionability use 0 (Strongly disagree) through 4 (Strongly agree).
-Preference is Event-based, Summary, A combination of both, or No preference.
+Preference is Video-Based Feedback, Metric-Based Feedback, A combination of both, or No preference.
 
 Submitted responses, timestamps, view order and the instrument snapshot are saved
 in **one JSON file per Study ID**, separately from the evidence database. Use
@@ -272,7 +272,7 @@ profile copy as another submission. Earlier instruments can have fewer questions
 or different response options. Missing fields are not zero or negative answers.
 
 `review_0` / `questionnaire_0` mean the first feedback format, not necessarily
-Event-based. Use the saved `view` and `order` to identify the format. The current
+Video-Based. Use the saved `view` and `order` to identify the format. The current
 entry page selects the first format manually; it does not randomize the order.
 Back keeps a withdrawn answer with `withdrawn_at` and `withdrawn_reason`, removes
 it from active responses, and offers it for revision. Use active responses for
@@ -458,7 +458,7 @@ ratings. Use a **new Study ID** to try the complete questionnaire sequence.
 For measured processing latency and the proposed overlap with these questionnaires,
 see [Processing time and planned background processing](#processing-time-and-planned-background-processing).
 
-The Event-based study step keeps feedback on the left and video on the right.
+The Video-Based study step keeps feedback on the left and video on the right.
 The default **All phases** view shows the session-wide selection. Filters for
 **Early Drilling**, **Antrum**, and **Incus** show only selected moments from that
 phase; they never refill the list or change ranks. Expand a category:

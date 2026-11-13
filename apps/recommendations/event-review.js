@@ -1,4 +1,4 @@
-/* Shared presentation for standalone and sequential Event-based reviews. */
+/* Shared presentation for standalone and sequential Video-Based reviews. */
 window.EventReview = (() => {
   const names = {
     pre_drilling: "Predrilling", early_phase: "Early Drilling", early_surface: "Early Drilling",

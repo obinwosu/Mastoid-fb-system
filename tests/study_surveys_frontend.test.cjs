@@ -227,7 +227,7 @@ test("baseline route waits for real analysis before rendering the performance qu
     } },
     pauseReviewMedia() {}, studySurveys: { hide() {}, show: value => calls.push(["survey", value]) },
     showReady: () => calls.push(["wait"]), setHeaderStatus: value => calls.push(["header", value]),
-    reviewViewLabel: value => value === "summary" ? "Summary" : "Event-based",
+    reviewViewLabel: value => value === "summary" ? "Metric-Based Feedback" : "Video-Based Feedback",
     escapeHtml: value => value, REVIEW_DESCRIPTIONS: {},
   });
   vm.runInContext(source.slice(source.indexOf("function setReviewFlow(flow)"), source.indexOf("function escapeHtml(value)")), context);

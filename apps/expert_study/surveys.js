@@ -13,7 +13,7 @@ window.StudySurveys = (() => {
   const yearNames = [];
   const numeric = (value, min = 0, integer = true) => value !== "" && Number.isFinite(Number(value))
     && Number(value) >= min && (!integer || Number.isInteger(Number(value)));
-  const viewLabel = view => view === "summary" ? "Summary" : "Event-based";
+  const viewLabel = view => view === "summary" ? "Metric-Based Feedback" : "Video-Based Feedback";
 
   function create({ root, onSubmit, onMediaEvent = () => {} }) {
     let context = null;
@@ -317,9 +317,9 @@ window.StudySurveys = (() => {
         subtitle = value.definitions.self_assessment.instructions;
         markup = selfAssessmentMarkup(value.definitions.self_assessment);
       } else if (stage === "questionnaire") {
-        const format = value.flow.current_view === "summary" ? "summary-based" : "event-based";
-        title = value.flow.current_view === "summary" ? "Summary-Based Feedback Questionnaire" : "Event-Based Feedback Questionnaire"; eyebrow = "";
-        subtitle = `Answer all four questions about the ${format} feedback you just reviewed, then select Next.`;
+        const format = value.flow.current_view === "summary" ? "Metric-Based" : "Video-Based";
+        title = value.flow.current_view === "summary" ? "Metric-Based Feedback Questionnaire" : "Video-Based Feedback Questionnaire"; eyebrow = "";
+        subtitle = `Answer all four questions about the ${format} Feedback you just reviewed, then select Next.`;
         markup = feedbackMarkup(value.definitions.feedback);
       } else if (stage === "closing") {
         title = value.definitions.closing.title; eyebrow = "";

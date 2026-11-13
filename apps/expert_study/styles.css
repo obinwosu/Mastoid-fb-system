@@ -132,7 +132,7 @@ main { padding-top: 14px; }
 /* One clearly different colour per topic, shared by dots, legend and topic stripes. */
 #eventBasedReview { --boundary-color: #d1343b; --visibility-color: #ef8a00; --speed-color: #2563eb; --length-color: #8b3fd1; }
 
-/* Event-based layout (2026-11-07): topics on the left, video top right; moments live
+/* Video-Based layout (2026-11-07): topics on the left, video top right; moments live
    inside their topic; Coaching plan heading, list under the video and explainer removed. */
 #eventBasedReview .event-workspace { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
 #eventBasedReview .event-workspace .video-card { grid-column: 2; grid-row: 1; }
@@ -158,7 +158,7 @@ main { padding-top: 14px; }
   #eventBasedReview .event-workspace .feedback-layout { grid-column: 1; grid-row: 2; }
 }
 
-/* Event-based groups match the Summary page drop-downs (2026-11-07): tinted header bar,
+/* Video-Based groups match the Metric-Based page drop-downs (2026-11-07): tinted header bar,
    "(click to expand)", teal edge when open, "✓ Viewed" once every moment inside is opened. */
 #eventBasedReview .event-group { overflow: hidden; border: 1px solid #e1e6ea; border-radius: 12px; background: #fff; }
 #eventBasedReview .event-group + .event-group { margin-top: 10px; }

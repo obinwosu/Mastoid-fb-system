@@ -269,14 +269,14 @@ SURVEY_DEFINITION: dict[str, Any] = {
         "question": "Which feedback format did you prefer?",
         "options": [
             {
-                "value": "event-based", "label": "Event-based feedback",
+                "value": "event-based", "label": "Video-Based Feedback",
                 "description": (
                     "Highlighting the specific moments where your performance deviated "
                     "from expert performance."
                 ),
             },
             {
-                "value": "summary", "label": "Summary-based feedback",
+                "value": "summary", "label": "Metric-Based Feedback",
                 "description": (
                     "Contextualizing your performance metrics against expert performance metrics."
                 ),

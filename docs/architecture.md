@@ -43,7 +43,7 @@ validated evidence contract, with two read-only recommendation views:
   measurements with the saved recording-level expert reference. It shares the
   video endpoint and event-view layout and adds no study data collection.
 
-The expert-study ID form selects the initial Event-based/Summary view. New sessions
+The expert-study ID form selects the initial Video-Based/Metric-Based view. New sessions
 use `sequential_review_v2`: background once per Study ID, analysis, a one-item
 Overall performance baseline for each recording, first review
 and four-item questionnaire, second review and four-item questionnaire, then
@@ -125,7 +125,7 @@ First-ready-to-last-observed elapsed spans interruptions between visits. Video
 wall time is a subset of foreground time; neither implies attention. Raw intervals
 and overlap diagnostics are retained rather than adding concurrent tab counters.
 
-The Event-based study step reuses `/review-styles.css` and the recommendations
+The Video-Based study step reuses `/review-styles.css` and the recommendations
 renderer, with feedback on the left and video on the right. It does not render the
 legacy expert-moment capture form; historical saved contributions remain untouched.
 Five session-wide categories contain Critical Structure Violation, Poor Drill
