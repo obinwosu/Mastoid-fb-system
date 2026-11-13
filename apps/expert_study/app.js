@@ -30,7 +30,7 @@ const eventReview = EventReview.create({
     document.getElementById("sessionVideo").pause();
     state.stopAt = null;
     state.selectedId = item.feedback_id;
-    document.getElementById("videoHeading").textContent = "Event Video Clip";
+    document.getElementById("videoHeading").textContent = "Observed event";
     document.getElementById("videoWindow").textContent = "";
     state.currentClipIndex = null;
     if (state.reviewView === "event-based" && state.reviewFlow?.stage === "review") {
@@ -202,7 +202,7 @@ const REVIEW_DESCRIPTIONS = {
   },
   "event-based": {
     title: "Video-Based Feedback",
-    text: "Selected moments from your session, with matching expert comparisons for motion.",
+    text: "Feedback events tied to the specific moment they occurred.",
     instruction: [
       "Click each metric below to open its list of events.",
       "Once you have reviewed all events, select Next.",
@@ -624,7 +624,7 @@ function playClip(clip, title, index) {
   video.pause();
   const bounds = EventReview.contextBounds(clip, state.experience.session.duration_s);
   if (!bounds) return;
-  document.getElementById("videoHeading").textContent = "Event Video Clip";
+  document.getElementById("videoHeading").textContent = "Observed event";
   document.getElementById("videoWindow").textContent = `${fmtTime(bounds.start)}–${fmtTime(bounds.end)}`;
   markClip(index, "context");
   afterMetadata(action, () => {
@@ -644,7 +644,7 @@ function jumpToKeyframe(clip, title, index) {
   video.pause();
   state.currentClipIndex = index;
   state.stopAt = null;
-  document.getElementById("videoHeading").textContent = "Event Video Clip";
+  document.getElementById("videoHeading").textContent = "Observed event";
   document.getElementById("videoWindow").textContent = `Paused · ${fmtTime(keyframe.time)}`;
   markClip(index, "keyframe");
   afterMetadata(action, () => {

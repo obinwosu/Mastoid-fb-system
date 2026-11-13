@@ -99,14 +99,41 @@ window.EventReview = (() => {
     return metric ? `In this clip, your ${metric} was ${lower ? "lower" : "higher"} than most experts' ${metric} during this phase.` : "";
   }
 
+  // The structure's name as the Metric-Based page shows it ("Facial nerve").
+  function structureName(clip) {
+    if (typeof clip.structure === "string" && clip.structure) return clip.structure;
+    return typeof clip.anatomy === "string" && clip.anatomy
+      ? clip.anatomy.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2") : "";
+  }
+
   function safetyHtml(item, clip) {
     if (!finite(clip.observed)) return "";
-    const anatomy = typeof clip.anatomy === "string"
-      ? clip.anatomy.replaceAll("_", " ").replace(/([a-z])([A-Z])/g, "$1 $2") : "";
-    const fact = describe(item).category === "boundary"
-      ? `Up to ${valueLabel(clip.observed)} ${clip.unit || item.unit || "mm"} deep`
-      : `${valueLabel(clip.observed)} ${clip.unit || item.unit || "s"} of poor visibility`;
-    return `<div class="event-safety-facts"><strong>${escape(fact)}</strong>${anatomy ? `<span>${escape(anatomy)}</span>` : ""}</div>`;
+    if (describe(item).category === "boundary") {
+      const structure = structureName(clip);
+      const depth = `up to ${valueLabel(clip.observed)} ${clip.unit || item.unit || "mm"} deep`;
+      return `<div class="event-safety-facts"><strong>${escape(structure ? `${structure}: ${depth}` : depth.replace(/^u/, "U"))}</strong></div>`;
+    }
+    const fact = `${valueLabel(clip.observed)} ${clip.unit || item.unit || "s"} of poor visibility`;
+    return `<div class="event-safety-facts"><strong>${escape(fact)}</strong></div>`;
+  }
+
+  // "Your tool speed during this moment": the same metric wording as the sentence below.
+  function metricPhrase(item) {
+    const category = describe(item).category;
+    if (category === "speed") return "tool speed";
+    if (category === "length") return "mean stroke length";
+    if (category === "removal") return "bone removal rate";
+    return describe(item).title.toLowerCase();
+  }
+
+  // "Higher" / "Lower" than the middle half of same-phase experts, or "Within" it.
+  function comparisonDirection(item, clip) {
+    const reference = clip.reference || item.reference;
+    if (!reference?.available || !finite(clip.observed) || ![reference.q25, reference.q75].every(finite)) return "";
+    const observed = Number(clip.observed);
+    if (observed > Number(reference.q75)) return "Higher";
+    if (observed < Number(reference.q25)) return "Lower";
+    return "Within";
   }
 
   function comparisonHtml(item, clip) {
@@ -132,14 +159,14 @@ window.EventReview = (() => {
     const title = `${describe(item).title}: ${label}. Same-phase expert five-second window distribution; central half ${valueLabel(q25)} to ${valueLabel(q75)} ${unit}.`;
     const sentence = comparisonSentence(item, clip, reference);
     const heading = `Expert Distribution of ${describe(item).title.replace(/\b\w/g, c => c.toUpperCase())}`;
-    return `<p class="event-comparison-title">${escape(heading)}</p><svg class="event-comparison-plot" viewBox="0 0 600 106" role="img" aria-label="${escape(title)}"><title>${escape(title)}</title>
-      <line x1="18" x2="582" y1="70" y2="70" class="event-axis" />
-      <rect x="${x(q25)}" y="59" width="${Math.max(1, x(q75) - x(q25))}" height="14" rx="3" class="event-band"><title>Middle half of expert values</title></rect>
-      <line x1="${x(median)}" x2="${x(median)}" y1="56" y2="76" class="event-median" />
-      <line x1="${px}" x2="${px}" y1="32" y2="77" class="event-current" />
-      <path d="M${px},26 l5,5 -5,5 -5,-5 Z" class="event-current-dot" />
-      ${[lo, (lo + hi) / 2, hi].map(value => `<text x="${x(value)}" y="96" text-anchor="middle" class="event-axis-label">${valueLabel(value)}</text>`).join("")}
-      </svg><div class="event-comparison-legend"><span title="25th–75th percentiles of same-phase expert five-second window values"><i class="event-middle-half"></i>Middle half of experts</span><span><i class="event-this-clip"></i>This clip</span><span class="event-axis-unit">${escape(unit)}</span></div>${sentence ? `<p class="event-comparison-note">${escape(sentence)}</p>` : ""}`;
+    return `<p class="event-comparison-title">${escape(heading)}</p><svg class="event-comparison-plot" viewBox="0 0 600 116" role="img" aria-label="${escape(title)}"><title>${escape(title)}</title>
+      <line x1="18" x2="582" y1="72" y2="72" class="event-axis" />
+      <rect x="${x(q25)}" y="60" width="${Math.max(1, x(q75) - x(q25))}" height="20" rx="4" class="event-band"><title>Middle half of expert values</title></rect>
+      <line x1="${x(median)}" x2="${x(median)}" y1="56" y2="84" class="event-median" />
+      <line x1="${px}" x2="${px}" y1="34" y2="85" class="event-current" />
+      <path d="M${px},22 l7,7 -7,7 -7,-7 Z" class="event-current-dot" />
+      ${[lo, (lo + hi) / 2, hi].map(value => `<text x="${x(value)}" y="108" text-anchor="middle" class="event-axis-label">${valueLabel(value)}</text>`).join("")}
+      </svg><div class="event-comparison-legend"><span title="25th–75th percentiles of same-phase expert five-second window values"><i class="event-middle-half"></i>Middle half of experts</span><span><i class="event-this-clip"></i>Your ${escape(metricPhrase(item))} during this moment</span><span class="event-axis-unit">${escape(unit)}</span></div>${sentence ? `<p class="event-comparison-note">${escape(sentence)}</p>` : ""}`;
   }
 
   function create(options) {
@@ -152,7 +179,10 @@ window.EventReview = (() => {
     let items = [], phases = [], activePhase = "all", expandedId = null, selectedId = null, selectedIndex = null;
     const reviewed = options.isReviewed || ((item, index) => localViewed.has(reviewKey(item, index)));
     const selected = () => items.find(item => item.feedback_id === selectedId);
-    const itemViewed = item => allClipsViewed(item, reviewed);
+    // A safety metric with no events has nothing to review: it says so and counts as viewed.
+    const noSafetyEvents = item => describe(item).group === "Safety" && clipsFor(item).length === 0
+      && item.status !== "unavailable";
+    const itemViewed = item => noSafetyEvents(item) || allClipsViewed(item, reviewed);
     const firstVisible = () => items.find(item => visibleClips(item, activePhase).length) || items[0];
 
     function updateDetail() {
@@ -179,7 +209,8 @@ window.EventReview = (() => {
         card.classList.toggle("viewed", complete);
         const status = card.querySelector(".event-category-status");
         const countLabel = activePhase === "all" ? `${count} ${count === 1 ? "moment" : "moments"}` : `${shown} of ${count}`;
-        status.textContent = complete ? `${activePhase === "all" ? "" : `${countLabel} · `}✓ Viewed` : countLabel;
+        status.textContent = noSafetyEvents(item) ? "✓ No safety events occurred"
+          : complete ? `${activePhase === "all" ? "" : `${countLabel} · `}✓ Viewed` : countLabel;
         status.classList.toggle("event-viewed", complete);
         card.querySelectorAll("[data-moment-index]").forEach(button => {
           const index = Number(button.dataset.momentIndex), viewed = reviewed(item, index);
@@ -219,7 +250,7 @@ window.EventReview = (() => {
       if (index >= 0) selectedIndex = index;
       refreshViewed();
       if (keyframeButton) keyframeButton.setAttribute("aria-pressed", String(action === "keyframe"));
-      document.getElementById("videoHeading").textContent = "Event Video Clip";
+      document.getElementById("videoHeading").textContent = "Observed event";
     }
 
     function openMoment(item, index, mode) {
@@ -243,21 +274,27 @@ window.EventReview = (() => {
       const groups = [...new Set(visible.map(item => describe(item).group))];
       focus.innerHTML = groups.map(group => `<section class="event-metric-group"><h3>${escape(GROUP_HEADINGS[group] || group)}</h3>${visible.filter(item => describe(item).group === group).map(item => {
         const info = describe(item), rows = visibleClips(item, activePhase), open = expandedId === item.feedback_id;
+        // Drilling motion metrics have an expert distribution; safety metrics do not.
+        // Critical structure violations name the structure instead.
+        const compare = info.group === "Drilling motion";
+        const structures = info.category === "boundary";
+        const extra = compare || structures;
         const bodyId = `event-moments-${items.indexOf(item)}`;
         const status = activePhase === "all" ? item.status : item.phase_status?.[activePhase]?.status;
         const empty = status === "unavailable"
           ? `Review data unavailable${activePhase === "all" ? "" : " for this phase"}.`
+          : noSafetyEvents(item) ? "No safety events occurred."
           : activePhase === "all" ? "No moments are included in the current selection."
             : "No moments from this phase are included in the current selection.";
         return `<article class="event-category${open ? " open" : ""} category-${info.category}" data-feedback-id="${escape(item.feedback_id)}">
           <button type="button" class="event-category-toggle" aria-expanded="${open}" aria-controls="${bodyId}"><strong>${escape(info.title)}</strong><span class="event-category-meta"><span class="event-category-status"></span><span aria-hidden="true">${open ? "▾" : "▸"}</span></span></button>
-          <div id="${bodyId}" class="event-ranked-moments" ${open ? "" : "hidden"}>${rows.length ? `<div class="event-moment-header" aria-hidden="true"><span>Event #</span><span>Duration</span><span>Phase</span><span>Viewed?</span></div>` : ""}${rows.length ? rows.map(({ clip, index }) => {
+          <div id="${bodyId}" class="event-ranked-moments${extra ? " with-comparison" : ""}" ${open ? "" : "hidden"}>${rows.length ? `<div class="event-moment-header" aria-hidden="true"><span>Event #</span><span>Duration</span><span>Phase</span>${compare ? "<span>Expert comparison</span>" : structures ? "<span>Structure</span>" : ""}<span>Viewed?</span></div>` : ""}${rows.length ? rows.map(({ clip, index }) => {
             const start = finiteTime(clip.t_start_s) ? Number(clip.t_start_s) : momentTime(clip);
             const end = finiteTime(clip.t_end_s) ? Number(clip.t_end_s) : start;
             const label = start == null ? "Time unavailable" : `${timeLabel(start)}${end > start ? `–${timeLabel(end)}` : ""}`;
             const available = options.hasMedia() && start != null;
             const phase = phaseLabel(clip, item);
-            return `<button type="button" class="event-moment" data-moment-index="${index}" aria-current="false" aria-label="Play context for moment ${clip.rank || index + 1}, ${escape(phase)}, ${escape(label)}" ${available ? "" : "disabled"}><span class="event-moment-rank">${clip.rank || index + 1}</span><span class="event-moment-time">${escape(label)}</span><span class="event-moment-phase">${escape(phase)}</span><span class="event-moment-viewed"></span></button>`;
+            return `<button type="button" class="event-moment" data-moment-index="${index}" aria-current="false" aria-label="Play context for moment ${clip.rank || index + 1}, ${escape(phase)}, ${escape(label)}" ${available ? "" : "disabled"}><span class="event-moment-rank">${clip.rank || index + 1}</span><span class="event-moment-time">${escape(label)}</span><span class="event-moment-phase">${escape(phase)}</span>${compare ? `<span class="event-moment-comparison">${escape(comparisonDirection(item, clip) || "–")}</span>` : structures ? `<span class="event-moment-structure" title="${escape(structureName(clip))}">${escape(structureName(clip) || "–")}</span>` : ""}<span class="event-moment-viewed"></span></button>`;
           }).join("") : `<p class="event-no-moments">${empty}</p>`}</div></article>`;
       }).join("")}</section>`).join("");
       focus.querySelectorAll(".event-category-toggle").forEach(button => button.addEventListener("click", () => {
@@ -304,7 +341,7 @@ window.EventReview = (() => {
       const first = firstVisible();
       selectedId = first?.feedback_id || null; selectedIndex = null; expandedId = selectedId;
       document.getElementById("clipCount").textContent = "";
-      document.getElementById("videoHeading").textContent = "Event Video Clip";
+      document.getElementById("videoHeading").textContent = "Observed event";
       renderPhases(); renderCards(); updateDetail();
       if (first) options.onSelect(first, "automatic_first_item");
       openFirstMoment(first);
@@ -322,5 +359,5 @@ window.EventReview = (() => {
     });
     return { render, mark, refreshViewed, clipsFor, titleFor: item => describe(item).title };
   }
-  return { create, describe, clipsFor, visibleClips, allClipsViewed, comparisonHtml, comparisonSentence, safetyHtml, phaseLabel, keyframeFor, momentTime, reviewKey, contextBounds };
+  return { create, describe, clipsFor, visibleClips, allClipsViewed, comparisonHtml, comparisonSentence, comparisonDirection, metricPhrase, structureName, safetyHtml, phaseLabel, keyframeFor, momentTime, reviewKey, contextBounds };
 })();

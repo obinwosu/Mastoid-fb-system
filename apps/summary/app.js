@@ -2,7 +2,7 @@
 
 const summaryParameters = new URL(window.location.href).searchParams;
 const embeddedSummary = summaryParameters.get("embedded") === "1";
-const summaryState = { data: null, phaseIndex: 0, seekHandler: null, mediaAvailable: false, active: !embeddedSummary,
+const summaryState = { data: null, phaseIndex: 0, mediaAvailable: false, active: !embeddedSummary,
   opened: {} };  // phase index -> set of sections (safety, motion) the resident has opened
 const REVIEW_GROUPS = ["safety", "motion"];
 if (embeddedSummary) document.body.classList.add("embedded-summary");
@@ -69,11 +69,6 @@ const phaseDefinitions = {
   antrum: "Identifying and removing Körner's septum to open the mastoid antrum.",
   incus: "Identifying the short process of the incus.",
 };
-
-function validIntervals(phase) {
-  return (phase.intervals || []).filter(interval => finiteNumber(interval.t_start_s)
-    && finiteNumber(interval.t_end_s) && interval.t_end_s > interval.t_start_s);
-}
 
 function referenceValues(reference) {
   if (reference?.available !== true) return null;
@@ -216,28 +211,26 @@ function renderSafety(phase) {
   document.getElementById("safetyMetrics").replaceChildren(violationRow.row, visibilityRow.row);
 }
 
-function goToTime(time) {
-  if (!summaryState.mediaAvailable) return;
-  const video = document.getElementById("sessionVideo");
-  video.pause();
-  if (summaryState.seekHandler) video.removeEventListener("loadedmetadata", summaryState.seekHandler);
-  const seek = () => {
-    summaryState.seekHandler = null;
-    video.currentTime = Number.isFinite(video.duration) ? Math.min(time, video.duration) : time;
-    document.getElementById("videoStatus").textContent = `Paused at ${timeLabel(video.currentTime)}.`;
-  };
-  if (video.readyState >= 1) seek();
-  else {
-    summaryState.seekHandler = seek;
-    video.addEventListener("loadedmetadata", seek, { once: true });
-  }
+// No critical structure violations and no time with poor drill visibility (both
+// measured, not unavailable): the Safety section has nothing to review.
+function noSafetyEvents(phase) {
+  const violations = phase?.safety?.critical_structure_violation || {};
+  const visibility = phase?.safety?.drill_visibility || {};
+  return violations.available === true && finiteNumber(violations.count) && violations.count === 0
+    && visibility.available === true && finiteNumber(visibility.duration_s) && visibility.duration_s === 0;
+}
+
+// A section counts as reviewed once opened, or (Safety) when it has no events.
+function groupDone(index, group) {
+  return Boolean(summaryState.opened[index]?.has(group))
+    || (group === "safety" && noSafetyEvents(summaryState.data.phases[index]));
 }
 
 // The resident must open Safety and Drilling motion in every phase before Next unlocks.
 function reviewProgress() {
   const phases = summaryState.data.phases.map((phase, index) => ({
     label: phaseLabel(phase),
-    done: REVIEW_GROUPS.every(group => summaryState.opened[index]?.has(group)),
+    done: REVIEW_GROUPS.every(group => groupDone(index, group)),
   }));
   return { done: phases.filter(phase => phase.done).length, total: phases.length,
     remaining: phases.filter(phase => !phase.done).map(phase => phase.label) };
@@ -247,12 +240,11 @@ function reviewProgress() {
 function updateGuide() {
   document.querySelectorAll(".guide-pulse").forEach(node => node.classList.remove("guide-pulse"));
   if (!embeddedSummary) return;
-  const opened = summaryState.opened[summaryState.phaseIndex];
-  const group = REVIEW_GROUPS.find(name => !opened?.has(name));
+  const group = REVIEW_GROUPS.find(name => !groupDone(summaryState.phaseIndex, name));
   let target = group ? document.querySelector(`.summary-group[data-group="${group}"] > summary`) : null;
   if (!target) {
     const next = [...document.querySelectorAll("[data-phase-index]")]
-      .find(button => !REVIEW_GROUPS.every(name => summaryState.opened[Number(button.dataset.phaseIndex)]?.has(name)));
+      .find(button => !REVIEW_GROUPS.every(name => groupDone(Number(button.dataset.phaseIndex), name)));
     target = next || null;
   }
   target?.classList.add("guide-pulse");
@@ -262,7 +254,7 @@ function reportProgress() {
   const progress = reviewProgress();
   document.querySelectorAll("[data-phase-index]").forEach(button => {
     const index = Number(button.dataset.phaseIndex);
-    button.classList.toggle("reviewed", REVIEW_GROUPS.every(group => summaryState.opened[index]?.has(group)));
+    button.classList.toggle("reviewed", REVIEW_GROUPS.every(group => groupDone(index, group)));
   });
   updateGuide();
   if (embeddedSummary && window.parent !== window) {
@@ -294,7 +286,6 @@ function reportCoverage(group = null) {
 
 function renderPhase() {
   const phase = selectedPhase();
-  const intervals = validIntervals(phase);
   document.querySelectorAll("[data-phase-index]").forEach(button => {
     const selected = Number(button.dataset.phaseIndex) === summaryState.phaseIndex;
     button.setAttribute("aria-selected", String(selected));
@@ -304,24 +295,29 @@ function renderPhase() {
   // "Early Drilling Phase", "Antrum Phase", "Incus Phase".
   document.getElementById("measuresPhase").textContent = `${phaseLabel(phase).replace(/\b\w/g, c => c.toUpperCase())} Phase`;
   document.getElementById("phaseDefinition").textContent = phaseDefinitions[phase.phase_name] || "";
-  document.getElementById("videoStatus").textContent = intervals.length ? "" : `${phaseLabel(phase)} was not identified in the recording.`;
-  // Each phase starts with both sections closed; ones already opened are marked.
+  // A section left open stays open in the new phase (it counts as opened there);
+  // the others start closed. Ones already reviewed are marked.
+  const kept = [...document.querySelectorAll(".summary-group")].find(group => group.open)?.dataset.group || null;
+  if (kept) (summaryState.opened[summaryState.phaseIndex] ||= new Set()).add(kept);
+  const clear = noSafetyEvents(phase);
   document.querySelectorAll(".summary-group").forEach(group => {
-    group.open = false;
-    group.classList.toggle("seen", Boolean(summaryState.opened[summaryState.phaseIndex]?.has(group.dataset.group)));
+    group.open = group.dataset.group === kept;
+    group.classList.toggle("seen", groupDone(summaryState.phaseIndex, group.dataset.group));
+    group.classList.toggle("no-events", group.dataset.group === "safety" && clear);
   });
   renderSafety(phase);
   renderMotion(phase);
+  if (kept === "motion") drawPlots();
   reportProgress();
+  if (kept) reportCoverage(kept);
 }
 
-// Choosing a phase shows its measures and pauses the video at the phase's start.
+// Choosing a phase shows its measures. The session video stays where the resident
+// left it: this format compares metrics alone, so it does not jump to the phase.
 function selectPhase(index) {
   summaryState.phaseIndex = index;
   renderPhase();
   reportCoverage();
-  const first = validIntervals(selectedPhase())[0];
-  if (first) goToTime(first.t_start_s);
 }
 
 function renderTabs() {

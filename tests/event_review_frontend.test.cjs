@@ -122,3 +122,16 @@ test("Safety details keep the measured amount without the former intrusion label
   assert.match(review.safetyHtml(violation, { ...clip, anatomy: "<script>" }), /&lt;script&gt;/);
   assert.equal(review.safetyHtml(violation, { observed: null }), "");
 });
+
+test("expert comparison column and marker label name the metric", () => {
+  const reference = { available: true, q25: 10, median: 20, q75: 30, points: [10, 20, 30], unit: "mm/s" };
+  const item = { metric_key: "speed_mm_s", reference };
+  assert.equal(review.comparisonDirection(item, { observed: 35 }), "Higher");
+  assert.equal(review.comparisonDirection(item, { observed: 5 }), "Lower");
+  assert.equal(review.comparisonDirection(item, { observed: 20 }), "Within");
+  assert.equal(review.comparisonDirection({ metric_key: "speed_mm_s", reference: { available: false } }, { observed: 5 }), "");
+  assert.equal(review.metricPhrase({ metric_key: "mean_stroke_length_mm" }), "mean stroke length");
+  assert.equal(review.metricPhrase({ metric_key: "removal_rate_mm3_s" }), "bone removal rate");
+  assert.match(review.comparisonHtml(item, { observed: 35 }), /Your tool speed during this moment/);
+  assert.doesNotMatch(review.comparisonHtml(item, { observed: 35 }), /This clip</);
+});

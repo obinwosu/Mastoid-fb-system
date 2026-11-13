@@ -13,6 +13,7 @@ from copy import deepcopy
 from typing import Any
 
 from .motion_comparison import USER_CONTROL_MAX_FRACTION, _distribution, artifact_sha256
+from .phase_summary_safety import STRUCTURE_LABELS
 
 PHASES = (("early_surface", "Early Drilling"), ("antrum", "Antrum"), ("incus", "Incus"))
 METRICS = (
@@ -96,6 +97,11 @@ def _safety_candidates(events: Sequence[Mapping], visibility: Mapping) -> dict[s
                     "unit": "mm",
                     "source_ids": [str(event.get("event_id")), source_id],
                     "anatomy": row.get("anatomy") or event.get("anatomy"),
+                    # The Metric-Based page's name for the structure, shown on both pages.
+                    "structure": STRUCTURE_LABELS.get(
+                        str(row.get("anatomy") or event.get("anatomy") or ""),
+                        str(row.get("anatomy") or event.get("anatomy") or "") or None,
+                    ),
                     "keyframe_available": False,
                 }
             )
